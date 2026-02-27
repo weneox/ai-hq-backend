@@ -5,89 +5,79 @@ import express from "express";
 import cors from "cors";
 import helmet from "helmet";
 
-import { config } from "./src/config.js";
-import { migrate, pingDb, pool } from "./src/db/index.js";
-import { setupWs } from "./src/wsHub.js";
-import { api } from "./src/routes/api.js";
-import { ensureDefaultAgents } from "./src/kernel/agentKernel.js";
+import { cfg } from "./src/config.js";
+import { db, migrate } from "./src/db/index.js";
+import { createWsHub } from "./src/wsHub.js";
+import { apiRouter } from "./src/routes/api.js";
 
 const app = express();
 
-/* ---------------- Security ---------------- */
-app.use(helmet({ contentSecurityPolicy: false }));
+if (cfg.TRUST_PROXY) app.set("trust proxy", 1);
 
-// CORS: browser-də origin var, server-to-server-də Origin olmur.
-// Ona görə Origin yoxdursa allow edək.
+app.use(helmet());
 app.use(
   cors({
     origin: (origin, cb) => {
-      const allowed = config.app.corsOrigin;
-
-      // no-origin requests (curl, webhook, server)
+      // allow server-to-server + curl + no-origin
       if (!origin) return cb(null, true);
-
-      // allow all
-      if (allowed === "*") return cb(null, true);
-
-      // single origin string
-      if (typeof allowed === "string") return cb(null, origin === allowed);
-
-      // fallback allow
-      return cb(null, false);
-    }
+      if (cfg.CORS_ORIGIN === "*" || cfg.CORS_ORIGIN.split(",").map(s => s.trim()).includes(origin)) {
+        return cb(null, true);
+      }
+      return cb(new Error("CORS blocked"));
+    },
+    credentials: true
   })
 );
 
-app.use(express.json({ limit: "2mb" }));
+app.use(express.json({ limit: "1mb" }));
 
-/* ---------------- Routes ---------------- */
-app.get("/", (req, res) => res.send("AI HQ Running"));
-
-// Heç vaxt 500 qaytarmayaq: DB səhv olsa da health yaşıl görünsün
-app.get("/health", async (req, res) => {
-  const db = await pingDb();
-  res.status(200).json({
+app.get("/health", async (_req, res) => {
+  const out = {
     ok: true,
-    env: config.app.env,
-    db
-  });
-});
+    service: "ai-hq-backend",
+    env: cfg.APP_ENV,
+    db: { enabled: Boolean(cfg.DATABASE_URL), ok: false }
+  };
 
-app.use("/api", api);
+  if (!cfg.DATABASE_URL) return res.json(out);
 
-/* ---------------- Server + WS ---------------- */
-const server = http.createServer(app);
-const ws = setupWs(server);
-
-const PORT = config.app.port;
-
-server.listen(PORT, async () => {
-  console.log("[ai-hq] listening on", PORT, "wsClients=", ws.clientCount());
-
-  // migrate + default agents: “fatal” olmasın, sadəcə log etsin
-  const mig = await migrate();
-  console.log("[ai-hq] migrate:", mig);
-
-  if (pool && mig.ok) {
-    try {
-      await ensureDefaultAgents(pool);
-      console.log("[ai-hq] default agents ensured");
-    } catch (e) {
-      console.error("[ai-hq] ensureDefaultAgents failed:", e?.message || e);
-    }
-  } else {
-    console.log("[ai-hq] DB not ready -> skipping ensureDefaultAgents");
-  }
-});
-
-/* ---------------- Graceful shutdown ---------------- */
-async function shutdown() {
-  console.log("\n[ai-hq] shutting down...");
   try {
-    if (pool) await pool.end();
-  } catch {}
-  process.exit(0);
-}
+    const r = await db.query("select 1 as ok");
+    out.db.ok = r?.rows?.[0]?.ok === 1;
+  } catch {
+    out.db.ok = false;
+  }
 
-process.on("SIGINT", shutdown);
-process.on("SIGTERM", shutdown);
+  res.json(out);
+});
+
+// attach ws hub for routes
+const server = http.createServer(app);
+const wsHub = createWsHub({ server, token: cfg.WS_AUTH_TOKEN });
+
+// routes
+app.use("/api", apiRouter({ db, wsHub }));
+
+// boot
+(async () => {
+  if (cfg.DATABASE_URL) {
+    const m = await migrate();
+    console.log("[ai-hq] migrate:", m.ok ? "ok" : `skip/fail (${m.reason || m.error || "unknown"})`);
+  } else {
+    console.log("[ai-hq] migrate: DATABASE_URL not configured (skip)");
+  }
+
+  server.listen(cfg.PORT, () => {
+    console.log(`[ai-hq] listening on :${cfg.PORT} env=${cfg.APP_ENV}`);
+    console.log(`[ai-hq] CORS_ORIGIN=${cfg.CORS_ORIGIN}`);
+    console.log(`[ai-hq] DB=${cfg.DATABASE_URL ? "ON" : "OFF"}`);
+    console.log(`[ai-hq] OpenAI=${cfg.OPENAI_API_KEY ? "ON" : "OFF"} model=${cfg.OPENAI_MODEL}`);
+    console.log(`[ai-hq] WS_AUTH_TOKEN=${cfg.WS_AUTH_TOKEN ? "ON" : "OFF"}`);
+  });
+})();
+
+// graceful shutdown
+process.on("SIGTERM", async () => {
+  try { await db.end(); } catch {}
+  process.exit(0);
+});

@@ -1,104 +1,203 @@
 import express from "express";
-import { z } from "zod";
-import { v4 as uuidv4 } from "uuid";
-import { pool } from "../db/index.js";
-import { makeAssistantProposal } from "../kernel/agentKernel.js";
+import { kernelHandle, listAgents } from "../kernel/agentKernel.js";
 
-export const api = express.Router();
+function ok(res, data) {
+  res.json({ ok: true, ...data });
+}
+function bad(res, message, code = 400) {
+  res.status(code).json({ ok: false, error: message });
+}
 
-// --- schemas
-const CreateConversation = z.object({
-  title: z.string().min(1).max(120).optional()
-});
+export function apiRouter({ db, wsHub }) {
+  const r = express.Router();
 
-const SendMessage = z.object({
-  text: z.string().min(1).max(5000)
-});
+  r.get("/", (_req, res) => ok(res, { service: "ai-hq-backend", endpoints: ["GET /agents","POST /chat","GET /threads","GET /threads/:id/messages","GET /proposals","POST /proposals/:id/approve","POST /proposals/:id/reject"] }));
 
-// --- routes
+  r.get("/agents", (_req, res) => ok(res, { agents: listAgents() }));
 
-api.get("/ping", (req, res) => res.json({ ok: true, ts: Date.now() }));
-
-api.post("/conversations", async (req, res) => {
-  const body = CreateConversation.safeParse(req.body || {});
-  if (!body.success) return res.status(400).json({ ok: false, error: body.error.flatten() });
-
-  const id = uuidv4();
-  const title = body.data.title || "New conversation";
-  await pool.query(`INSERT INTO conversations (id, title) VALUES ($1,$2)`, [id, title]);
-
-  res.json({ ok: true, conversation: { id, title } });
-});
-
-api.get("/conversations", async (req, res) => {
-  const r = await pool.query(`SELECT id, title, created_at FROM conversations ORDER BY created_at DESC LIMIT 50`);
-  res.json({ ok: true, conversations: r.rows });
-});
-
-api.get("/conversations/:id/messages", async (req, res) => {
-  const id = String(req.params.id || "");
-  const r = await pool.query(
-    `SELECT id, role, agent_key, content, meta, created_at
-     FROM messages WHERE conversation_id=$1
-     ORDER BY created_at ASC LIMIT 500`,
-    [id]
-  );
-  res.json({ ok: true, messages: r.rows });
-});
-
-api.post("/conversations/:id/messages", async (req, res) => {
-  const conversationId = String(req.params.id || "");
-  const body = SendMessage.safeParse(req.body || {});
-  if (!body.success) return res.status(400).json({ ok: false, error: body.error.flatten() });
-
-  // store user message
-  const userMsgId = uuidv4();
-  await pool.query(
-    `INSERT INTO messages (id, conversation_id, role, content) VALUES ($1,$2,'user',$3)`,
-    [userMsgId, conversationId, body.data.text]
-  );
-
-  // create assistant proposal (stub)
-  const proposal = makeAssistantProposal({ conversationId, userText: body.data.text });
-
-  // store proposal
-  await pool.query(
-    `INSERT INTO proposals (id, conversation_id, agent_key, type, payload, status)
-     VALUES ($1,$2,$3,$4,$5,'proposed')`,
-    [proposal.id, conversationId, proposal.agentKey, proposal.type, proposal.payload]
-  );
-
-  // for Phase 1 we also store the assistant message immediately
-  // (Later we will require explicit approval before execution.)
-  const assistantMsgId = uuidv4();
-  await pool.query(
-    `INSERT INTO messages (id, conversation_id, role, agent_key, content, meta)
-     VALUES ($1,$2,'assistant',$3,$4,$5)`,
-    [assistantMsgId, conversationId, proposal.agentKey, proposal.payload.text, { proposalId: proposal.id }]
-  );
-
-  res.json({
-    ok: true,
-    userMessageId: userMsgId,
-    proposal,
-    assistantMessageId: assistantMsgId
+  // Threads
+  r.get("/threads", async (_req, res) => {
+    try {
+      const q = await db.query(
+        `select id, title, created_at
+         from threads
+         order by created_at desc
+         limit 100`
+      );
+      ok(res, { threads: q.rows });
+    } catch (e) {
+      bad(res, `DB error: ${String(e.message || e)}`, 500);
+    }
   });
-});
 
-api.get("/proposals", async (req, res) => {
-  const r = await pool.query(
-    `SELECT id, conversation_id, agent_key, type, payload, status, created_at, decided_at
-     FROM proposals ORDER BY created_at DESC LIMIT 50`
-  );
-  res.json({ ok: true, proposals: r.rows });
-});
+  r.post("/threads", async (req, res) => {
+    const title = String(req.body?.title || "").trim() || "New thread";
+    try {
+      const q = await db.query(
+        `insert into threads (title) values ($1) returning id, title, created_at`,
+        [title]
+      );
+      ok(res, { thread: q.rows[0] });
+    } catch (e) {
+      bad(res, `DB error: ${String(e.message || e)}`, 500);
+    }
+  });
 
-api.post("/proposals/:id/decide", async (req, res) => {
-  const id = String(req.params.id || "");
-  const schema = z.object({ decision: z.enum(["approved", "rejected"]) });
-  const body = schema.safeParse(req.body || {});
-  if (!body.success) return res.status(400).json({ ok: false, error: body.error.flatten() });
+  r.get("/threads/:id/messages", async (req, res) => {
+    const threadId = String(req.params.id || "").trim();
+    if (!threadId) return bad(res, "threadId required");
 
-  await pool.query(`UPDATE proposals SET status=$1, decided_at=NOW() WHERE id=$2`, [body.data.decision, id]);
-  res.json({ ok: true });
-});
+    try {
+      const q = await db.query(
+        `select id, role, agent, content, meta, created_at
+         from messages
+         where thread_id = $1
+         order by created_at asc
+         limit 500`,
+        [threadId]
+      );
+      ok(res, { messages: q.rows });
+    } catch (e) {
+      bad(res, `DB error: ${String(e.message || e)}`, 500);
+    }
+  });
+
+  // CEO Chat (MVP)
+  r.post("/chat", async (req, res) => {
+    const message = String(req.body?.message || "").trim();
+    const agent = req.body?.agent ? String(req.body.agent).trim() : "";
+    let threadId = req.body?.threadId ? String(req.body.threadId).trim() : "";
+
+    if (!message) return bad(res, "message required");
+
+    try {
+      // ensure thread
+      if (!threadId) {
+        const t = await db.query(
+          `insert into threads (title) values ($1) returning id`,
+          [message.slice(0, 48)]
+        );
+        threadId = t.rows[0].id;
+      }
+
+      // store user msg
+      const userMsg = await db.query(
+        `insert into messages (thread_id, role, agent, content)
+         values ($1,'user',null,$2)
+         returning id, created_at`,
+        [threadId, message]
+      );
+
+      const k = await kernelHandle({ message, agentHint: agent || undefined });
+
+      // store assistant msg
+      const assistantMsg = await db.query(
+        `insert into messages (thread_id, role, agent, content, meta)
+         values ($1,'assistant',$2,$3,$4)
+         returning id, created_at`,
+        [threadId, k.agent, k.replyText, JSON.stringify({ agentName: k.agentName })]
+      );
+
+      let proposalRow = null;
+
+      if (k.proposal && typeof k.proposal === "object") {
+        const type = String(k.proposal.type || "generic");
+        const title = String(k.proposal.title || "").trim() || `${k.agentName} proposal`;
+        const payload = k.proposal.payload && typeof k.proposal.payload === "object" ? k.proposal.payload : k.proposal;
+
+        const p = await db.query(
+          `insert into proposals (thread_id, agent, type, status, title, payload)
+           values ($1,$2,$3,'pending',$4,$5)
+           returning id, status, type, title, payload, created_at`,
+          [threadId, k.agent, type, title, JSON.stringify(payload)]
+        );
+        proposalRow = p.rows[0];
+      }
+
+      // WS events
+      wsHub?.broadcast?.({
+        type: "chat.message",
+        threadId,
+        user: { id: userMsg.rows[0].id, role: "user", content: message, created_at: userMsg.rows[0].created_at },
+        assistant: { id: assistantMsg.rows[0].id, role: "assistant", agent: k.agent, content: k.replyText, created_at: assistantMsg.rows[0].created_at },
+        proposal: proposalRow
+      });
+
+      ok(res, {
+        threadId,
+        agent: k.agent,
+        replyText: k.replyText,
+        proposal: proposalRow
+      });
+    } catch (e) {
+      bad(res, `error: ${String(e.message || e)}`, 500);
+    }
+  });
+
+  // Proposals (approval flow)
+  r.get("/proposals", async (req, res) => {
+    const status = String(req.query?.status || "").trim();
+    const where = status ? `where status = $1` : "";
+    const args = status ? [status] : [];
+
+    try {
+      const q = await db.query(
+        `select id, thread_id, agent, type, status, title, payload, created_at, decided_at, decision_by
+         from proposals
+         ${where}
+         order by created_at desc
+         limit 200`,
+        args
+      );
+      ok(res, { proposals: q.rows });
+    } catch (e) {
+      bad(res, `DB error: ${String(e.message || e)}`, 500);
+    }
+  });
+
+  r.post("/proposals/:id/approve", async (req, res) => {
+    const id = String(req.params.id || "").trim();
+    const by = String(req.body?.by || "ceo").trim();
+
+    try {
+      const q = await db.query(
+        `update proposals
+         set status='approved', decided_at=now(), decision_by=$2
+         where id=$1
+         returning *`,
+        [id, by]
+      );
+
+      const row = q.rows[0] || null;
+      wsHub?.broadcast?.({ type: "proposal.updated", proposal: row });
+
+      ok(res, { proposal: row });
+    } catch (e) {
+      bad(res, `DB error: ${String(e.message || e)}`, 500);
+    }
+  });
+
+  r.post("/proposals/:id/reject", async (req, res) => {
+    const id = String(req.params.id || "").trim();
+    const by = String(req.body?.by || "ceo").trim();
+
+    try {
+      const q = await db.query(
+        `update proposals
+         set status='rejected', decided_at=now(), decision_by=$2
+         where id=$1
+         returning *`,
+        [id, by]
+      );
+
+      const row = q.rows[0] || null;
+      wsHub?.broadcast?.({ type: "proposal.updated", proposal: row });
+
+      ok(res, { proposal: row });
+    } catch (e) {
+      bad(res, `DB error: ${String(e.message || e)}`, 500);
+    }
+  });
+
+  return r;
+}

@@ -1,67 +1,39 @@
 import { WebSocketServer } from "ws";
-import { config } from "./config.js";
 
-/**
- * Simple WS hub:
- * - URL: ws://localhost:8080/ws?token=...
- * - If WS_AUTH_TOKEN empty => allow
- */
-export function setupWs(server) {
+export function createWsHub({ server, token }) {
   const wss = new WebSocketServer({ server, path: "/ws" });
 
   const clients = new Set();
 
-  function isAllowed(req) {
-    const required = String(config.auth.wsToken || "").trim();
-    if (!required) return true;
-
+  function send(ws, obj) {
     try {
-      const url = new URL(req.url, "http://localhost");
-      const token = url.searchParams.get("token") || "";
-      return token === required;
-    } catch {
-      return false;
-    }
-  }
-
-  function safeSend(ws, obj) {
-    if (ws.readyState !== ws.OPEN) return;
-    ws.send(JSON.stringify(obj));
+      ws.send(JSON.stringify(obj));
+    } catch {}
   }
 
   function broadcast(obj) {
-    for (const ws of clients) safeSend(ws, obj);
+    const payload = JSON.stringify(obj);
+    for (const ws of clients) {
+      try { ws.send(payload); } catch {}
+    }
   }
 
   wss.on("connection", (ws, req) => {
-    if (!isAllowed(req)) {
-      try {
-        ws.close(1008, "Unauthorized");
-      } catch {}
+    const url = new URL(req.url, "http://localhost");
+    const t = url.searchParams.get("token") || "";
+
+    if (token && t !== token) {
+      ws.close(1008, "unauthorized");
       return;
     }
 
     clients.add(ws);
-    safeSend(ws, { type: "hello", ts: Date.now() });
-
-    ws.on("message", (raw) => {
-      let msg = null;
-      try {
-        msg = JSON.parse(String(raw || ""));
-      } catch {
-        safeSend(ws, { type: "error", error: "invalid_json" });
-        return;
-      }
-      // For now: echo back + broadcast event bus style
-      broadcast({ type: "ws.event", ts: Date.now(), payload: msg });
-    });
+    send(ws, { type: "hello", ts: Date.now() });
 
     ws.on("close", () => clients.delete(ws));
-    ws.on("error", () => clients.delete(ws));
   });
 
   return {
-    broadcast,
-    clientCount: () => clients.size
+    broadcast
   };
 }
