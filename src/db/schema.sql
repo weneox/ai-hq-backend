@@ -1,8 +1,9 @@
--- AI HQ schema (upgrade-safe + FULL legacy fixes) — FINAL v3
+-- AI HQ schema (upgrade-safe + FULL legacy fixes) — FINAL v4
 -- Safe for production: no DROP TABLE.
 -- Fixes legacy:
 --   - messages.conversation_id NOT NULL + FK
---   - proposals.conversation_id NOT NULL + FK   ✅ (this was blocking inserts)
+--   - proposals.conversation_id NOT NULL + FK
+--   - proposals.agent_key NOT NULL (old schema)  ✅
 --   - ensures uuid defaults for id columns
 --   - ensures thread_id columns and best-effort FKs
 
@@ -156,6 +157,36 @@ begin
   ) then
     begin
       execute 'alter table proposals alter column conversation_id drop not null';
+    exception when others then null;
+    end;
+  end if;
+end$$;
+
+-- ✅ LEGACY FIX (CRITICAL):
+-- If proposals.agent_key exists, drop NOT NULL so inserts won't fail
+do $$
+begin
+  if exists (
+    select 1 from information_schema.columns
+    where table_name='proposals' and column_name='agent_key'
+  ) then
+    begin
+      execute 'alter table proposals alter column agent_key drop not null';
+    exception when others then null;
+    end;
+  end if;
+end$$;
+
+-- (Optional but useful) If proposals.agent_key exists and agent exists, backfill agent_key where null
+do $$
+begin
+  if exists (
+    select 1 from information_schema.columns where table_name='proposals' and column_name='agent_key'
+  ) and exists (
+    select 1 from information_schema.columns where table_name='proposals' and column_name='agent'
+  ) then
+    begin
+      execute 'update proposals set agent_key = agent where agent_key is null and agent is not null';
     exception when others then null;
     end;
   end if;
