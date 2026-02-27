@@ -1,4 +1,4 @@
-// src/routes/api.js (FINAL v2.2 — decision lock (one-shot) + reason stored + DB atomic)
+// src/routes/api.js (FINAL v2.3 — decision lock (one-shot) + reason stored + DB atomic + CAST FIX)
 import express from "express";
 import crypto from "crypto";
 import { cfg } from "../config.js";
@@ -324,22 +324,23 @@ export function apiRouter({ db, wsHub }) {
       }
 
       // DB mode — do an atomic update only if still pending
+      // ✅ CAST FIX: prevents "could not determine data type of parameter $2"
       const q = await db.query(
         `update proposals
-         set status = $1,
+         set status = $1::text,
              decided_at = now(),
-             decision_by = $2,
+             decision_by = $2::text,
              payload = (coalesce(payload, '{}'::jsonb) ||
                       jsonb_build_object(
                         'decision',
                         jsonb_build_object(
-                          'by', $2,
-                          'decision', $1,
-                          'reason', $4,
+                          'by', $2::text,
+                          'decision', $1::text,
+                          'reason', $4::text,
                           'at', now()
                         )
                       ))
-         where id = $3
+         where id = $3::uuid
            and status = 'pending'
          returning id, thread_id, agent, type, status, title, payload, created_at, decided_at, decision_by`,
         [decision, by, id, decision === "rejected" ? reason : ""]
@@ -350,7 +351,7 @@ export function apiRouter({ db, wsHub }) {
         // not found OR already decided — fetch current to explain
         const cur = await db.query(
           `select id, thread_id, agent, type, status, title, payload, created_at, decided_at, decision_by
-           from proposals where id = $1`,
+           from proposals where id = $1::uuid`,
           [id]
         );
         const existing = cur.rows?.[0] || null;
