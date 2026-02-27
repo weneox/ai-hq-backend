@@ -1,11 +1,7 @@
--- AI HQ schema (upgrade-safe + FULL legacy fixes) — FINAL v4
+-- AI HQ schema (upgrade-safe + FULL legacy fixes) — FINAL v5
+-- ✅ Adds: notifications, jobs, audit_log
+-- ✅ Keeps: legacy fixes (messages/proposals conversation_id + agent_key)
 -- Safe for production: no DROP TABLE.
--- Fixes legacy:
---   - messages.conversation_id NOT NULL + FK
---   - proposals.conversation_id NOT NULL + FK
---   - proposals.agent_key NOT NULL (old schema)  ✅
---   - ensures uuid defaults for id columns
---   - ensures thread_id columns and best-effort FKs
 
 create extension if not exists pgcrypto;
 
@@ -18,7 +14,6 @@ create table if not exists threads (
   created_at timestamptz not null default now()
 );
 
--- Ensure legacy threads.id has default
 do $$
 begin
   begin
@@ -40,7 +35,6 @@ create table if not exists messages (
   created_at timestamptz not null default now()
 );
 
--- Add missing columns safely (legacy upgrades)
 alter table messages add column if not exists id uuid;
 alter table messages add column if not exists thread_id uuid;
 alter table messages add column if not exists role text;
@@ -49,7 +43,6 @@ alter table messages add column if not exists content text;
 alter table messages add column if not exists meta jsonb default '{}'::jsonb;
 alter table messages add column if not exists created_at timestamptz default now();
 
--- Drop legacy FK that references messages.conversation_id (if exists)
 do $$
 begin
   if exists (select 1 from pg_constraint where conname = 'messages_conversation_id_fkey') then
@@ -60,7 +53,6 @@ begin
   end if;
 end$$;
 
--- If messages.conversation_id exists, drop NOT NULL so inserts won't fail
 do $$
 begin
   if exists (
@@ -74,7 +66,6 @@ begin
   end if;
 end$$;
 
--- Ensure messages.id default uuid
 do $$
 begin
   begin
@@ -83,7 +74,6 @@ begin
   end;
 end$$;
 
--- Ensure thread_id NOT NULL if possible (best-effort)
 do $$
 begin
   begin
@@ -92,7 +82,6 @@ begin
   end;
 end$$;
 
--- Ensure FK on messages.thread_id (best-effort)
 do $$
 begin
   if not exists (select 1 from pg_constraint where conname = 'messages_thread_id_fkey') then
@@ -123,7 +112,6 @@ create table if not exists proposals (
   decision_by text
 );
 
--- Legacy upgrades for proposals
 alter table proposals add column if not exists id uuid;
 alter table proposals add column if not exists thread_id uuid;
 alter table proposals add column if not exists agent text;
@@ -135,8 +123,6 @@ alter table proposals add column if not exists created_at timestamptz default no
 alter table proposals add column if not exists decided_at timestamptz;
 alter table proposals add column if not exists decision_by text;
 
--- ✅ LEGACY FIX (CRITICAL):
--- Drop legacy FK on proposals.conversation_id (if exists)
 do $$
 begin
   if exists (select 1 from pg_constraint where conname = 'proposals_conversation_id_fkey') then
@@ -147,8 +133,6 @@ begin
   end if;
 end$$;
 
--- ✅ LEGACY FIX (CRITICAL):
--- If proposals.conversation_id exists, drop NOT NULL so inserts won't fail
 do $$
 begin
   if exists (
@@ -162,8 +146,6 @@ begin
   end if;
 end$$;
 
--- ✅ LEGACY FIX (CRITICAL):
--- If proposals.agent_key exists, drop NOT NULL so inserts won't fail
 do $$
 begin
   if exists (
@@ -177,7 +159,6 @@ begin
   end if;
 end$$;
 
--- (Optional but useful) If proposals.agent_key exists and agent exists, backfill agent_key where null
 do $$
 begin
   if exists (
@@ -192,7 +173,6 @@ begin
   end if;
 end$$;
 
--- Ensure proposals.id default uuid
 do $$
 begin
   begin
@@ -203,7 +183,6 @@ end$$;
 
 create index if not exists idx_proposals_status_created on proposals(status, created_at desc);
 
--- Optional FK for proposals.thread_id (best-effort)
 do $$
 begin
   if not exists (select 1 from pg_constraint where conname = 'proposals_thread_id_fkey') then
@@ -215,3 +194,118 @@ begin
     end;
   end if;
 end$$;
+
+-- ============================================================
+-- ✅ notifications (CEO-only now, later user_id/tenant_id əlavə edərik)
+-- ============================================================
+create table if not exists notifications (
+  id uuid primary key default gen_random_uuid(),
+  recipient text not null default 'ceo', -- CEO-only MVP
+  type text not null default 'info',
+  title text not null default '',
+  body text not null default '',
+  payload jsonb not null default '{}'::jsonb,
+  read_at timestamptz,
+  created_at timestamptz not null default now()
+);
+
+alter table notifications add column if not exists id uuid;
+alter table notifications add column if not exists recipient text;
+alter table notifications add column if not exists type text;
+alter table notifications add column if not exists title text;
+alter table notifications add column if not exists body text;
+alter table notifications add column if not exists payload jsonb default '{}'::jsonb;
+alter table notifications add column if not exists read_at timestamptz;
+alter table notifications add column if not exists created_at timestamptz default now();
+
+do $$
+begin
+  begin
+    alter table notifications alter column id set default gen_random_uuid();
+  exception when others then null;
+  end;
+end$$;
+
+create index if not exists idx_notifications_recipient_created on notifications(recipient, created_at desc);
+create index if not exists idx_notifications_unread on notifications(recipient) where read_at is null;
+
+-- ============================================================
+-- ✅ jobs (execution tracking: approve -> n8n -> callback)
+-- ============================================================
+create table if not exists jobs (
+  id uuid primary key default gen_random_uuid(),
+  proposal_id uuid,
+  type text not null default 'generic',
+  status text not null default 'queued' check (status in ('queued','running','completed','failed')),
+  input jsonb not null default '{}'::jsonb,
+  output jsonb not null default '{}'::jsonb,
+  error text,
+  created_at timestamptz not null default now(),
+  started_at timestamptz,
+  finished_at timestamptz
+);
+
+alter table jobs add column if not exists id uuid;
+alter table jobs add column if not exists proposal_id uuid;
+alter table jobs add column if not exists type text;
+alter table jobs add column if not exists status text;
+alter table jobs add column if not exists input jsonb default '{}'::jsonb;
+alter table jobs add column if not exists output jsonb default '{}'::jsonb;
+alter table jobs add column if not exists error text;
+alter table jobs add column if not exists created_at timestamptz default now();
+alter table jobs add column if not exists started_at timestamptz;
+alter table jobs add column if not exists finished_at timestamptz;
+
+do $$
+begin
+  begin
+    alter table jobs alter column id set default gen_random_uuid();
+  exception when others then null;
+  end;
+end$$;
+
+create index if not exists idx_jobs_status_created on jobs(status, created_at desc);
+
+do $$
+begin
+  if not exists (select 1 from pg_constraint where conname = 'jobs_proposal_id_fkey') then
+    begin
+      alter table jobs
+        add constraint jobs_proposal_id_fkey
+        foreign key (proposal_id) references proposals(id) on delete set null;
+    exception when others then null;
+    end;
+  end if;
+end$$;
+
+-- ============================================================
+-- ✅ audit_log (SaaS üçün əsas: kim nə etdi)
+-- ============================================================
+create table if not exists audit_log (
+  id uuid primary key default gen_random_uuid(),
+  actor text not null default 'system',
+  action text not null,
+  object_type text not null default 'unknown',
+  object_id text,
+  meta jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now()
+);
+
+alter table audit_log add column if not exists id uuid;
+alter table audit_log add column if not exists actor text;
+alter table audit_log add column if not exists action text;
+alter table audit_log add column if not exists object_type text;
+alter table audit_log add column if not exists object_id text;
+alter table audit_log add column if not exists meta jsonb default '{}'::jsonb;
+alter table audit_log add column if not exists created_at timestamptz default now();
+
+do $$
+begin
+  begin
+    alter table audit_log alter column id set default gen_random_uuid();
+  exception when others then null;
+  end;
+end$$;
+
+create index if not exists idx_audit_created on audit_log(created_at desc);
+create index if not exists idx_audit_action on audit_log(action, created_at desc);

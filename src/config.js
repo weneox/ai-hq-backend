@@ -1,4 +1,4 @@
-// src/config.js (FINAL v2)
+// src/config.js (FINAL v2.1)
 function s(v, d = "") {
   return String(v ?? d).trim();
 }
@@ -31,18 +31,20 @@ export const cfg = {
   OPENAI_API_KEY: s(process.env.OPENAI_API_KEY, ""),
   OPENAI_MODEL: s(process.env.OPENAI_MODEL, "gpt-5"),
 
-  // ✅ default ↑ (chat incomplete azalır)
   OPENAI_MAX_OUTPUT_TOKENS: n(process.env.OPENAI_MAX_OUTPUT_TOKENS, 800),
-
   OPENAI_TIMEOUT_MS: n(process.env.OPENAI_TIMEOUT_MS, 25_000),
   OPENAI_DEBATE_CONCURRENCY: n(process.env.OPENAI_DEBATE_CONCURRENCY, 2),
 
   OPENAI_DEBATE_AGENT_TOKENS: n(process.env.OPENAI_DEBATE_AGENT_TOKENS, 900),
   OPENAI_DEBATE_SYNTH_TOKENS: n(process.env.OPENAI_DEBATE_SYNTH_TOKENS, 1400),
 
+  // HQ -> n8n
   N8N_WEBHOOK_URL: s(process.env.N8N_WEBHOOK_URL, ""),
   N8N_WEBHOOK_TOKEN: s(process.env.N8N_WEBHOOK_TOKEN, ""),
   N8N_TIMEOUT_MS: n(process.env.N8N_TIMEOUT_MS, 10_000),
+
+  // n8n -> HQ callback auth (default: reuse N8N_WEBHOOK_TOKEN)
+  N8N_CALLBACK_TOKEN: s(process.env.N8N_CALLBACK_TOKEN, ""),
 
   LOG_LEVEL: s(process.env.LOG_LEVEL, "info"),
   DEBUG_DEBATE_RAW: b(process.env.DEBUG_DEBATE_RAW, false),

@@ -1,8 +1,9 @@
-// src/routes/api.js (FINAL v2.3 — DB legacy-safe decision + one-shot lock)
-// ✅ Works even if proposals.id is TEXT (legacy) or UUID (new)
-// ✅ Fixes: "operator does not exist: text = uuid"
-// ✅ Fixes: "could not determine data type of parameter $2" via explicit casts
-// ✅ Keeps: one-shot decision lock + reason stored + atomic DB update + n8n notify
+// src/routes/api.js (FINAL v2.4 — Notifications + Jobs + n8n callback + Audit)
+// ✅ CEO-only in-app notifications (DB + memory fallback)
+// ✅ Jobs tracking: approve -> create job -> send to n8n -> callback updates job
+// ✅ Keeps: legacy-safe proposals.id TEXT/UUID decision endpoint + one-shot lock
+// ✅ Keeps: WS events proposal.created/proposal.updated/thread.message
+// ✅ Adds: notification.created/notification.read + job.updated + audit logged actions
 
 import express from "express";
 import crypto from "crypto";
@@ -26,10 +27,7 @@ function requireDebugToken(req) {
   const expected = String(cfg.DEBUG_API_TOKEN || "").trim();
   if (!expected) return false;
 
-  const token = String(
-    req.headers["x-debug-token"] || req.query.token || req.body?.token || ""
-  ).trim();
-
+  const token = String(req.headers["x-debug-token"] || req.query.token || req.body?.token || "").trim();
   return Boolean(token) && token === expected;
 }
 
@@ -66,6 +64,33 @@ function serializeError(err) {
   return base;
 }
 
+function normalizeDecision(d) {
+  let decision = String(d || "").trim().toLowerCase();
+  if (decision === "approve") decision = "approved";
+  if (decision === "reject") decision = "rejected";
+  return decision;
+}
+
+function isFinalStatus(status) {
+  const s = String(status || "").toLowerCase();
+  return s === "approved" || s === "rejected";
+}
+
+function nowIso() {
+  return new Date().toISOString();
+}
+
+function callbackTokenExpected() {
+  return String(cfg.N8N_CALLBACK_TOKEN || cfg.N8N_WEBHOOK_TOKEN || "").trim();
+}
+
+function requireCallbackToken(req) {
+  const expected = callbackTokenExpected();
+  if (!expected) return true; // if not configured, allow (dev)
+  const got = String(req.headers["x-webhook-token"] || req.headers["x-callback-token"] || req.body?.token || "").trim();
+  return got && got === expected;
+}
+
 /** ===========================
  *  In-memory fallback (DB off)
  * =========================== */
@@ -73,14 +98,17 @@ const mem = {
   threads: new Map(),
   messages: new Map(),
   proposals: new Map(),
+  notifications: new Map(), // id -> row
+  jobs: new Map(), // id -> row
+  audit: [],
 };
 
 function memEnsureThread(threadId, title) {
   if (!mem.threads.has(threadId)) {
     mem.threads.set(threadId, {
       id: threadId,
-      title: title || `Thread ${new Date().toISOString()}`,
-      created_at: new Date().toISOString(),
+      title: title || `Thread ${nowIso()}`,
+      created_at: nowIso(),
     });
   }
   if (!mem.messages.has(threadId)) mem.messages.set(threadId, []);
@@ -97,7 +125,7 @@ function memAddMessage(threadId, { role, agent, content, meta }) {
     agent: agent || null,
     content: content || "",
     meta: meta || {},
-    created_at: new Date().toISOString(),
+    created_at: nowIso(),
   };
   arr.push(row);
   return row;
@@ -113,7 +141,7 @@ function memCreateProposal(threadId, { agent, type, title, payload }) {
     status: "pending",
     title: title || "",
     payload: payload || {},
-    created_at: new Date().toISOString(),
+    created_at: nowIso(),
     decided_at: null,
     decision_by: null,
   };
@@ -130,6 +158,80 @@ function memListProposals(status = "pending") {
   return out.slice(0, 100);
 }
 
+function memCreateNotification({ recipient = "ceo", type = "info", title = "", body = "", payload = {} }) {
+  const id = crypto.randomUUID();
+  const row = {
+    id,
+    recipient,
+    type,
+    title,
+    body,
+    payload,
+    read_at: null,
+    created_at: nowIso(),
+  };
+  mem.notifications.set(id, row);
+  return row;
+}
+
+function memListNotifications({ recipient = "ceo", unreadOnly = false, limit = 50 }) {
+  const rows = [];
+  for (const n of mem.notifications.values()) {
+    if (n.recipient !== recipient) continue;
+    if (unreadOnly && n.read_at) continue;
+    rows.push(n);
+  }
+  rows.sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
+  return rows.slice(0, Math.max(1, Math.min(200, Number(limit) || 50)));
+}
+
+function memMarkRead(id) {
+  const row = mem.notifications.get(id);
+  if (!row) return null;
+  if (!row.read_at) row.read_at = nowIso();
+  return row;
+}
+
+function memCreateJob({ proposalId = null, type = "generic", status = "queued", input = {} }) {
+  const id = crypto.randomUUID();
+  const row = {
+    id,
+    proposal_id: proposalId,
+    type,
+    status,
+    input,
+    output: {},
+    error: null,
+    created_at: nowIso(),
+    started_at: null,
+    finished_at: null,
+  };
+  mem.jobs.set(id, row);
+  return row;
+}
+
+function memUpdateJob(id, patch) {
+  const row = mem.jobs.get(id);
+  if (!row) return null;
+  Object.assign(row, patch || {});
+  return row;
+}
+
+function memAudit(actor, action, objectType, objectId, meta = {}) {
+  mem.audit.push({
+    id: crypto.randomUUID(),
+    actor: actor || "system",
+    action,
+    object_type: objectType || "unknown",
+    object_id: objectId || null,
+    meta,
+    created_at: nowIso(),
+  });
+}
+
+/** ===========================
+ *  n8n notify helper
+ * =========================== */
 function notifyN8n(event, proposal, extra = {}) {
   const url = String(cfg.N8N_WEBHOOK_URL || "").trim();
   if (!url) return;
@@ -172,16 +274,96 @@ function fallbackSynthesisFromNotes(out) {
   return parts.join("\n\n").trim();
 }
 
-function normalizeDecision(d) {
-  let decision = String(d || "").trim().toLowerCase();
-  if (decision === "approve") decision = "approved";
-  if (decision === "reject") decision = "rejected";
-  return decision;
+/** ===========================
+ *  DB helpers: notifications/jobs/audit
+ * =========================== */
+async function dbAudit(db, actor, action, objectType, objectId, meta) {
+  if (!isDbReady(db)) return;
+  try {
+    await db.query(
+      `insert into audit_log (actor, action, object_type, object_id, meta)
+       values ($1::text, $2::text, $3::text, $4::text, $5::jsonb)`,
+      [actor || "system", action, objectType || "unknown", objectId || null, meta || {}]
+    );
+  } catch {}
 }
 
-function isFinalStatus(status) {
-  const s = String(status || "").toLowerCase();
-  return s === "approved" || s === "rejected";
+async function dbCreateNotification(db, { recipient = "ceo", type = "info", title = "", body = "", payload = {} }) {
+  const q = await db.query(
+    `insert into notifications (recipient, type, title, body, payload)
+     values ($1::text, $2::text, $3::text, $4::text, $5::jsonb)
+     returning id, recipient, type, title, body, payload, read_at, created_at`,
+    [recipient, type, title, body, payload]
+  );
+  return q.rows?.[0] || null;
+}
+
+async function dbListNotifications(db, { recipient = "ceo", unreadOnly = false, limit = 50 }) {
+  const lim = Math.max(1, Math.min(200, Number(limit) || 50));
+  if (unreadOnly) {
+    const q = await db.query(
+      `select id, recipient, type, title, body, payload, read_at, created_at
+       from notifications
+       where recipient = $1::text and read_at is null
+       order by created_at desc
+       limit ${lim}`,
+      [recipient]
+    );
+    return q.rows || [];
+  }
+
+  const q = await db.query(
+    `select id, recipient, type, title, body, payload, read_at, created_at
+     from notifications
+     where recipient = $1::text
+     order by created_at desc
+     limit ${lim}`,
+    [recipient]
+  );
+  return q.rows || [];
+}
+
+async function dbMarkNotificationRead(db, id) {
+  const q = await db.query(
+    `update notifications
+     set read_at = coalesce(read_at, now())
+     where id = $1::uuid
+     returning id, recipient, type, title, body, payload, read_at, created_at`,
+    [id]
+  );
+  return q.rows?.[0] || null;
+}
+
+async function dbCreateJob(db, { proposalId = null, type = "generic", status = "queued", input = {} }) {
+  const q = await db.query(
+    `insert into jobs (proposal_id, type, status, input)
+     values ($1::uuid, $2::text, $3::text, $4::jsonb)
+     returning id, proposal_id, type, status, input, output, error, created_at, started_at, finished_at`,
+    [proposalId, type, status, input]
+  );
+  return q.rows?.[0] || null;
+}
+
+async function dbUpdateJob(db, id, patch) {
+  // patch: {status, output, error, started_at, finished_at}
+  const status = patch?.status ?? null;
+  const output = patch?.output ?? null;
+  const error = patch?.error ?? null;
+  const started = patch?.started_at ?? null;
+  const finished = patch?.finished_at ?? null;
+
+  const q = await db.query(
+    `update jobs
+     set status = coalesce($2::text, status),
+         output = case when $3::jsonb is null then output else (coalesce(output,'{}'::jsonb) || $3::jsonb) end,
+         error = coalesce($4::text, error),
+         started_at = coalesce($5::timestamptz, started_at),
+         finished_at = coalesce($6::timestamptz, finished_at)
+     where id = $1::uuid
+     returning id, proposal_id, type, status, input, output, error, created_at, started_at, finished_at`,
+    [id, status, output, error, started, finished]
+  );
+  return q.rows?.[0] || null;
 }
 
 /** ===========================
@@ -204,6 +386,9 @@ export function apiRouter({ db, wsHub }) {
         "GET /api/threads/:id/messages",
         "GET /api/proposals?status=pending",
         "POST /api/proposals/:id/decision",
+        "GET /api/notifications?recipient=ceo&unread=1",
+        "POST /api/notifications/:id/read",
+        "POST /api/executions/callback (token)",
         "POST /api/debug/openai (token)",
       ],
     })
@@ -211,6 +396,138 @@ export function apiRouter({ db, wsHub }) {
 
   r.get("/agents", (_req, res) => okJson(res, { ok: true, agents: listAgents() }));
 
+  /** ===========================
+   * Notifications (CEO-only)
+   * =========================== */
+  r.get("/notifications", async (req, res) => {
+    const recipient = String(req.query.recipient || "ceo").trim() || "ceo";
+    const unreadOnly = String(req.query.unread || "").trim() === "1";
+    const limit = clamp(req.query.limit ?? 50, 1, 200);
+
+    try {
+      if (!isDbReady(db)) {
+        const rows = memListNotifications({ recipient, unreadOnly, limit });
+        return okJson(res, { ok: true, recipient, unreadOnly, notifications: rows, dbDisabled: true });
+      }
+
+      const rows = await dbListNotifications(db, { recipient, unreadOnly, limit });
+      return okJson(res, { ok: true, recipient, unreadOnly, notifications: rows });
+    } catch (e) {
+      const details = serializeError(e);
+      console.error("[api/notifications] ERROR", details);
+      return okJson(res, { ok: false, error: details.name, details });
+    }
+  });
+
+  r.post("/notifications/:id/read", async (req, res) => {
+    const id = String(req.params.id || "").trim();
+    if (!id) return okJson(res, { ok: false, error: "notification id required" });
+
+    try {
+      if (!isDbReady(db)) {
+        const row = memMarkRead(id);
+        if (!row) return okJson(res, { ok: false, error: "not found", dbDisabled: true });
+        try { wsHub?.broadcast?.({ type: "notification.read", notification: row }); } catch {}
+        memAudit("ceo", "notification.read", "notification", id, {});
+        return okJson(res, { ok: true, notification: row, dbDisabled: true });
+      }
+
+      const row = await dbMarkNotificationRead(db, id);
+      if (!row) return okJson(res, { ok: false, error: "not found" });
+
+      try { wsHub?.broadcast?.({ type: "notification.read", notification: row }); } catch {}
+      await dbAudit(db, "ceo", "notification.read", "notification", String(row.id), {});
+      return okJson(res, { ok: true, notification: row });
+    } catch (e) {
+      const details = serializeError(e);
+      console.error("[api/notifications/:id/read] ERROR", details);
+      return okJson(res, { ok: false, error: details.name, details });
+    }
+  });
+
+  /** ===========================
+   * n8n -> HQ callback (job updates)
+   * =========================== */
+  r.post("/executions/callback", async (req, res) => {
+    if (!requireCallbackToken(req)) {
+      return okJson(res, { ok: false, error: "forbidden (missing/invalid token)" });
+    }
+
+    const jobId = String(req.body?.jobId || req.body?.id || "").trim();
+    const status = String(req.body?.status || "").trim().toLowerCase();
+    const result = req.body?.result && typeof req.body.result === "object" ? req.body.result : {};
+    const error = String(req.body?.error || "").trim();
+
+    if (!jobId) return okJson(res, { ok: false, error: "jobId required" });
+    if (!["running", "completed", "failed"].includes(status)) {
+      return okJson(res, { ok: false, error: 'status must be "running"|"completed"|"failed"' });
+    }
+
+    try {
+      // MEMORY mode
+      if (!isDbReady(db)) {
+        const patch = {
+          status,
+          output: result || {},
+          error: error || null,
+          started_at: status === "running" ? nowIso() : null,
+          finished_at: status === "completed" || status === "failed" ? nowIso() : null,
+        };
+        const row = memUpdateJob(jobId, patch);
+        if (!row) return okJson(res, { ok: false, error: "job not found", dbDisabled: true });
+
+        try { wsHub?.broadcast?.({ type: "job.updated", job: row }); } catch {}
+        memAudit("n8n", "job.update", "job", jobId, { status });
+
+        // notify CEO in-app
+        const n = memCreateNotification({
+          recipient: "ceo",
+          type: status === "completed" ? "success" : status === "failed" ? "danger" : "info",
+          title: `Execution ${status.toUpperCase()}`,
+          body: status === "failed" ? (error || "Execution failed") : "Execution update received",
+          payload: { jobId, status, result },
+        });
+        try { wsHub?.broadcast?.({ type: "notification.created", notification: n }); } catch {}
+
+        return okJson(res, { ok: true, job: row, notification: n, dbDisabled: true });
+      }
+
+      // DB mode
+      const patch = {
+        status,
+        output: result || {},
+        error: error || null,
+        started_at: status === "running" ? new Date().toISOString() : null,
+        finished_at: status === "completed" || status === "failed" ? new Date().toISOString() : null,
+      };
+
+      const row = await dbUpdateJob(db, jobId, patch);
+      if (!row) return okJson(res, { ok: false, error: "job not found" });
+
+      try { wsHub?.broadcast?.({ type: "job.updated", job: row }); } catch {}
+      await dbAudit(db, "n8n", "job.update", "job", String(jobId), { status });
+
+      // CEO notification
+      const notif = await dbCreateNotification(db, {
+        recipient: "ceo",
+        type: status === "completed" ? "success" : status === "failed" ? "danger" : "info",
+        title: `Execution ${status.toUpperCase()}`,
+        body: status === "failed" ? (error || "Execution failed") : "Execution update received",
+        payload: { jobId, status, result },
+      });
+      try { wsHub?.broadcast?.({ type: "notification.created", notification: notif }); } catch {}
+
+      return okJson(res, { ok: true, job: row, notification: notif });
+    } catch (e) {
+      const details = serializeError(e);
+      console.error("[api/executions/callback] ERROR", details);
+      return okJson(res, { ok: false, error: details.name, details });
+    }
+  });
+
+  /** ===========================
+   * Threads/messages
+   * =========================== */
   r.get("/threads/:id/messages", async (req, res) => {
     const threadId = String(req.params.id || "").trim();
     if (!threadId) return okJson(res, { ok: false, error: "thread id required" });
@@ -237,6 +554,9 @@ export function apiRouter({ db, wsHub }) {
     }
   });
 
+  /** ===========================
+   * Proposals list
+   * =========================== */
   r.get("/proposals", async (req, res) => {
     const status = String(req.query.status || "pending").trim();
 
@@ -264,8 +584,8 @@ export function apiRouter({ db, wsHub }) {
   });
 
   /** ===========================
-   *  ✅ Decision endpoint (ONE-SHOT)
-   *  Legacy-safe: proposals.id can be TEXT or UUID
+   * ✅ Decision endpoint (ONE-SHOT) + creates Job + sends n8n event + notifies CEO
+   * Legacy-safe: proposals.id can be TEXT or UUID
    * =========================== */
   r.post("/proposals/:id/decision", async (req, res) => {
     const id = String(req.params.id || "").trim();
@@ -292,7 +612,7 @@ export function apiRouter({ db, wsHub }) {
         }
 
         row.status = decision;
-        row.decided_at = new Date().toISOString();
+        row.decided_at = nowIso();
         row.decision_by = by;
 
         row.payload = row.payload && typeof row.payload === "object" ? row.payload : {};
@@ -304,17 +624,50 @@ export function apiRouter({ db, wsHub }) {
         };
 
         try { wsHub?.broadcast?.({ type: "proposal.updated", proposal: row }); } catch {}
-        notifyN8n(decision === "approved" ? "proposal.approved" : "proposal.rejected", row, {
-          by,
-          reason: decision === "rejected" ? reason : undefined,
-          dbDisabled: true,
-        });
+        memAudit(by, "proposal.decision", "proposal", id, { decision });
 
-        return okJson(res, { ok: true, proposal: row, dbDisabled: true });
+        // CEO notification (in-app)
+        const notif = memCreateNotification({
+          recipient: "ceo",
+          type: decision === "approved" ? "success" : "warning",
+          title: decision === "approved" ? "Proposal Approved" : "Proposal Rejected",
+          body: row.title || "",
+          payload: { proposalId: row.id, threadId: row.thread_id, decision, reason },
+        });
+        try { wsHub?.broadcast?.({ type: "notification.created", notification: notif }); } catch {}
+
+        // If approved => create job + send n8n
+        let job = null;
+        if (decision === "approved") {
+          job = memCreateJob({
+            proposalId: row.id,
+            type: String(row.type || "generic"),
+            status: "queued",
+            input: { proposal: row },
+          });
+
+          try { wsHub?.broadcast?.({ type: "job.updated", job }); } catch {}
+          memAudit("system", "job.create", "job", job.id, { proposalId: row.id });
+
+          notifyN8n("proposal.approved", row, {
+            by,
+            reason: undefined,
+            jobId: job.id,
+            callbackUrl: "/api/executions/callback",
+            dbDisabled: true,
+          });
+        } else {
+          notifyN8n("proposal.rejected", row, {
+            by,
+            reason,
+            dbDisabled: true,
+          });
+        }
+
+        return okJson(res, { ok: true, proposal: row, notification: notif, job, dbDisabled: true });
       }
 
       // DB mode — atomic update ONLY if still pending
-      // ✅ Critical: id::text = $3::text => works for UUID or TEXT legacy schemas
       const q = await db.query(
         `update proposals
          set status = $1::text,
@@ -338,7 +691,6 @@ export function apiRouter({ db, wsHub }) {
 
       const row = q.rows?.[0];
       if (!row) {
-        // not found OR already decided — fetch current for clarity (legacy-safe)
         const cur = await db.query(
           `select id, thread_id, agent, type, status, title, payload, created_at, decided_at, decision_by
            from proposals
@@ -348,18 +700,49 @@ export function apiRouter({ db, wsHub }) {
 
         const existing = cur.rows?.[0] || null;
         if (!existing) return okJson(res, { ok: false, error: "proposal not found" });
-
         return okJson(res, { ok: false, error: "proposal already decided", proposal: existing });
       }
 
       try { wsHub?.broadcast?.({ type: "proposal.updated", proposal: row }); } catch {}
-      notifyN8n(decision === "approved" ? "proposal.approved" : "proposal.rejected", row, {
-        by,
-        reason: decision === "rejected" ? reason : undefined,
-        dbDisabled: false,
-      });
+      await dbAudit(db, by, "proposal.decision", "proposal", String(row.id), { decision });
 
-      return okJson(res, { ok: true, proposal: row });
+      // CEO in-app notification
+      const notif = await dbCreateNotification(db, {
+        recipient: "ceo",
+        type: decision === "approved" ? "success" : "warning",
+        title: decision === "approved" ? "Proposal Approved" : "Proposal Rejected",
+        body: row.title || "",
+        payload: { proposalId: row.id, threadId: row.thread_id, decision, reason: decision === "rejected" ? reason : "" },
+      });
+      try { wsHub?.broadcast?.({ type: "notification.created", notification: notif }); } catch {}
+
+      // If approved => create job + send to n8n
+      let job = null;
+      if (decision === "approved") {
+        job = await dbCreateJob(db, {
+          proposalId: row.id,
+          type: String(row.type || "generic"),
+          status: "queued",
+          input: { proposal: row },
+        });
+
+        try { wsHub?.broadcast?.({ type: "job.updated", job }); } catch {}
+        await dbAudit(db, "system", "job.create", "job", String(job.id), { proposalId: String(row.id) });
+
+        notifyN8n("proposal.approved", row, {
+          by,
+          jobId: job.id,
+          callback: {
+            url: "/api/executions/callback",
+            tokenHeader: "x-webhook-token",
+          },
+          dbDisabled: false,
+        });
+      } else {
+        notifyN8n("proposal.rejected", row, { by, reason, dbDisabled: false });
+      }
+
+      return okJson(res, { ok: true, proposal: row, notification: notif, job });
     } catch (e) {
       const details = serializeError(e);
       console.error("[api/proposals/:id/decision] ERROR", details);
@@ -367,6 +750,9 @@ export function apiRouter({ db, wsHub }) {
     }
   });
 
+  /** ===========================
+   * Chat (single agent)
+   * =========================== */
   r.post("/chat", async (req, res) => {
     const message = String(req.body?.message || "").trim();
     const agent = String(req.body?.agent || req.body?.agentId || "").trim();
@@ -389,7 +775,7 @@ export function apiRouter({ db, wsHub }) {
           wsHub?.broadcast?.({
             type: "thread.message",
             threadId,
-            message: { role: "assistant", agent: out.agent, content: out.replyText, at: new Date().toISOString() },
+            message: { role: "assistant", agent: out.agent, content: out.replyText, at: nowIso() },
           });
         } catch {}
 
@@ -405,7 +791,7 @@ export function apiRouter({ db, wsHub }) {
 
       if (!threadIdIn) {
         const t = await db.query(`insert into threads (title) values ($1::text) returning id`, [
-          `Thread ${new Date().toISOString()}`,
+          `Thread ${nowIso()}`,
         ]);
         threadId = t.rows?.[0]?.id || threadId;
       }
@@ -428,7 +814,7 @@ export function apiRouter({ db, wsHub }) {
         wsHub?.broadcast?.({
           type: "thread.message",
           threadId,
-          message: { role: "assistant", agent: out.agent, content: out.replyText, at: new Date().toISOString() },
+          message: { role: "assistant", agent: out.agent, content: out.replyText, at: nowIso() },
         });
       } catch {}
 
@@ -446,6 +832,9 @@ export function apiRouter({ db, wsHub }) {
     }
   });
 
+  /** ===========================
+   * Debate (multi-agent -> proposal)
+   * =========================== */
   r.post("/debate", async (req, res) => {
     const message = String(req.body?.message || "").trim();
     const agent = String(req.body?.agent || "").trim();
@@ -472,7 +861,7 @@ export function apiRouter({ db, wsHub }) {
       } else {
         if (!threadIdIn) {
           const t = await db.query(`insert into threads (title) values ($1::text) returning id`, [
-            `Thread ${new Date().toISOString()}`,
+            `Thread ${nowIso()}`,
           ]);
           threadId = t.rows?.[0]?.id || threadId;
         }
@@ -519,6 +908,26 @@ export function apiRouter({ db, wsHub }) {
         }
 
         try { wsHub?.broadcast?.({ type: "proposal.created", proposal: savedProposal }); } catch {}
+        if (!isDbReady(db)) {
+          const notif = memCreateNotification({
+            recipient: "ceo",
+            type: "info",
+            title: "New Proposal Needs Review",
+            body: savedProposal?.title || "",
+            payload: { proposalId: savedProposal?.id, threadId },
+          });
+          try { wsHub?.broadcast?.({ type: "notification.created", notification: notif }); } catch {}
+        } else {
+          const notif = await dbCreateNotification(db, {
+            recipient: "ceo",
+            type: "info",
+            title: "New Proposal Needs Review",
+            body: savedProposal?.title || "",
+            payload: { proposalId: savedProposal?.id, threadId },
+          });
+          try { wsHub?.broadcast?.({ type: "notification.created", notification: notif }); } catch {}
+          await dbAudit(db, "kernel", "proposal.create", "proposal", String(savedProposal?.id || ""), { type });
+        }
       }
 
       const debug = {
@@ -549,6 +958,9 @@ export function apiRouter({ db, wsHub }) {
     }
   });
 
+  /** ===========================
+   * Debug OpenAI
+   * =========================== */
   r.post("/debug/openai", async (req, res) => {
     if (!requireDebugToken(req)) {
       return okJson(res, { ok: false, error: "forbidden (missing/invalid token)" });

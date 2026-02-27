@@ -2,7 +2,6 @@ import { WebSocketServer } from "ws";
 
 export function createWsHub({ server, token }) {
   const wss = new WebSocketServer({ server, path: "/ws" });
-
   const clients = new Set();
 
   function send(ws, obj) {
@@ -33,7 +32,5 @@ export function createWsHub({ server, token }) {
     ws.on("close", () => clients.delete(ws));
   });
 
-  return {
-    broadcast
-  };
+  return { broadcast, send };
 }
