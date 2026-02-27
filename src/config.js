@@ -1,4 +1,5 @@
-// src/config.js (FINAL v2.1)
+// src/config.js (FINAL v2.2)
+// - small hardening: normalize values, safe defaults
 function s(v, d = "") {
   return String(v ?? d).trim();
 }
@@ -44,6 +45,7 @@ export const cfg = {
   N8N_TIMEOUT_MS: n(process.env.N8N_TIMEOUT_MS, 10_000),
 
   // n8n -> HQ callback auth (default: reuse N8N_WEBHOOK_TOKEN)
+  // NOTE: used ONLY via header x-webhook-token (recommended)
   N8N_CALLBACK_TOKEN: s(process.env.N8N_CALLBACK_TOKEN, ""),
 
   LOG_LEVEL: s(process.env.LOG_LEVEL, "info"),

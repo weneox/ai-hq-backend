@@ -1,16 +1,20 @@
-// src/utils/n8n.js
+// src/utils/n8n.js (FINAL v1.2)
+// - UTF-8 JSON
+// - timeout -> AbortController
+// - consistent return shape
+// - safe token header
 export async function postToN8n({ url, token = "", timeoutMs = 10000, payload }) {
   const u = String(url || "").trim();
   if (!u) return { ok: false, error: "missing url" };
 
   const controller = new AbortController();
-  const t = setTimeout(() => controller.abort(), Math.max(1000, Number(timeoutMs) || 10000));
+  const t = setTimeout(() => controller.abort(), Math.max(1000, Number(timeoutMs) || 10_000));
 
   try {
     const headers = {
       "Content-Type": "application/json; charset=utf-8",
     };
-    if (token) headers["x-webhook-token"] = token;
+    if (token) headers["x-webhook-token"] = String(token).trim();
 
     const resp = await fetch(u, {
       method: "POST",
@@ -22,7 +26,8 @@ export async function postToN8n({ url, token = "", timeoutMs = 10000, payload })
     const text = await resp.text().catch(() => "");
     return { ok: resp.ok, status: resp.status, text };
   } catch (e) {
-    return { ok: false, error: String(e?.message || e) };
+    const msg = e?.name === "AbortError" ? "timeout" : String(e?.message || e);
+    return { ok: false, error: msg };
   } finally {
     clearTimeout(t);
   }
