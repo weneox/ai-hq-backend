@@ -1,4 +1,9 @@
-// src/routes/api.js (FINAL v2.3 — decision lock (one-shot) + reason stored + DB atomic + CAST FIX)
+// src/routes/api.js (FINAL v2.3 — DB legacy-safe decision + one-shot lock)
+// ✅ Works even if proposals.id is TEXT (legacy) or UUID (new)
+// ✅ Fixes: "operator does not exist: text = uuid"
+// ✅ Fixes: "could not determine data type of parameter $2" via explicit casts
+// ✅ Keeps: one-shot decision lock + reason stored + atomic DB update + n8n notify
+
 import express from "express";
 import crypto from "crypto";
 import { cfg } from "../config.js";
@@ -21,7 +26,6 @@ function requireDebugToken(req) {
   const expected = String(cfg.DEBUG_API_TOKEN || "").trim();
   if (!expected) return false;
 
-  // Accept token from header, query, OR body.token
   const token = String(
     req.headers["x-debug-token"] || req.query.token || req.body?.token || ""
   ).trim();
@@ -62,6 +66,9 @@ function serializeError(err) {
   return base;
 }
 
+/** ===========================
+ *  In-memory fallback (DB off)
+ * =========================== */
 const mem = {
   threads: new Map(),
   messages: new Map(),
@@ -177,6 +184,9 @@ function isFinalStatus(status) {
   return s === "approved" || s === "rejected";
 }
 
+/** ===========================
+ *  Router
+ * =========================== */
 export function apiRouter({ db, wsHub }) {
   const r = express.Router();
 
@@ -199,9 +209,7 @@ export function apiRouter({ db, wsHub }) {
     })
   );
 
-  r.get("/agents", (_req, res) =>
-    okJson(res, { ok: true, agents: listAgents() })
-  );
+  r.get("/agents", (_req, res) => okJson(res, { ok: true, agents: listAgents() }));
 
   r.get("/threads/:id/messages", async (req, res) => {
     const threadId = String(req.params.id || "").trim();
@@ -216,7 +224,7 @@ export function apiRouter({ db, wsHub }) {
       const q = await db.query(
         `select id, thread_id, role, agent, content, meta, created_at
          from messages
-         where thread_id = $1
+         where thread_id = $1::uuid
          order by created_at asc`,
         [threadId]
       );
@@ -241,7 +249,7 @@ export function apiRouter({ db, wsHub }) {
       const q = await db.query(
         `select id, thread_id, agent, type, status, title, payload, created_at, decided_at, decision_by
          from proposals
-         where status = $1
+         where status = $1::text
          order by created_at desc
          limit 100`,
         [status]
@@ -255,7 +263,10 @@ export function apiRouter({ db, wsHub }) {
     }
   });
 
-  // ✅ FINAL: decision can be applied ONLY ONCE
+  /** ===========================
+   *  ✅ Decision endpoint (ONE-SHOT)
+   *  Legacy-safe: proposals.id can be TEXT or UUID
+   * =========================== */
   r.post("/proposals/:id/decision", async (req, res) => {
     const id = String(req.params.id || "").trim();
     const decision = normalizeDecision(req.body?.decision);
@@ -274,31 +285,17 @@ export function apiRouter({ db, wsHub }) {
       // MEMORY mode
       if (!isDbReady(db)) {
         const row = mem.proposals.get(id);
-        if (!row) {
-          return okJson(res, {
-            ok: false,
-            error: "proposal not found",
-            dbDisabled: true,
-          });
-        }
+        if (!row) return okJson(res, { ok: false, error: "proposal not found", dbDisabled: true });
 
-        // ✅ LOCK: if already decided => refuse (do NOT mutate)
         if (isFinalStatus(row.status)) {
-          return okJson(res, {
-            ok: false,
-            error: "proposal already decided",
-            proposal: row,
-            dbDisabled: true,
-          });
+          return okJson(res, { ok: false, error: "proposal already decided", proposal: row, dbDisabled: true });
         }
 
         row.status = decision;
         row.decided_at = new Date().toISOString();
         row.decision_by = by;
 
-        // ✅ store reason without schema change
-        row.payload =
-          row.payload && typeof row.payload === "object" ? row.payload : {};
+        row.payload = row.payload && typeof row.payload === "object" ? row.payload : {};
         row.payload.decision = {
           by,
           decision,
@@ -306,25 +303,18 @@ export function apiRouter({ db, wsHub }) {
           at: row.decided_at,
         };
 
-        try {
-          wsHub?.broadcast?.({ type: "proposal.updated", proposal: row });
-        } catch {}
-
-        notifyN8n(
-          decision === "approved" ? "proposal.approved" : "proposal.rejected",
-          row,
-          {
-            by,
-            reason: decision === "rejected" ? reason : undefined,
-            dbDisabled: true,
-          }
-        );
+        try { wsHub?.broadcast?.({ type: "proposal.updated", proposal: row }); } catch {}
+        notifyN8n(decision === "approved" ? "proposal.approved" : "proposal.rejected", row, {
+          by,
+          reason: decision === "rejected" ? reason : undefined,
+          dbDisabled: true,
+        });
 
         return okJson(res, { ok: true, proposal: row, dbDisabled: true });
       }
 
-      // DB mode — do an atomic update only if still pending
-      // ✅ CAST FIX: prevents "could not determine data type of parameter $2"
+      // DB mode — atomic update ONLY if still pending
+      // ✅ Critical: id::text = $3::text => works for UUID or TEXT legacy schemas
       const q = await db.query(
         `update proposals
          set status = $1::text,
@@ -340,7 +330,7 @@ export function apiRouter({ db, wsHub }) {
                           'at', now()
                         )
                       ))
-         where id = $3::uuid
+         where id::text = $3::text
            and status = 'pending'
          returning id, thread_id, agent, type, status, title, payload, created_at, decided_at, decision_by`,
         [decision, by, id, decision === "rejected" ? reason : ""]
@@ -348,35 +338,26 @@ export function apiRouter({ db, wsHub }) {
 
       const row = q.rows?.[0];
       if (!row) {
-        // not found OR already decided — fetch current to explain
+        // not found OR already decided — fetch current for clarity (legacy-safe)
         const cur = await db.query(
           `select id, thread_id, agent, type, status, title, payload, created_at, decided_at, decision_by
-           from proposals where id = $1::uuid`,
+           from proposals
+           where id::text = $1::text`,
           [id]
         );
+
         const existing = cur.rows?.[0] || null;
         if (!existing) return okJson(res, { ok: false, error: "proposal not found" });
 
-        return okJson(res, {
-          ok: false,
-          error: "proposal already decided",
-          proposal: existing,
-        });
+        return okJson(res, { ok: false, error: "proposal already decided", proposal: existing });
       }
 
-      try {
-        wsHub?.broadcast?.({ type: "proposal.updated", proposal: row });
-      } catch {}
-
-      notifyN8n(
-        decision === "approved" ? "proposal.approved" : "proposal.rejected",
-        row,
-        {
-          by,
-          reason: decision === "rejected" ? reason : undefined,
-          dbDisabled: false,
-        }
-      );
+      try { wsHub?.broadcast?.({ type: "proposal.updated", proposal: row }); } catch {}
+      notifyN8n(decision === "approved" ? "proposal.approved" : "proposal.rejected", row, {
+        by,
+        reason: decision === "rejected" ? reason : undefined,
+        dbDisabled: false,
+      });
 
       return okJson(res, { ok: true, proposal: row });
     } catch (e) {
@@ -423,7 +404,7 @@ export function apiRouter({ db, wsHub }) {
       }
 
       if (!threadIdIn) {
-        const t = await db.query(`insert into threads (title) values ($1) returning id`, [
+        const t = await db.query(`insert into threads (title) values ($1::text) returning id`, [
           `Thread ${new Date().toISOString()}`,
         ]);
         threadId = t.rows?.[0]?.id || threadId;
@@ -431,7 +412,7 @@ export function apiRouter({ db, wsHub }) {
 
       await db.query(
         `insert into messages (thread_id, role, agent, content, meta)
-         values ($1, 'user', $2, $3, $4)`,
+         values ($1::uuid, 'user', $2::text, $3::text, $4::jsonb)`,
         [threadId, agent || null, message, {}]
       );
 
@@ -439,7 +420,7 @@ export function apiRouter({ db, wsHub }) {
 
       await db.query(
         `insert into messages (thread_id, role, agent, content, meta)
-         values ($1, 'assistant', $2, $3, $4)`,
+         values ($1::uuid, 'assistant', $2::text, $3::text, $4::jsonb)`,
         [threadId, out.agent || null, out.replyText || "", {}]
       );
 
@@ -474,9 +455,7 @@ export function apiRouter({ db, wsHub }) {
     let mode = String(req.body?.mode || "proposal").trim().toLowerCase();
     if (mode !== "proposal" && mode !== "answer") mode = "proposal";
 
-    let agents = Array.isArray(req.body?.agents)
-      ? req.body.agents
-      : ["orion", "nova", "atlas", "echo"];
+    let agents = Array.isArray(req.body?.agents) ? req.body.agents : ["orion", "nova", "atlas", "echo"];
     agents = agents.map((x) => String(x || "").trim()).filter(Boolean);
     if (agents.length === 0) agents = ["orion", "nova", "atlas", "echo"];
 
@@ -489,23 +468,18 @@ export function apiRouter({ db, wsHub }) {
 
       if (!isDbReady(db)) {
         memEnsureThread(threadId);
-        memAddMessage(threadId, {
-          role: "user",
-          agent: agent || null,
-          content: message,
-          meta: { kind: "debate" },
-        });
+        memAddMessage(threadId, { role: "user", agent: agent || null, content: message, meta: { kind: "debate" } });
       } else {
         if (!threadIdIn) {
-          const t = await db.query(
-            `insert into threads (title) values ($1) returning id`,
-            [`Thread ${new Date().toISOString()}`]
-          );
+          const t = await db.query(`insert into threads (title) values ($1::text) returning id`, [
+            `Thread ${new Date().toISOString()}`,
+          ]);
           threadId = t.rows?.[0]?.id || threadId;
         }
+
         await db.query(
           `insert into messages (thread_id, role, agent, content, meta)
-           values ($1, 'user', $2, $3, $4)`,
+           values ($1::uuid, 'user', $2::text, $3::text, $4::jsonb)`,
           [threadId, agent || null, message, { kind: "debate" }]
         );
       }
@@ -516,16 +490,11 @@ export function apiRouter({ db, wsHub }) {
       if (!synthesisText) synthesisText = fallbackSynthesisFromNotes(out);
 
       if (!isDbReady(db)) {
-        memAddMessage(threadId, {
-          role: "assistant",
-          agent: "kernel",
-          content: synthesisText,
-          meta: { kind: "debate.synthesis" },
-        });
+        memAddMessage(threadId, { role: "assistant", agent: "kernel", content: synthesisText, meta: { kind: "debate.synthesis" } });
       } else {
         await db.query(
           `insert into messages (thread_id, role, agent, content, meta)
-           values ($1, 'assistant', $2, $3, $4)`,
+           values ($1::uuid, 'assistant', $2::text, $3::text, $4::jsonb)`,
           [threadId, "kernel", synthesisText, { kind: "debate.synthesis" }]
         );
       }
@@ -542,16 +511,14 @@ export function apiRouter({ db, wsHub }) {
         } else {
           const ins = await db.query(
             `insert into proposals (thread_id, agent, type, status, title, payload)
-             values ($1, $2, $3, 'pending', $4, $5)
-             returning id, thread_id, agent, type, status, title, payload, created_at`,
+             values ($1::uuid, $2::text, $3::text, 'pending', $4::text, $5::jsonb)
+             returning id, thread_id, agent, type, status, title, payload, created_at, decided_at, decision_by`,
             [threadId, "kernel", type, title, payload]
           );
           savedProposal = ins.rows?.[0] || null;
         }
 
-        try {
-          wsHub?.broadcast?.({ type: "proposal.created", proposal: savedProposal });
-        } catch {}
+        try { wsHub?.broadcast?.({ type: "proposal.created", proposal: savedProposal }); } catch {}
       }
 
       const debug = {
@@ -561,10 +528,7 @@ export function apiRouter({ db, wsHub }) {
         agents,
         synthesisLen: synthesisText.length,
         hasProposal: Boolean(savedProposal),
-        agentLens: (out.agentNotes || []).map((x) => ({
-          agentId: x.agentId,
-          len: String(x.text || "").length,
-        })),
+        agentLens: (out.agentNotes || []).map((x) => ({ agentId: x.agentId, len: String(x.text || "").length })),
       };
 
       console.log("[api/debate] done", debug);
