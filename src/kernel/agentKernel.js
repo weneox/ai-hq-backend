@@ -2,9 +2,6 @@
 import OpenAI from "openai";
 import { cfg } from "../config.js";
 
-// ---------------------------
-// Agents registry (phase 1)
-// ---------------------------
 const AGENTS = {
   orion: {
     name: "Orion",
@@ -40,66 +37,49 @@ export function listAgents() {
   }));
 }
 
-// ---------------------------
-// OpenAI client
-// ---------------------------
-const openai = cfg.OPENAI_API_KEY
-  ? new OpenAI({ apiKey: cfg.OPENAI_API_KEY })
-  : null;
+const openai = cfg.OPENAI_API_KEY ? new OpenAI({ apiKey: cfg.OPENAI_API_KEY }) : null;
 
-// ---------------------------
-// Robust text extraction
-// ---------------------------
 function pickString(x) {
-  if (typeof x === "string") return x;
-  return "";
+  return typeof x === "string" ? x : "";
 }
 
 function extractFromOutputArray(output) {
-  // Responses API often returns: output: [{ type: "message", content: [{type:"output_text", text:"..."}]}]
   if (!Array.isArray(output)) return "";
   let out = "";
 
   for (const item of output) {
-    // 1) Some SDKs provide item.content as array of blocks
     const content = item?.content;
+
     if (Array.isArray(content)) {
       for (const block of content) {
-        // Common block types: output_text, text, input_text, etc.
-        out += pickString(block?.text);
-        if (block?.type === "output_text" && typeof block?.text === "string") out += block.text;
+        // prefer block.text (common)
+        const t = pickString(block?.text);
+        if (t) out += t;
       }
+    } else if (typeof content === "string") {
+      out += content;
     }
 
-    // 2) Sometimes item has "text" directly
-    out += pickString(item?.text);
-
-    // 3) Sometimes item is message with "role" and "content" string
-    if (typeof item?.content === "string") out += item.content;
+    const t2 = pickString(item?.text);
+    if (t2) out += t2;
   }
 
   return out.trim();
 }
 
 function extractText(resp) {
-  // Try the most reliable places first.
-  // 1) SDK convenience: resp.output_text
   const direct = pickString(resp?.output_text).trim();
   if (direct) return direct;
 
-  // 2) output array parse
   const fromOutput = extractFromOutputArray(resp?.output);
   if (fromOutput) return fromOutput;
 
-  // 3) Some variants include resp.message.content
   const msgContent = resp?.message?.content;
   if (typeof msgContent === "string" && msgContent.trim()) return msgContent.trim();
 
-  // 4) Some include choices[0].message.content (chat-style)
   const chatLike = resp?.choices?.[0]?.message?.content;
   if (typeof chatLike === "string" && chatLike.trim()) return chatLike.trim();
 
-  // 5) Some include content blocks in resp?.choices?.[0]?.message?.content (array)
   const chatBlocks = resp?.choices?.[0]?.message?.content;
   if (Array.isArray(chatBlocks)) {
     const t = chatBlocks.map((b) => pickString(b?.text)).join("").trim();
@@ -118,31 +98,22 @@ function normalizeUserMessage(message) {
   return String(message || "").trim();
 }
 
-// ---------------------------
-// Core: single-agent kernelHandle
-// ---------------------------
 export async function kernelHandle({ message, agentHint } = {}) {
   const text = normalizeUserMessage(message);
   const agentId = (String(agentHint || "orion").trim().toLowerCase() || "orion");
   const agent = AGENTS[agentId] ? agentId : "orion";
 
   if (!openai) {
-    return {
-      ok: false,
-      agent,
-      replyText: "OpenAI aktiv deyil. OPENAI_API_KEY yoxdur.",
-      proposal: null,
-    };
+    return { ok: false, agent, replyText: "OpenAI aktiv deyil. OPENAI_API_KEY yoxdur.", proposal: null };
   }
 
   const model = clampModelName(cfg.OPENAI_MODEL);
 
-  // Responses API call (robust)
   try {
     const resp = await openai.responses.create({
       model,
-      // Force text output format
       text: { format: { type: "text" } },
+      max_output_tokens: Number(cfg.OPENAI_MAX_OUTPUT_TOKENS || 450),
       input: [
         { role: "system", content: AGENTS[agent].system },
         { role: "user", content: text },
@@ -152,14 +123,11 @@ export async function kernelHandle({ message, agentHint } = {}) {
     const replyText = extractText(resp);
 
     if (!replyText) {
-      // Give actionable debug hint + keep raw minimal
       const status = resp?.status || null;
       return {
         ok: true,
         agent,
-        replyText:
-          `Cavab boş gəldi (model=${model}, status=${status}). ` +
-          `Tövsiyə: /api/debug/openai ilə raw cavabı yoxla.`,
+        replyText: `Cavab boş gəldi (model=${model}, status=${status}). Tövsiyə: /api/debug/openai ilə raw cavabı yoxla.`,
         proposal: null,
       };
     }
@@ -171,9 +139,6 @@ export async function kernelHandle({ message, agentHint } = {}) {
   }
 }
 
-// ---------------------------
-// Debug OpenAI (raw response)
-// ---------------------------
 export async function debugOpenAI({ agent = "orion", message = "ping" } = {}) {
   if (!openai) return { ok: false, status: null, agent, extractedText: "", raw: "OpenAI disabled" };
 
@@ -184,6 +149,7 @@ export async function debugOpenAI({ agent = "orion", message = "ping" } = {}) {
     const resp = await openai.responses.create({
       model,
       text: { format: { type: "text" } },
+      max_output_tokens: Number(cfg.OPENAI_MAX_OUTPUT_TOKENS || 450),
       input: [
         { role: "system", content: AGENTS[a].system },
         { role: "user", content: normalizeUserMessage(message) },
@@ -191,20 +157,8 @@ export async function debugOpenAI({ agent = "orion", message = "ping" } = {}) {
     });
 
     const extractedText = extractText(resp);
-    return {
-      ok: true,
-      status: resp?.status || null,
-      agent: a,
-      extractedText,
-      raw: JSON.stringify(resp, null, 2),
-    };
+    return { ok: true, status: resp?.status || null, agent: a, extractedText, raw: JSON.stringify(resp, null, 2) };
   } catch (e) {
-    return {
-      ok: false,
-      status: e?.status || null,
-      agent: a,
-      extractedText: "",
-      raw: String(e?.message || e),
-    };
+    return { ok: false, status: e?.status || null, agent: a, extractedText: "", raw: String(e?.message || e) };
   }
 }
