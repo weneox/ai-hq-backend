@@ -1,34 +1,65 @@
+// src/db/index.js
+import pg from "pg";
 import fs from "fs";
 import path from "path";
-import { fileURLToPath } from "url";
-import pg from "pg";
 import { cfg } from "../config.js";
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 
 const { Pool } = pg;
 
-export const db = new Pool(
-  cfg.DATABASE_URL
-    ? {
-        connectionString: cfg.DATABASE_URL,
-        ssl: cfg.APP_ENV === "production" ? { rejectUnauthorized: false } : undefined
-      }
-    : undefined
-);
+function redact(url) {
+  try {
+    const u = new URL(url);
+    if (u.password) u.password = "****";
+    return u.toString();
+  } catch {
+    return "(invalid DATABASE_URL)";
+  }
+}
 
-// If DATABASE_URL missing, Pool() will still exist but queries will fail;
-// we simply skip migrate and routes handle gracefully where needed.
+let _db = null;
+
+export function getDb() {
+  return _db;
+}
+
+export async function initDb() {
+  const url = String(cfg.DATABASE_URL || "").trim();
+
+  // ✅ No DATABASE_URL => DB OFF
+  if (!url) {
+    _db = null;
+    return null;
+  }
+
+  const pool = new Pool({
+    connectionString: url,
+    max: 5,
+    idleTimeoutMillis: 10_000,
+    connectionTimeoutMillis: 5_000,
+  });
+
+  // ✅ Connectivity test (fail fast, but don't crash local dev)
+  try {
+    await pool.query("select 1 as ok");
+    console.log("[ai-hq] DB=ON", redact(url));
+    _db = pool;
+    return pool;
+  } catch (e) {
+    console.error("[ai-hq] DB connect failed:", redact(url));
+    console.error(String(e?.message || e));
+    try { await pool.end(); } catch {}
+    _db = null;
+    return null;
+  }
+}
 
 export async function migrate() {
+  const db = _db;
+  if (!db) return { ok: false, reason: "DATABASE_URL not configured (skip)" };
+
   try {
-    const sqlPath = path.join(__dirname, "schema.sql");
-    if (!fs.existsSync(sqlPath)) return { ok: false, reason: "schema.sql not found (skip migrate)" };
-
-    const sql = fs.readFileSync(sqlPath, "utf8").trim();
-    if (!sql) return { ok: false, reason: "schema.sql empty (skip migrate)" };
-
+    const schemaPath = path.resolve(process.cwd(), "src", "db", "schema.sql");
+    const sql = fs.readFileSync(schemaPath, "utf8");
     await db.query(sql);
     return { ok: true };
   } catch (e) {

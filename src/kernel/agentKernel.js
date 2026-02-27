@@ -1,207 +1,210 @@
+// src/kernel/agentKernel.js
+import OpenAI from "openai";
 import { cfg } from "../config.js";
 
+// ---------------------------
+// Agents registry (phase 1)
+// ---------------------------
 const AGENTS = {
   orion: {
     name: "Orion",
-    role: "Strategy & CEO assistant",
-    system: `You are ORION, the NEOX AI HQ strategist.
-Rules:
-- Be concise: max 4-6 lines.
-- If you propose a plan/content that needs approval, output a <proposal>{JSON}</proposal> block.
-- The proposal JSON must include: {"type":"plan|content|task","title":"...","payload":{...}}.
-- Always end with ONE question for clarification (unless user said "thanks/stop").`
+    role: "Strategist",
+    system:
+      "You are Orion, a business strategist. Give structured, concise guidance. If asked for a plan, give numbered steps. End with 1 clarifying question.",
   },
   nova: {
     name: "Nova",
-    role: "Instagram content & growth",
-    system: `You are NOVA, the NEOX AI HQ Instagram content lead.
-Rules:
-- Short answer + 1 question.
-- If you propose posts/scripts/campaigns requiring approval, output <proposal>{JSON}</proposal>.
-- Proposal payload should include: platform, assetsNeeded, captions, hashtags, schedule.`
+    role: "Content & Instagram",
+    system:
+      "You are Nova, social/content specialist. Provide content ideas, hooks, formats, posting plan. Be concise. End with 1 question.",
   },
   atlas: {
     name: "Atlas",
-    role: "Sales / WhatsApp automation",
-    system: `You are ATLAS, the NEOX AI HQ sales & automation lead.
-Rules:
-- Short, actionable.
-- If proposing a workflow/automation requiring approval, output <proposal>{JSON}</proposal>.
-- Proposal payload should include: funnel, triggers, steps, tools, KPI.`
+    role: "Sales & WhatsApp",
+    system:
+      "You are Atlas, sales & funnel specialist. Provide sales funnel steps, messaging, WhatsApp automation. Be concise. End with 1 question.",
   },
   echo: {
     name: "Echo",
-    role: "Analytics & reporting",
-    system: `You are ECHO, the NEOX AI HQ analytics lead.
-Rules:
-- Use bullet points.
-- If you propose a dashboard/report requiring approval, output <proposal>{JSON}</proposal>.
-- Proposal payload should include: metrics, sources, frequency, owner.`
-  }
+    role: "Analytics",
+    system:
+      "You are Echo, analytics specialist. Provide KPIs, tracking plan, measurement. Be concise. End with 1 question.",
+  },
 };
 
-function pickAgentFromText(text = "") {
-  const t = String(text || "").toLowerCase();
-  if (t.includes("instagram") || t.includes("reels") || t.includes("post") || t.includes("story")) return "nova";
-  if (t.includes("satış") || t.includes("satis") || t.includes("whatsapp") || t.includes("lead") || t.includes("funnel")) return "atlas";
-  if (t.includes("analitika") || t.includes("report") || t.includes("kpi") || t.includes("dashboard")) return "echo";
-  return "orion";
-}
-
-function safeJsonParse(s) {
-  try {
-    return JSON.parse(s);
-  } catch {
-    return null;
-  }
-}
-
-function extractProposal(replyText) {
-  const text = String(replyText || "");
-  const m = text.match(/<proposal>\s*([\s\S]*?)\s*<\/proposal>/i);
-  if (!m) return { cleaned: text.trim(), proposal: null };
-
-  const raw = (m[1] || "").trim();
-  const rawStripped = raw.replace(/^```(?:json)?\s*/i, "").replace(/```$/i, "").trim();
-
-  const proposal = safeJsonParse(rawStripped);
-  const cleaned = text.replace(m[0], "").trim();
-  return { cleaned, proposal };
-}
-
-function collectTextFromResponses(data) {
-  if (typeof data?.output_text === "string" && data.output_text.trim()) {
-    return data.output_text.trim();
-  }
-
-  const pieces = [];
-  const output = Array.isArray(data?.output) ? data.output : [];
-  for (const item of output) {
-    const content = Array.isArray(item?.content) ? item.content : [];
-    for (const c of content) {
-      if (c?.type === "output_text" && typeof c?.text === "string") pieces.push(c.text);
-      if (c?.type === "text" && typeof c?.text === "string") pieces.push(c.text);
-
-      if (typeof c?.content === "string") pieces.push(c.content);
-      if (typeof c?.text?.value === "string") pieces.push(c.text.value);
-    }
-  }
-
-  return pieces.join("\n").trim();
-}
-
-async function rawOpenAIResponsesCall({ system, user }) {
-  const body = {
-    model: cfg.OPENAI_MODEL,
-    input: [
-      { role: "system", content: system },
-      { role: "user", content: user }
-    ],
-    // Force text output (helps a lot)
-    text: { format: { type: "text" } },
-    max_output_tokens: cfg.OPENAI_MAX_OUTPUT_TOKENS
-  };
-
-  const r = await fetch("https://api.openai.com/v1/responses", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${cfg.OPENAI_API_KEY}`,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify(body)
-  });
-
-  const raw = await r.text().catch(() => "");
-  let data = null;
-  if (raw) data = safeJsonParse(raw);
-
-  return {
-    ok: r.ok,
-    status: r.status,
-    raw,
-    data
-  };
-}
-
-async function callOpenAI({ system, user }) {
-  if (!cfg.OPENAI_API_KEY) {
-    return `OpenAI API key yoxdur. Railway Variables-a OPENAI_API_KEY əlavə et.`;
-  }
-
-  const resp = await rawOpenAIResponsesCall({ system, user });
-
-  if (!resp.ok) {
-    throw new Error(`OpenAI error ${resp.status}: ${String(resp.raw || "").slice(0, 400)}`);
-  }
-
-  const out = collectTextFromResponses(resp.data);
-  return out && out.trim() ? out.trim() : "(no text)";
-}
-
-export async function kernelHandle({ message, agentHint }) {
-  const agentKey = (agentHint && AGENTS[agentHint]) ? agentHint : pickAgentFromText(message);
-  const agent = AGENTS[agentKey];
-
-  let replyRaw = "";
-  try {
-    replyRaw = await callOpenAI({ system: agent.system, user: message });
-  } catch (e) {
-    return {
-      agent: agentKey,
-      agentName: agent.name,
-      replyText: `OpenAI xətası: ${String(e?.message || e)}`,
-      proposal: null
-    };
-  }
-
-  if (!replyRaw || !String(replyRaw).trim() || String(replyRaw).trim() === "(no text)") {
-    return {
-      agent: agentKey,
-      agentName: agent.name,
-      replyText:
-        `Cavab boş gəldi. Tövsiyə: Railway-də OPENAI_MODEL-i müvəqqəti "gpt-4.1-mini" et və yenidən yoxla.`,
-      proposal: null
-    };
-  }
-
-  const { cleaned, proposal } = extractProposal(replyRaw);
-
-  return {
-    agent: agentKey,
-    agentName: agent.name,
-    replyText: cleaned || replyRaw,
-    proposal
-  };
-}
-
 export function listAgents() {
-  return Object.keys(AGENTS).map((k) => ({ key: k, name: AGENTS[k].name, role: AGENTS[k].role }));
+  return Object.keys(AGENTS).map((k) => ({
+    id: k,
+    name: AGENTS[k].name,
+    role: AGENTS[k].role,
+  }));
 }
 
-/**
- * ✅ Debug export: raw OpenAI response + extracted text
- * This is used by /api/debug/openai (token-protected).
- */
-export async function debugOpenAI({ agent = "orion", message = "ping" }) {
-  const agentKey = AGENTS[agent] ? agent : "orion";
-  const system = AGENTS[agentKey].system;
+// ---------------------------
+// OpenAI client
+// ---------------------------
+const openai = cfg.OPENAI_API_KEY
+  ? new OpenAI({ apiKey: cfg.OPENAI_API_KEY })
+  : null;
 
-  if (!cfg.OPENAI_API_KEY) {
+// ---------------------------
+// Robust text extraction
+// ---------------------------
+function pickString(x) {
+  if (typeof x === "string") return x;
+  return "";
+}
+
+function extractFromOutputArray(output) {
+  // Responses API often returns: output: [{ type: "message", content: [{type:"output_text", text:"..."}]}]
+  if (!Array.isArray(output)) return "";
+  let out = "";
+
+  for (const item of output) {
+    // 1) Some SDKs provide item.content as array of blocks
+    const content = item?.content;
+    if (Array.isArray(content)) {
+      for (const block of content) {
+        // Common block types: output_text, text, input_text, etc.
+        out += pickString(block?.text);
+        if (block?.type === "output_text" && typeof block?.text === "string") out += block.text;
+      }
+    }
+
+    // 2) Sometimes item has "text" directly
+    out += pickString(item?.text);
+
+    // 3) Sometimes item is message with "role" and "content" string
+    if (typeof item?.content === "string") out += item.content;
+  }
+
+  return out.trim();
+}
+
+function extractText(resp) {
+  // Try the most reliable places first.
+  // 1) SDK convenience: resp.output_text
+  const direct = pickString(resp?.output_text).trim();
+  if (direct) return direct;
+
+  // 2) output array parse
+  const fromOutput = extractFromOutputArray(resp?.output);
+  if (fromOutput) return fromOutput;
+
+  // 3) Some variants include resp.message.content
+  const msgContent = resp?.message?.content;
+  if (typeof msgContent === "string" && msgContent.trim()) return msgContent.trim();
+
+  // 4) Some include choices[0].message.content (chat-style)
+  const chatLike = resp?.choices?.[0]?.message?.content;
+  if (typeof chatLike === "string" && chatLike.trim()) return chatLike.trim();
+
+  // 5) Some include content blocks in resp?.choices?.[0]?.message?.content (array)
+  const chatBlocks = resp?.choices?.[0]?.message?.content;
+  if (Array.isArray(chatBlocks)) {
+    const t = chatBlocks.map((b) => pickString(b?.text)).join("").trim();
+    if (t) return t;
+  }
+
+  return "";
+}
+
+function clampModelName(model) {
+  const m = String(model || "").trim();
+  return m || "gpt-4.1-mini";
+}
+
+function normalizeUserMessage(message) {
+  return String(message || "").trim();
+}
+
+// ---------------------------
+// Core: single-agent kernelHandle
+// ---------------------------
+export async function kernelHandle({ message, agentHint } = {}) {
+  const text = normalizeUserMessage(message);
+  const agentId = (String(agentHint || "orion").trim().toLowerCase() || "orion");
+  const agent = AGENTS[agentId] ? agentId : "orion";
+
+  if (!openai) {
     return {
       ok: false,
-      error: "OPENAI_API_KEY missing",
-      agent: agentKey
+      agent,
+      replyText: "OpenAI aktiv deyil. OPENAI_API_KEY yoxdur.",
+      proposal: null,
     };
   }
 
-  const resp = await rawOpenAIResponsesCall({ system, user: message });
-  const extracted = resp.ok ? collectTextFromResponses(resp.data) : "";
+  const model = clampModelName(cfg.OPENAI_MODEL);
 
-  return {
-    ok: resp.ok,
-    status: resp.status,
-    agent: agentKey,
-    extractedText: extracted || "",
-    raw: resp.raw || ""
-  };
+  // Responses API call (robust)
+  try {
+    const resp = await openai.responses.create({
+      model,
+      // Force text output format
+      text: { format: { type: "text" } },
+      input: [
+        { role: "system", content: AGENTS[agent].system },
+        { role: "user", content: text },
+      ],
+    });
+
+    const replyText = extractText(resp);
+
+    if (!replyText) {
+      // Give actionable debug hint + keep raw minimal
+      const status = resp?.status || null;
+      return {
+        ok: true,
+        agent,
+        replyText:
+          `Cavab boş gəldi (model=${model}, status=${status}). ` +
+          `Tövsiyə: /api/debug/openai ilə raw cavabı yoxla.`,
+        proposal: null,
+      };
+    }
+
+    return { ok: true, agent, replyText, proposal: null };
+  } catch (e) {
+    const msg = String(e?.message || e);
+    return { ok: false, agent, replyText: `OpenAI xətası: ${msg}`, proposal: null };
+  }
+}
+
+// ---------------------------
+// Debug OpenAI (raw response)
+// ---------------------------
+export async function debugOpenAI({ agent = "orion", message = "ping" } = {}) {
+  if (!openai) return { ok: false, status: null, agent, extractedText: "", raw: "OpenAI disabled" };
+
+  const model = clampModelName(cfg.OPENAI_MODEL);
+  const a = AGENTS[agent] ? agent : "orion";
+
+  try {
+    const resp = await openai.responses.create({
+      model,
+      text: { format: { type: "text" } },
+      input: [
+        { role: "system", content: AGENTS[a].system },
+        { role: "user", content: normalizeUserMessage(message) },
+      ],
+    });
+
+    const extractedText = extractText(resp);
+    return {
+      ok: true,
+      status: resp?.status || null,
+      agent: a,
+      extractedText,
+      raw: JSON.stringify(resp, null, 2),
+    };
+  } catch (e) {
+    return {
+      ok: false,
+      status: e?.status || null,
+      agent: a,
+      extractedText: "",
+      raw: String(e?.message || e),
+    };
+  }
 }

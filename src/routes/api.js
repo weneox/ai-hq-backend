@@ -1,6 +1,7 @@
 import express from "express";
 import crypto from "crypto";
 import { cfg } from "../config.js";
+import { runDebate } from "../kernel/debateEngine.js";
 import { kernelHandle, listAgents, debugOpenAI } from "../kernel/agentKernel.js";
 
 /**
@@ -12,8 +13,6 @@ function okJson(res, payload) {
 
 /**
  * Debug token check
- * - If DEBUG_API_TOKEN is empty => endpoint is effectively "disabled" (always forbidden)
- * - If set => must match x-debug-token header or ?token=
  */
 function requireDebugToken(req) {
   const expected = String(cfg.DEBUG_API_TOKEN || "").trim();
@@ -50,7 +49,6 @@ function serializeError(err) {
     }));
   }
 
-  // Some libs throw { cause: ... }
   if (e.cause) {
     base.cause = {
       name: e.cause?.name,
@@ -140,6 +138,7 @@ export function apiRouter({ db, wsHub }) {
         "GET /api",
         "GET /api/agents",
         "POST /api/chat",
+        "POST /api/debate",
         "GET /api/threads/:id/messages",
         "GET /api/proposals?status=pending",
         "POST /api/proposals/:id/decision",
@@ -321,8 +320,6 @@ export function apiRouter({ db, wsHub }) {
       }
 
       // ---- DB ON MODE (Postgres) ----
-
-      // Create thread if not provided
       if (!threadIdIn) {
         const t = await db.query(`insert into threads (title) values ($1) returning id`, [
           `Thread ${new Date().toISOString()}`,
@@ -330,24 +327,20 @@ export function apiRouter({ db, wsHub }) {
         threadId = t.rows?.[0]?.id || threadId;
       }
 
-      // Save user message
       await db.query(
         `insert into messages (thread_id, role, agent, content, meta)
          values ($1, 'user', $2, $3, $4)`,
         [threadId, agent || null, message, {}]
       );
 
-      // Ask kernel
       const out = await kernelHandle({ message, agentHint: agent || undefined });
 
-      // Save assistant message
       await db.query(
         `insert into messages (thread_id, role, agent, content, meta)
          values ($1, 'assistant', $2, $3, $4)`,
         [threadId, out.agent || null, out.replyText || "", {}]
       );
 
-      // Save proposal if exists
       let savedProposal = null;
       if (out.proposal && typeof out.proposal === "object") {
         const p = out.proposal || {};
@@ -369,7 +362,6 @@ export function apiRouter({ db, wsHub }) {
         } catch {}
       }
 
-      // WS broadcast assistant message
       try {
         wsHub?.broadcast?.({
           type: "thread.message",
@@ -388,6 +380,109 @@ export function apiRouter({ db, wsHub }) {
     } catch (e) {
       const details = serializeError(e);
       console.error("[api/chat] ERROR", details);
+      return okJson(res, { ok: false, error: details.name, details });
+    }
+  });
+
+  // ✅ Debate (multi-agent internal discussion -> final answer -> proposal pending)
+  r.post("/debate", async (req, res) => {
+    const message = String(req.body?.message || "").trim();
+    const agent = String(req.body?.agent || "").trim(); // optional owner/hint
+    const threadIdIn = String(req.body?.threadId || "").trim();
+    const rounds = Number(req.body?.rounds || 2);
+    const mode = String(req.body?.mode || "proposal").trim(); // default proposal
+    const agents = Array.isArray(req.body?.agents) ? req.body.agents : ["orion", "nova", "atlas", "echo"];
+
+    if (!message) return okJson(res, { ok: false, error: "message required" });
+
+    let threadId = threadIdIn || crypto.randomUUID();
+
+    try {
+      // Save user message into thread (so you can see history)
+      if (!isDbReady(db)) {
+        memEnsureThread(threadId);
+        memAddMessage(threadId, { role: "user", agent: agent || null, content: message, meta: { kind: "debate" } });
+      } else {
+        if (!threadIdIn) {
+          const t = await db.query(`insert into threads (title) values ($1) returning id`, [
+            `Thread ${new Date().toISOString()}`,
+          ]);
+          threadId = t.rows?.[0]?.id || threadId;
+        }
+        await db.query(
+          `insert into messages (thread_id, role, agent, content, meta)
+           values ($1, 'user', $2, $3, $4)`,
+          [threadId, agent || null, message, { kind: "debate" }]
+        );
+      }
+
+      const out = await runDebate({
+        message,
+        agents,
+        rounds: Math.max(1, Math.min(3, rounds)),
+        mode,
+      });
+
+      // Save assistant synthesis message
+      const synthesisText = String(out.finalAnswer || "").trim();
+
+      if (!isDbReady(db)) {
+        memAddMessage(threadId, {
+          role: "assistant",
+          agent: "kernel",
+          content: synthesisText,
+          meta: { kind: "debate.synthesis" },
+        });
+      } else {
+        await db.query(
+          `insert into messages (thread_id, role, agent, content, meta)
+           values ($1, 'assistant', $2, $3, $4)`,
+          [threadId, "kernel", synthesisText, { kind: "debate.synthesis" }]
+        );
+      }
+
+      // If we have a proposal object, persist it as pending (so CEO can approve)
+      let savedProposal = null;
+
+      if (out.proposal && typeof out.proposal === "object") {
+        const p = out.proposal || {};
+        const type = String(p.type || "plan");
+        const title = String(p.title || "Debate Proposal");
+        const payload = p.payload || p || {};
+
+        if (!isDbReady(db)) {
+          savedProposal = memCreateProposal(threadId, {
+            agent: "kernel",
+            type,
+            title,
+            payload,
+          });
+        } else {
+          const ins = await db.query(
+            `insert into proposals (thread_id, agent, type, status, title, payload)
+             values ($1, $2, $3, 'pending', $4, $5)
+             returning id, thread_id, agent, type, status, title, payload, created_at`,
+            [threadId, "kernel", type, title, payload]
+          );
+          savedProposal = ins.rows?.[0] || null;
+        }
+
+        try {
+          wsHub?.broadcast?.({ type: "proposal.created", proposal: savedProposal });
+        } catch {}
+      }
+
+      return okJson(res, {
+        ok: true,
+        threadId,
+        finalAnswer: synthesisText,
+        agentNotes: out.agentNotes || [],
+        proposal: savedProposal,
+        dbDisabled: !isDbReady(db),
+      });
+    } catch (e) {
+      const details = serializeError(e);
+      console.error("[api/debate] ERROR", details);
       return okJson(res, { ok: false, error: details.name, details });
     }
   });

@@ -6,7 +6,7 @@ import cors from "cors";
 import helmet from "helmet";
 
 import { cfg } from "./src/config.js";
-import { db, migrate } from "./src/db/index.js";
+import { initDb, getDb, migrate } from "./src/db/index.js";
 import { createWsHub } from "./src/wsHub.js";
 import { apiRouter } from "./src/routes/api.js";
 
@@ -24,7 +24,7 @@ app.use(
 
       const allowed =
         cfg.CORS_ORIGIN === "*" ||
-        cfg.CORS_ORIGIN
+        String(cfg.CORS_ORIGIN || "")
           .split(",")
           .map((s) => s.trim())
           .filter(Boolean)
@@ -32,13 +32,13 @@ app.use(
 
       return allowed ? cb(null, true) : cb(new Error("CORS blocked"));
     },
-    credentials: true
+    credentials: true,
   })
 );
 
 app.use(express.json({ limit: "1mb" }));
 
-// ✅ DEBUG: confirm which server is running in prod
+// ✅ DEBUG: confirm which server is running
 app.get("/__whoami", (_req, res) => {
   res.json({
     ok: true,
@@ -46,21 +46,24 @@ app.get("/__whoami", (_req, res) => {
     env: cfg.APP_ENV,
     port: cfg.PORT,
     hasApiMounted: true,
-    hasDatabaseUrl: Boolean(cfg.DATABASE_URL),
-    hasOpenAI: Boolean(cfg.OPENAI_API_KEY),
-    now: new Date().toISOString()
+    hasDatabaseUrl: Boolean(String(cfg.DATABASE_URL || "").trim()),
+    hasOpenAI: Boolean(String(cfg.OPENAI_API_KEY || "").trim()),
+    now: new Date().toISOString(),
   });
 });
 
 app.get("/health", async (_req, res) => {
+  const hasDbUrl = Boolean(String(cfg.DATABASE_URL || "").trim());
+  const db = getDb();
+
   const out = {
     ok: true,
     service: "ai-hq-backend",
     env: cfg.APP_ENV,
-    db: { enabled: Boolean(cfg.DATABASE_URL), ok: false }
+    db: { enabled: hasDbUrl, ok: false },
   };
 
-  if (!cfg.DATABASE_URL) return res.json(out);
+  if (!hasDbUrl || !db) return res.json(out);
 
   try {
     const r = await db.query("select 1 as ok");
@@ -72,35 +75,32 @@ app.get("/health", async (_req, res) => {
   res.json(out);
 });
 
-// attach ws hub for routes
+// server + ws
 const server = http.createServer(app);
 const wsHub = createWsHub({ server, token: cfg.WS_AUTH_TOKEN });
 
-// routes
-app.use("/api", apiRouter({ db, wsHub }));
+// ✅ IMPORTANT: pass db as nullable (api.js already handles DB OFF fallback)
+app.use("/api", apiRouter({ db: getDb(), wsHub }));
 
-// fallback: make it obvious if /api not found for some reason
-app.use((req, res, _next) => {
+app.use((req, res) => {
   res.status(404).json({ ok: false, error: "Not found", path: req.path });
 });
 
 // boot
 (async () => {
   try {
-    if (cfg.DATABASE_URL) {
-      const m = await migrate();
-      console.log("[ai-hq] migrate:", m.ok ? "ok" : `skip/fail (${m.reason || m.error || "unknown"})`);
-    } else {
-      console.log("[ai-hq] migrate: DATABASE_URL not configured (skip)");
-    }
+    await initDb(); // ✅ creates pool only if DATABASE_URL exists
+    const m = await migrate();
+    console.log("[ai-hq] migrate:", m.ok ? "ok" : `skip/fail (${m.reason || m.error || "unknown"})`);
   } catch (e) {
     console.log("[ai-hq] migrate error:", String(e?.message || e));
   }
 
   server.listen(cfg.PORT, () => {
+    const hasDb = Boolean(getDb());
     console.log(`[ai-hq] listening on :${cfg.PORT} env=${cfg.APP_ENV}`);
     console.log(`[ai-hq] CORS_ORIGIN=${cfg.CORS_ORIGIN}`);
-    console.log(`[ai-hq] DB=${cfg.DATABASE_URL ? "ON" : "OFF"}`);
+    console.log(`[ai-hq] DB=${hasDb ? "ON" : "OFF"}`);
     console.log(`[ai-hq] OpenAI=${cfg.OPENAI_API_KEY ? "ON" : "OFF"} model=${cfg.OPENAI_MODEL}`);
     console.log(`[ai-hq] WS_AUTH_TOKEN=${cfg.WS_AUTH_TOKEN ? "ON" : "OFF"}`);
   });
@@ -109,7 +109,16 @@ app.use((req, res, _next) => {
 // graceful shutdown
 process.on("SIGTERM", async () => {
   try {
-    await db.end();
+    const db = getDb();
+    if (db) await db.end();
+  } catch {}
+  process.exit(0);
+});
+
+process.on("SIGINT", async () => {
+  try {
+    const db = getDb();
+    if (db) await db.end();
   } catch {}
   process.exit(0);
 });
