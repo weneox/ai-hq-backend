@@ -6,10 +6,6 @@ import { runDebate } from "../kernel/debateEngine.js";
 import { kernelHandle, listAgents, debugOpenAI } from "../kernel/agentKernel.js";
 import { postToN8n } from "../utils/n8n.js";
 
-/**
- * Always 200 JSON (PowerShell friendly)
- * + ensure UTF-8 response header
- */
 function okJson(res, payload) {
   res.setHeader("Content-Type", "application/json; charset=utf-8");
   return res.status(200).json(payload);
@@ -21,9 +17,6 @@ function clamp(n, a, b) {
   return Math.max(a, Math.min(b, x));
 }
 
-/**
- * Debug token check
- */
 function requireDebugToken(req) {
   const expected = String(cfg.DEBUG_API_TOKEN || "").trim();
   if (!expected) return false;
@@ -31,16 +24,10 @@ function requireDebugToken(req) {
   return Boolean(token) && token === expected;
 }
 
-/**
- * Detect DB availability
- */
 function isDbReady(db) {
   return Boolean(db && typeof db.query === "function");
 }
 
-/**
- * Error serializer (includes AggregateError details)
- */
 function serializeError(err) {
   const e = err || {};
   const isAgg = e && (e.name === "AggregateError" || Array.isArray(e.errors));
@@ -70,10 +57,6 @@ function serializeError(err) {
   return base;
 }
 
-/**
- * In-memory fallback store (only used when DB is OFF)
- * NOTE: resets on server restart (dev-friendly)
- */
 const mem = {
   threads: new Map(),
   messages: new Map(),
@@ -135,9 +118,6 @@ function memListProposals(status = "pending") {
   return out.slice(0, 100);
 }
 
-/**
- * Fire-and-forget n8n notify (approve/reject)
- */
 function notifyN8n(event, proposal, extra = {}) {
   const url = String(cfg.N8N_WEBHOOK_URL || "").trim();
   if (!url) return;
@@ -162,6 +142,17 @@ function notifyN8n(event, proposal, extra = {}) {
       console.log(`[n8n] ${event} →`, r.ok, r.status || r.error, (r.text || "").slice(0, 120))
     )
     .catch((e) => console.log("[n8n] error", String(e?.message || e)));
+}
+
+function fallbackSynthesisFromNotes(out) {
+  const notes = Array.isArray(out?.agentNotes) ? out.agentNotes : [];
+  const parts = [];
+  for (const n of notes) {
+    const t = String(n?.text || "").trim();
+    if (!t) continue;
+    parts.push(`### ${n.agentId}\n${t}`);
+  }
+  return parts.join("\n\n").trim();
 }
 
 export function apiRouter({ db, wsHub }) {
@@ -319,21 +310,6 @@ export function apiRouter({ db, wsHub }) {
 
         memAddMessage(threadId, { role: "assistant", agent: out.agent || null, content: out.replyText || "", meta: {} });
 
-        let savedProposal = null;
-        if (out.proposal && typeof out.proposal === "object") {
-          const p = out.proposal || {};
-          savedProposal = memCreateProposal(threadId, {
-            agent: out.agent || "orion",
-            type: String(p.type || "generic"),
-            title: String(p.title || ""),
-            payload: p.payload || {},
-          });
-
-          try {
-            wsHub?.broadcast?.({ type: "proposal.created", proposal: savedProposal });
-          } catch {}
-        }
-
         try {
           wsHub?.broadcast?.({
             type: "thread.message",
@@ -342,7 +318,14 @@ export function apiRouter({ db, wsHub }) {
           });
         } catch {}
 
-        return okJson(res, { ok: true, threadId, agent: out.agent, replyText: out.replyText || "(no text)", proposal: savedProposal, dbDisabled: true });
+        return okJson(res, {
+          ok: true,
+          threadId,
+          agent: out.agent,
+          replyText: out.replyText || "(no text)",
+          proposal: null,
+          dbDisabled: true,
+        });
       }
 
       if (!threadIdIn) {
@@ -364,27 +347,6 @@ export function apiRouter({ db, wsHub }) {
         [threadId, out.agent || null, out.replyText || "", {}]
       );
 
-      let savedProposal = null;
-      if (out.proposal && typeof out.proposal === "object") {
-        const p = out.proposal || {};
-        const type = String(p.type || "generic");
-        const title = String(p.title || "");
-        const payload = p.payload || {};
-
-        const ins = await db.query(
-          `insert into proposals (thread_id, agent, type, status, title, payload)
-           values ($1, $2, $3, 'pending', $4, $5)
-           returning id, thread_id, agent, type, status, title, payload, created_at`,
-          [threadId, out.agent || "orion", type, title, payload]
-        );
-
-        savedProposal = ins.rows?.[0] || null;
-
-        try {
-          wsHub?.broadcast?.({ type: "proposal.created", proposal: savedProposal });
-        } catch {}
-      }
-
       try {
         wsHub?.broadcast?.({
           type: "thread.message",
@@ -393,7 +355,7 @@ export function apiRouter({ db, wsHub }) {
         });
       } catch {}
 
-      return okJson(res, { ok: true, threadId, agent: out.agent, replyText: out.replyText || "(no text)", proposal: savedProposal });
+      return okJson(res, { ok: true, threadId, agent: out.agent, replyText: out.replyText || "(no text)", proposal: null });
     } catch (e) {
       const details = serializeError(e);
       console.error("[api/chat] ERROR", details);
@@ -406,7 +368,9 @@ export function apiRouter({ db, wsHub }) {
     const agent = String(req.body?.agent || "").trim();
     const threadIdIn = String(req.body?.threadId || "").trim();
     const rounds = clamp(req.body?.rounds ?? 2, 1, 3);
-    const mode = String(req.body?.mode || "proposal").trim(); // proposal|answer
+
+    let mode = String(req.body?.mode || "proposal").trim().toLowerCase();
+    if (mode !== "proposal" && mode !== "answer") mode = "proposal";
 
     let agents = Array.isArray(req.body?.agents) ? req.body.agents : ["orion", "nova", "atlas", "echo"];
     agents = agents.map((x) => String(x || "").trim()).filter(Boolean);
@@ -434,8 +398,14 @@ export function apiRouter({ db, wsHub }) {
 
       const out = await runDebate({ message, agents, rounds, mode });
 
-      const synthesisText = String(out.finalAnswer || "").trim();
+      let synthesisText = String(out.finalAnswer || "").trim();
 
+      // ✅ if empty, build fallback from agent notes
+      if (!synthesisText) {
+        synthesisText = fallbackSynthesisFromNotes(out);
+      }
+
+      // persist synthesis message
       if (!isDbReady(db)) {
         memAddMessage(threadId, { role: "assistant", agent: "kernel", content: synthesisText, meta: { kind: "debate.synthesis" } });
       } else {
@@ -470,7 +440,27 @@ export function apiRouter({ db, wsHub }) {
         } catch {}
       }
 
-      return okJson(res, { ok: true, threadId, finalAnswer: synthesisText, agentNotes: out.agentNotes || [], proposal: savedProposal, dbDisabled: !isDbReady(db) });
+      const debug = {
+        mode,
+        rounds,
+        agents,
+        synthesisLen: synthesisText.length,
+        hasProposal: Boolean(savedProposal),
+        agentLens: (out.agentNotes || []).map((x) => ({
+          agentId: x.agentId,
+          len: String(x.text || "").length,
+        })),
+      };
+
+      return okJson(res, {
+        ok: true,
+        threadId,
+        finalAnswer: synthesisText,
+        agentNotes: out.agentNotes || [],
+        proposal: savedProposal,
+        dbDisabled: !isDbReady(db),
+        debug,
+      });
     } catch (e) {
       const details = serializeError(e);
       console.error("[api/debate] ERROR", details);

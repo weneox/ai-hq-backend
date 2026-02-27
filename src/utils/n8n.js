@@ -1,26 +1,26 @@
 // src/utils/n8n.js
-// n8n webhook client (Node 18+ fetch)
+export async function postToN8n({ url, token = "", timeoutMs = 10000, payload }) {
+  const u = String(url || "").trim();
+  if (!u) return { ok: false, error: "missing url" };
 
-export async function postToN8n({ url, token = "", timeoutMs = 10_000, payload }) {
-  if (!url) return { ok: false, skipped: true, reason: "N8N_WEBHOOK_URL missing" };
-
-  const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), Math.max(1000, Number(timeoutMs) || 10_000));
+  const controller = new AbortController();
+  const t = setTimeout(() => controller.abort(), Math.max(1000, Number(timeoutMs) || 10000));
 
   try {
-    const res = await fetch(url, {
+    const headers = {
+      "Content-Type": "application/json; charset=utf-8",
+    };
+    if (token) headers["x-webhook-token"] = token;
+
+    const resp = await fetch(u, {
       method: "POST",
-      headers: {
-        "content-type": "application/json; charset=utf-8",
-        ...(token ? { "x-webhook-token": token } : {}),
-      },
-      body: JSON.stringify(payload ?? {}),
-      signal: ctrl.signal,
+      headers,
+      body: JSON.stringify(payload || {}),
+      signal: controller.signal,
     });
 
-    // n8n bəzən plain text qaytarır ("Workflow was started")
-    const text = await res.text().catch(() => "");
-    return { ok: res.ok, status: res.status, text };
+    const text = await resp.text().catch(() => "");
+    return { ok: resp.ok, status: resp.status, text };
   } catch (e) {
     return { ok: false, error: String(e?.message || e) };
   } finally {

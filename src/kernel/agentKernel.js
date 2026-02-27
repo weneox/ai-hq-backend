@@ -37,65 +37,108 @@ export function listAgents() {
   }));
 }
 
-const openai = cfg.OPENAI_API_KEY ? new OpenAI({ apiKey: cfg.OPENAI_API_KEY }) : null;
-
 function pickString(x) {
   return typeof x === "string" ? x : "";
 }
 
-function extractFromOutputArray(output) {
-  if (!Array.isArray(output)) return "";
-  let out = "";
-
-  for (const item of output) {
-    const content = item?.content;
-
-    if (Array.isArray(content)) {
-      for (const block of content) {
-        // prefer block.text (common)
-        const t = pickString(block?.text);
-        if (t) out += t;
-      }
-    } else if (typeof content === "string") {
-      out += content;
-    }
-
-    const t2 = pickString(item?.text);
-    if (t2) out += t2;
+function pickStringDeep(x) {
+  if (typeof x === "string") return x;
+  if (x && typeof x === "object") {
+    if (typeof x.value === "string") return x.value;
+    if (typeof x.text === "string") return x.text;
   }
-
-  return out.trim();
+  return "";
 }
 
 function extractText(resp) {
-  const direct = pickString(resp?.output_text).trim();
+  if (!resp) return "";
+
+  const direct = pickString(resp.output_text).trim();
   if (direct) return direct;
 
-  const fromOutput = extractFromOutputArray(resp?.output);
-  if (fromOutput) return fromOutput;
+  const direct2 = pickString(resp?.outputText).trim();
+  if (direct2) return direct2;
 
-  const msgContent = resp?.message?.content;
-  if (typeof msgContent === "string" && msgContent.trim()) return msgContent.trim();
+  const out = resp.output;
+  if (Array.isArray(out)) {
+    const parts = [];
+    for (const item of out) {
+      const content = item?.content;
 
-  const chatLike = resp?.choices?.[0]?.message?.content;
-  if (typeof chatLike === "string" && chatLike.trim()) return chatLike.trim();
+      if (Array.isArray(content)) {
+        for (const block of content) {
+          const t1 = pickStringDeep(block?.text);
+          if (t1) parts.push(t1);
 
-  const chatBlocks = resp?.choices?.[0]?.message?.content;
-  if (Array.isArray(chatBlocks)) {
-    const t = chatBlocks.map((b) => pickString(b?.text)).join("").trim();
-    if (t) return t;
+          const t2 = pickStringDeep(block?.transcript);
+          if (t2) parts.push(t2);
+
+          const t3 = pickStringDeep(block?.output_text);
+          if (t3) parts.push(t3);
+        }
+      } else if (typeof content === "string") {
+        parts.push(content);
+      }
+
+      const tItem = pickStringDeep(item?.text);
+      if (tItem) parts.push(tItem);
+    }
+
+    const joined = parts.join("").trim();
+    if (joined) return joined;
   }
+
+  const choices = resp?.choices;
+  if (Array.isArray(choices)) {
+    const parts = [];
+    for (const c of choices) {
+      const t = pickString(c?.message?.content);
+      if (t) parts.push(t);
+    }
+    const joined = parts.join("\n").trim();
+    if (joined) return joined;
+  }
+
+  // deep scan fallback
+  try {
+    const seen = new Set();
+    const parts = [];
+    const walk = (node) => {
+      if (!node || typeof node !== "object") return;
+      if (seen.has(node)) return;
+      seen.add(node);
+
+      if (typeof node.output_text === "string") parts.push(node.output_text);
+      if (typeof node.text === "string") parts.push(node.text);
+      if (node.text && typeof node.text === "object" && typeof node.text.value === "string") parts.push(node.text.value);
+      if (typeof node.transcript === "string") parts.push(node.transcript);
+
+      for (const v of Object.values(node)) {
+        if (Array.isArray(v)) v.forEach(walk);
+        else if (v && typeof v === "object") walk(v);
+      }
+    };
+    walk(resp);
+    const joined = parts.join("").trim();
+    if (joined) return joined;
+  } catch {}
 
   return "";
 }
 
 function clampModelName(model) {
   const m = String(model || "").trim();
-  return m || "gpt-4.1-mini";
+  return m || "gpt-5";
 }
 
 function normalizeUserMessage(message) {
   return String(message || "").trim();
+}
+
+function ensureOpenAI() {
+  const key = String(cfg.OPENAI_API_KEY || "").trim();
+  if (!key) return null;
+  return new OpenAI({ apiKey: key });
 }
 
 export async function kernelHandle({ message, agentHint } = {}) {
@@ -103,6 +146,7 @@ export async function kernelHandle({ message, agentHint } = {}) {
   const agentId = (String(agentHint || "orion").trim().toLowerCase() || "orion");
   const agent = AGENTS[agentId] ? agentId : "orion";
 
+  const openai = ensureOpenAI();
   if (!openai) {
     return { ok: false, agent, replyText: "OpenAI aktiv deyil. OPENAI_API_KEY yoxdur.", proposal: null };
   }
@@ -124,10 +168,11 @@ export async function kernelHandle({ message, agentHint } = {}) {
 
     if (!replyText) {
       const status = resp?.status || null;
+      const id = resp?.id || null;
       return {
         ok: true,
         agent,
-        replyText: `Cavab boş gəldi (model=${model}, status=${status}). Tövsiyə: /api/debug/openai ilə raw cavabı yoxla.`,
+        replyText: `Cavab boş gəldi (model=${model}, status=${status}, id=${id}). /api/debug/openai ilə raw cavabı yoxla.`,
         proposal: null,
       };
     }
@@ -140,6 +185,7 @@ export async function kernelHandle({ message, agentHint } = {}) {
 }
 
 export async function debugOpenAI({ agent = "orion", message = "ping" } = {}) {
+  const openai = ensureOpenAI();
   if (!openai) return { ok: false, status: null, agent, extractedText: "", raw: "OpenAI disabled" };
 
   const model = clampModelName(cfg.OPENAI_MODEL);
@@ -157,8 +203,21 @@ export async function debugOpenAI({ agent = "orion", message = "ping" } = {}) {
     });
 
     const extractedText = extractText(resp);
-    return { ok: true, status: resp?.status || null, agent: a, extractedText, raw: JSON.stringify(resp, null, 2) };
+    return {
+      ok: true,
+      status: resp?.status || null,
+      agent: a,
+      extractedText,
+      // raw can be huge; stringify safely
+      raw: JSON.stringify(resp, null, 2),
+    };
   } catch (e) {
-    return { ok: false, status: e?.status || null, agent: a, extractedText: "", raw: String(e?.message || e) };
+    return {
+      ok: false,
+      status: e?.status || null,
+      agent: a,
+      extractedText: "",
+      raw: String(e?.message || e),
+    };
   }
 }
