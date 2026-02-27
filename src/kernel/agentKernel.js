@@ -1,4 +1,4 @@
-// src/kernel/agentKernel.js  (FINAL — FIXED output_text extraction)
+// src/kernel/agentKernel.js (FINAL v2 — stable extraction + better incomplete handling)
 import OpenAI from "openai";
 import { cfg } from "../config.js";
 
@@ -41,7 +41,6 @@ function pickString(x) {
   return typeof x === "string" ? x : "";
 }
 
-// Handles: "string", {value:"..."}, {text:"..."}
 function pickStringDeep(x) {
   if (typeof x === "string") return x;
   if (x && typeof x === "object") {
@@ -51,24 +50,12 @@ function pickStringDeep(x) {
   return "";
 }
 
-/**
- * ✅ FINAL extractor (matches your raw Response shape):
- * output: [
- *   { type:"message", content:[ { type:"output_text", text:"..." } ] }
- * ]
- */
 function extractText(resp) {
   if (!resp) return "";
 
-  // Top-level convenience
   const direct = pickString(resp.output_text).trim();
   if (direct) return direct;
 
-  // Some SDK wrappers (rare)
-  const direct2 = pickString(resp?.outputText).trim();
-  if (direct2) return direct2;
-
-  // Standard output parse
   const out = resp.output;
   if (Array.isArray(out)) {
     const parts = [];
@@ -78,22 +65,16 @@ function extractText(resp) {
 
       if (Array.isArray(content)) {
         for (const block of content) {
-          // ✅ critical: output_text block
           if (block?.type === "output_text") {
             const t = pickStringDeep(block?.text);
             if (t) parts.push(t);
             continue;
           }
-
-          // fallbacks
           const t1 = pickStringDeep(block?.text);
           if (t1) parts.push(t1);
 
           const t2 = pickStringDeep(block?.transcript);
           if (t2) parts.push(t2);
-
-          const t3 = pickStringDeep(block?.output_text);
-          if (t3) parts.push(t3);
         }
       } else if (typeof content === "string") {
         parts.push(content);
@@ -103,11 +84,11 @@ function extractText(resp) {
       if (tItem) parts.push(tItem);
     }
 
-    const joined = parts.join("").trim();
+    const joined = parts.join("\n").trim();
     if (joined) return joined;
   }
 
-  // Legacy chat-completions fallback (rare)
+  // legacy fallback
   const choices = resp?.choices;
   if (Array.isArray(choices)) {
     const parts = [];
@@ -118,40 +99,6 @@ function extractText(resp) {
     const joined = parts.join("\n").trim();
     if (joined) return joined;
   }
-
-  // Deep scan fallback (last resort)
-  try {
-    const seen = new Set();
-    const parts = [];
-
-    const walk = (node) => {
-      if (!node || typeof node !== "object") return;
-      if (seen.has(node)) return;
-      seen.add(node);
-
-      if (typeof node.output_text === "string") parts.push(node.output_text);
-
-      if (node.type === "output_text") {
-        const t = pickStringDeep(node.text);
-        if (t) parts.push(t);
-      }
-
-      const t2 = pickStringDeep(node.text);
-      if (t2) parts.push(t2);
-
-      const tr = pickStringDeep(node.transcript);
-      if (tr) parts.push(tr);
-
-      for (const v of Object.values(node)) {
-        if (Array.isArray(v)) v.forEach(walk);
-        else if (v && typeof v === "object") walk(v);
-      }
-    };
-
-    walk(resp);
-    const joined = parts.join("").trim();
-    if (joined) return joined;
-  } catch {}
 
   return "";
 }
@@ -171,6 +118,22 @@ function ensureOpenAI() {
   return new OpenAI({ apiKey: key });
 }
 
+function makeEmptyHelp(resp, model) {
+  const status = resp?.status || null;
+  const id = resp?.id || null;
+  const usage = resp?.usage || {};
+  const outTok = usage?.output_tokens ?? null;
+  const reasonTok = usage?.output_tokens_details?.reasoning_tokens ?? null;
+
+  // If incomplete, most likely hit token cap
+  const hint =
+    status === "incomplete"
+      ? "Model cavabı yarımçıq bağladı (çox vaxt token limiti). OPENAI_MAX_OUTPUT_TOKENS artır."
+      : "Raw cavabı /api/debug/openai ilə yoxla.";
+
+  return `Cavab boş gəldi (model=${model}, status=${status}, id=${id}, outTok=${outTok}, reasoningTok=${reasonTok}). ${hint}`;
+}
+
 export async function kernelHandle({ message, agentHint } = {}) {
   const text = normalizeUserMessage(message);
   const agentId = (String(agentHint || "orion").trim().toLowerCase() || "orion");
@@ -178,21 +141,18 @@ export async function kernelHandle({ message, agentHint } = {}) {
 
   const openai = ensureOpenAI();
   if (!openai) {
-    return {
-      ok: false,
-      agent,
-      replyText: "OpenAI aktiv deyil. OPENAI_API_KEY yoxdur.",
-      proposal: null,
-    };
+    return { ok: false, agent, replyText: "OpenAI aktiv deyil. OPENAI_API_KEY yoxdur.", proposal: null };
   }
 
   const model = clampModelName(cfg.OPENAI_MODEL);
 
   try {
+    const maxTok = Number(cfg.OPENAI_MAX_OUTPUT_TOKENS || 800); // ✅ default ↑
     const resp = await openai.responses.create({
       model,
       text: { format: { type: "text" } },
-      max_output_tokens: Number(cfg.OPENAI_MAX_OUTPUT_TOKENS || 450),
+      reasoning: { effort: "low" },
+      max_output_tokens: maxTok,
       input: [
         { role: "system", content: AGENTS[agent].system },
         { role: "user", content: text },
@@ -201,15 +161,8 @@ export async function kernelHandle({ message, agentHint } = {}) {
 
     const replyText = extractText(resp);
 
-    if (!replyText) {
-      const status = resp?.status || null;
-      const id = resp?.id || null;
-      return {
-        ok: true,
-        agent,
-        replyText: `Cavab boş gəldi (model=${model}, status=${status}, id=${id}). /api/debug/openai ilə raw cavabı yoxla.`,
-        proposal: null,
-      };
+    if (!String(replyText || "").trim()) {
+      return { ok: true, agent, replyText: makeEmptyHelp(resp, model), proposal: null };
     }
 
     return { ok: true, agent, replyText, proposal: null };
@@ -227,10 +180,12 @@ export async function debugOpenAI({ agent = "orion", message = "ping" } = {}) {
   const a = AGENTS[agent] ? agent : "orion";
 
   try {
+    const maxTok = Number(cfg.OPENAI_MAX_OUTPUT_TOKENS || 800);
     const resp = await openai.responses.create({
       model,
       text: { format: { type: "text" } },
-      max_output_tokens: Number(cfg.OPENAI_MAX_OUTPUT_TOKENS || 450),
+      reasoning: { effort: "low" },
+      max_output_tokens: maxTok,
       input: [
         { role: "system", content: AGENTS[a].system },
         { role: "user", content: normalizeUserMessage(message) },

@@ -1,4 +1,4 @@
-// src/routes/api.js (FINAL)
+// src/routes/api.js (FINAL v2.2 — decision lock (one-shot) + reason stored + DB atomic)
 import express from "express";
 import crypto from "crypto";
 import { cfg } from "../config.js";
@@ -20,7 +20,12 @@ function clamp(n, a, b) {
 function requireDebugToken(req) {
   const expected = String(cfg.DEBUG_API_TOKEN || "").trim();
   if (!expected) return false;
-  const token = String(req.headers["x-debug-token"] || req.query.token || "").trim();
+
+  // Accept token from header, query, OR body.token
+  const token = String(
+    req.headers["x-debug-token"] || req.query.token || req.body?.token || ""
+  ).trim();
+
   return Boolean(token) && token === expected;
 }
 
@@ -138,7 +143,14 @@ function notifyN8n(event, proposal, extra = {}) {
     timeoutMs: Number(cfg.N8N_TIMEOUT_MS || 10_000),
     payload,
   })
-    .then((r) => console.log(`[n8n] ${event} →`, r.ok, r.status || r.error, (r.text || "").slice(0, 120)))
+    .then((r) =>
+      console.log(
+        `[n8n] ${event} →`,
+        r.ok,
+        r.status || r.error,
+        (r.text || "").slice(0, 120)
+      )
+    )
     .catch((e) => console.log("[n8n] error", String(e?.message || e)));
 }
 
@@ -151,6 +163,18 @@ function fallbackSynthesisFromNotes(out) {
     parts.push(`### ${n.agentId}\n${t}`);
   }
   return parts.join("\n\n").trim();
+}
+
+function normalizeDecision(d) {
+  let decision = String(d || "").trim().toLowerCase();
+  if (decision === "approve") decision = "approved";
+  if (decision === "reject") decision = "rejected";
+  return decision;
+}
+
+function isFinalStatus(status) {
+  const s = String(status || "").toLowerCase();
+  return s === "approved" || s === "rejected";
 }
 
 export function apiRouter({ db, wsHub }) {
@@ -175,7 +199,9 @@ export function apiRouter({ db, wsHub }) {
     })
   );
 
-  r.get("/agents", (_req, res) => okJson(res, { ok: true, agents: listAgents() }));
+  r.get("/agents", (_req, res) =>
+    okJson(res, { ok: true, agents: listAgents() })
+  );
 
   r.get("/threads/:id/messages", async (req, res) => {
     const threadId = String(req.params.id || "").trim();
@@ -229,59 +255,127 @@ export function apiRouter({ db, wsHub }) {
     }
   });
 
+  // ✅ FINAL: decision can be applied ONLY ONCE
   r.post("/proposals/:id/decision", async (req, res) => {
     const id = String(req.params.id || "").trim();
-    const decision = String(req.body?.decision || "").trim(); // approved|rejected
+    const decision = normalizeDecision(req.body?.decision);
     const by = String(req.body?.by || "ceo").trim();
-    const reason = String(req.body?.reason || "").trim();
+    const reason = String(req.body?.reason || req.body?.note || "").trim();
 
     if (!id) return okJson(res, { ok: false, error: "proposal id required" });
     if (decision !== "approved" && decision !== "rejected") {
-      return okJson(res, { ok: false, error: 'decision must be "approved" or "rejected"' });
+      return okJson(res, {
+        ok: false,
+        error: 'decision must be "approved" or "rejected" (or approve/reject)',
+      });
     }
 
     try {
+      // MEMORY mode
       if (!isDbReady(db)) {
         const row = mem.proposals.get(id);
-        if (!row) return okJson(res, { ok: false, error: "proposal not found", dbDisabled: true });
+        if (!row) {
+          return okJson(res, {
+            ok: false,
+            error: "proposal not found",
+            dbDisabled: true,
+          });
+        }
+
+        // ✅ LOCK: if already decided => refuse (do NOT mutate)
+        if (isFinalStatus(row.status)) {
+          return okJson(res, {
+            ok: false,
+            error: "proposal already decided",
+            proposal: row,
+            dbDisabled: true,
+          });
+        }
 
         row.status = decision;
         row.decided_at = new Date().toISOString();
         row.decision_by = by;
 
+        // ✅ store reason without schema change
+        row.payload =
+          row.payload && typeof row.payload === "object" ? row.payload : {};
+        row.payload.decision = {
+          by,
+          decision,
+          reason: decision === "rejected" ? reason : "",
+          at: row.decided_at,
+        };
+
         try {
           wsHub?.broadcast?.({ type: "proposal.updated", proposal: row });
         } catch {}
 
-        notifyN8n(decision === "approved" ? "proposal.approved" : "proposal.rejected", row, {
-          by,
-          reason: decision === "rejected" ? reason : undefined,
-          dbDisabled: true,
-        });
+        notifyN8n(
+          decision === "approved" ? "proposal.approved" : "proposal.rejected",
+          row,
+          {
+            by,
+            reason: decision === "rejected" ? reason : undefined,
+            dbDisabled: true,
+          }
+        );
 
         return okJson(res, { ok: true, proposal: row, dbDisabled: true });
       }
 
+      // DB mode — do an atomic update only if still pending
       const q = await db.query(
         `update proposals
-         set status = $1, decided_at = now(), decision_by = $2
+         set status = $1,
+             decided_at = now(),
+             decision_by = $2,
+             payload = (coalesce(payload, '{}'::jsonb) ||
+                      jsonb_build_object(
+                        'decision',
+                        jsonb_build_object(
+                          'by', $2,
+                          'decision', $1,
+                          'reason', $4,
+                          'at', now()
+                        )
+                      ))
          where id = $3
+           and status = 'pending'
          returning id, thread_id, agent, type, status, title, payload, created_at, decided_at, decision_by`,
-        [decision, by, id]
+        [decision, by, id, decision === "rejected" ? reason : ""]
       );
 
       const row = q.rows?.[0];
-      if (!row) return okJson(res, { ok: false, error: "proposal not found" });
+      if (!row) {
+        // not found OR already decided — fetch current to explain
+        const cur = await db.query(
+          `select id, thread_id, agent, type, status, title, payload, created_at, decided_at, decision_by
+           from proposals where id = $1`,
+          [id]
+        );
+        const existing = cur.rows?.[0] || null;
+        if (!existing) return okJson(res, { ok: false, error: "proposal not found" });
+
+        return okJson(res, {
+          ok: false,
+          error: "proposal already decided",
+          proposal: existing,
+        });
+      }
 
       try {
         wsHub?.broadcast?.({ type: "proposal.updated", proposal: row });
       } catch {}
 
-      notifyN8n(decision === "approved" ? "proposal.approved" : "proposal.rejected", row, {
-        by,
-        reason: decision === "rejected" ? reason : undefined,
-        dbDisabled: false,
-      });
+      notifyN8n(
+        decision === "approved" ? "proposal.approved" : "proposal.rejected",
+        row,
+        {
+          by,
+          reason: decision === "rejected" ? reason : undefined,
+          dbDisabled: false,
+        }
+      );
 
       return okJson(res, { ok: true, proposal: row });
     } catch (e) {
@@ -293,7 +387,7 @@ export function apiRouter({ db, wsHub }) {
 
   r.post("/chat", async (req, res) => {
     const message = String(req.body?.message || "").trim();
-    const agent = String(req.body?.agent || "").trim();
+    const agent = String(req.body?.agent || req.body?.agentId || "").trim();
     const threadIdIn = String(req.body?.threadId || "").trim();
 
     if (!message) return okJson(res, { ok: false, error: "message required" });
@@ -328,7 +422,9 @@ export function apiRouter({ db, wsHub }) {
       }
 
       if (!threadIdIn) {
-        const t = await db.query(`insert into threads (title) values ($1) returning id`, [`Thread ${new Date().toISOString()}`]);
+        const t = await db.query(`insert into threads (title) values ($1) returning id`, [
+          `Thread ${new Date().toISOString()}`,
+        ]);
         threadId = t.rows?.[0]?.id || threadId;
       }
 
@@ -354,7 +450,13 @@ export function apiRouter({ db, wsHub }) {
         });
       } catch {}
 
-      return okJson(res, { ok: true, threadId, agent: out.agent, replyText: out.replyText || "(no text)", proposal: null });
+      return okJson(res, {
+        ok: true,
+        threadId,
+        agent: out.agent,
+        replyText: out.replyText || "(no text)",
+        proposal: null,
+      });
     } catch (e) {
       const details = serializeError(e);
       console.error("[api/chat] ERROR", details);
@@ -371,7 +473,9 @@ export function apiRouter({ db, wsHub }) {
     let mode = String(req.body?.mode || "proposal").trim().toLowerCase();
     if (mode !== "proposal" && mode !== "answer") mode = "proposal";
 
-    let agents = Array.isArray(req.body?.agents) ? req.body.agents : ["orion", "nova", "atlas", "echo"];
+    let agents = Array.isArray(req.body?.agents)
+      ? req.body.agents
+      : ["orion", "nova", "atlas", "echo"];
     agents = agents.map((x) => String(x || "").trim()).filter(Boolean);
     if (agents.length === 0) agents = ["orion", "nova", "atlas", "echo"];
 
@@ -384,10 +488,18 @@ export function apiRouter({ db, wsHub }) {
 
       if (!isDbReady(db)) {
         memEnsureThread(threadId);
-        memAddMessage(threadId, { role: "user", agent: agent || null, content: message, meta: { kind: "debate" } });
+        memAddMessage(threadId, {
+          role: "user",
+          agent: agent || null,
+          content: message,
+          meta: { kind: "debate" },
+        });
       } else {
         if (!threadIdIn) {
-          const t = await db.query(`insert into threads (title) values ($1) returning id`, [`Thread ${new Date().toISOString()}`]);
+          const t = await db.query(
+            `insert into threads (title) values ($1) returning id`,
+            [`Thread ${new Date().toISOString()}`]
+          );
           threadId = t.rows?.[0]?.id || threadId;
         }
         await db.query(
@@ -400,13 +512,15 @@ export function apiRouter({ db, wsHub }) {
       const out = await runDebate({ message, agents, rounds, mode });
 
       let synthesisText = String(out.finalAnswer || "").trim();
-
-      // ✅ if empty, build fallback from agent notes (should not be empty now, but keep)
       if (!synthesisText) synthesisText = fallbackSynthesisFromNotes(out);
 
-      // persist synthesis message
       if (!isDbReady(db)) {
-        memAddMessage(threadId, { role: "assistant", agent: "kernel", content: synthesisText, meta: { kind: "debate.synthesis" } });
+        memAddMessage(threadId, {
+          role: "assistant",
+          agent: "kernel",
+          content: synthesisText,
+          meta: { kind: "debate.synthesis" },
+        });
       } else {
         await db.query(
           `insert into messages (thread_id, role, agent, content, meta)
@@ -472,7 +586,7 @@ export function apiRouter({ db, wsHub }) {
 
   r.post("/debug/openai", async (req, res) => {
     if (!requireDebugToken(req)) {
-      return okJson(res, { ok: false, error: "forbidden (missing/invalid x-debug-token)" });
+      return okJson(res, { ok: false, error: "forbidden (missing/invalid token)" });
     }
 
     try {

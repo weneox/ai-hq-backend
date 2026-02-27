@@ -1,14 +1,16 @@
-// src/kernel/debateEngine.js (FINAL v3)
+// src/kernel/debateEngine.js (FINAL v3.3 — GUARANTEED FULL proposal JSON + gpt-5 safe)
 import OpenAI from "openai";
 import { cfg } from "../config.js";
 
-export const DEBATE_ENGINE_VERSION = "final-v3";
+export const DEBATE_ENGINE_VERSION = "final-v3.3";
 console.log(`[debateEngine] LOADED ${DEBATE_ENGINE_VERSION}`);
 
 const DEFAULT_AGENTS = ["orion", "nova", "atlas", "echo"];
 
 function clamp(n, a, b) {
-  return Math.max(a, Math.min(b, n));
+  const x = Number(n);
+  if (!Number.isFinite(x)) return a;
+  return Math.max(a, Math.min(b, x));
 }
 
 function withTimeout(promise, ms, label = "timeout") {
@@ -45,34 +47,26 @@ function s(x) {
 function sDeep(x) {
   if (typeof x === "string") return x;
   if (x && typeof x === "object") {
-    if (typeof x.value === "string") return x.value; // some SDK variants
+    if (typeof x.value === "string") return x.value;
     if (typeof x.text === "string") return x.text;
   }
   return "";
 }
 
 /**
- * ✅ Bulletproof text extractor for Responses API
- * Supports:
- * - resp.output_text
- * - resp.output[].type === "message" -> content[].type === "output_text" -> .text
- * - resp.output[].content[] where block has .text / .transcript
- * - deep scan fallback
+ * Bulletproof text extractor for Responses API
  */
 function extractText(resp) {
   if (!resp) return "";
 
-  // 1) convenience field (often present)
   const direct = s(resp.output_text).trim();
   if (direct) return direct;
 
-  // 2) output blocks
   const out = resp.output;
   if (Array.isArray(out)) {
     const parts = [];
 
     for (const item of out) {
-      // Most reliable: type=message
       if (item?.type === "message" && Array.isArray(item?.content)) {
         for (const block of item.content) {
           if (block?.type === "output_text") {
@@ -88,7 +82,6 @@ function extractText(resp) {
         continue;
       }
 
-      // generic fallback for any output item
       const content = item?.content;
       if (Array.isArray(content)) {
         for (const block of content) {
@@ -115,7 +108,7 @@ function extractText(resp) {
     if (joined) return joined;
   }
 
-  // 3) last resort: deep scan for likely "output_text" blocks
+  // last resort deep scan
   try {
     const seen = new Set();
     const parts = [];
@@ -125,7 +118,6 @@ function extractText(resp) {
       if (seen.has(node)) return;
       seen.add(node);
 
-      // direct strings
       if (typeof node.output_text === "string") parts.push(node.output_text);
 
       if (node.type === "output_text") {
@@ -133,7 +125,6 @@ function extractText(resp) {
         if (t) parts.push(t);
       }
 
-      // sometimes content blocks just have "text"
       if (typeof node.text === "string") parts.push(node.text);
       if (node.text && typeof node.text === "object" && typeof node.text.value === "string") {
         parts.push(node.text.value);
@@ -178,6 +169,7 @@ QAYDALAR:
 - 8-12 maddədən çox yazma.
 - Konkret, icra edilə bilən yaz.
 - Lazımsız uzun izah vermə.
+- Heç bir halda JSON, kod bloku, {...} yazma.
 - Round ${round}.
 
 İSTİFADƏÇİ MESAJI:
@@ -191,7 +183,6 @@ ${notesSoFar || "(yoxdur)"}
 `.trim();
 }
 
-// If OpenAI returns empty visible text, log minimal debug and return a visible marker
 function visibleEmptyMarker(kind, agentId, resp) {
   const usage = resp?.usage || {};
   const outTok = usage?.output_tokens ?? null;
@@ -201,52 +192,40 @@ function visibleEmptyMarker(kind, agentId, resp) {
   const status = resp?.status || null;
   const model = resp?.model || null;
 
-  return `⚠️ ${kind.toUpperCase()} EMPTY_TEXT (agent=${agentId || "-"} status=${status} model=${model} id=${id} outTok=${outTok} reasoningTok=${rTok})`;
+  return `⚠️ ${String(kind || "resp").toUpperCase()} EMPTY_TEXT (agent=${agentId || "-"} status=${status} model=${model} id=${id} outTok=${outTok} reasoningTok=${rTok})`;
 }
 
 function logRawIfEmpty(kind, agentId, resp, text) {
   if (String(text || "").trim()) return;
+  if (!cfg.DEBUG_DEBATE_RAW) return;
   try {
     console.log("[debate] EMPTY", { kind, agentId, status: resp?.status, model: resp?.model, id: resp?.id });
-    // first part only
     const raw = JSON.stringify(resp, null, 2);
-    console.log(`[debate] RAW(${kind}) first 1400:\n${raw.slice(0, 1400)}`);
+    console.log(`[debate] RAW(${kind}) first 1600:\n${raw.slice(0, 1600)}`);
   } catch {}
 }
 
 async function askAgent({ openai, agentId, message, round, notesSoFar, timeoutMs }) {
   const prompt = agentPrompt(agentId, message, round, notesSoFar);
-
   const maxOut = Number(cfg.OPENAI_DEBATE_AGENT_TOKENS || 900);
 
-  const resp = await withTimeout(
-    openai.responses.create({
-      model: cfg.OPENAI_MODEL || "gpt-5",
-      text: { format: { type: "text" } },
-      reasoning: { effort: "low" }, // keep visible text priority
-      temperature: Number(cfg.OPENAI_DEBATE_TEMPERATURE || 0.6) || 0.6,
-      max_output_tokens: maxOut,
-      input: [
-        { role: "system", content: `You are agent "${agentId}". Follow the user's rules strictly.` },
-        { role: "user", content: prompt },
-      ],
-    }),
-    timeoutMs,
-    `OpenAI timeout (${agentId})`
-  );
+  // gpt-5: do NOT send temperature
+  const req = {
+    model: cfg.OPENAI_MODEL || "gpt-5",
+    text: { format: { type: "text" } },
+    reasoning: { effort: "low" },
+    max_output_tokens: maxOut,
+    input: [
+      { role: "system", content: `You are agent "${agentId}". Follow the user's rules strictly.` },
+      { role: "user", content: prompt },
+    ],
+  };
+
+  const resp = await withTimeout(openai.responses.create(req), timeoutMs, `OpenAI timeout (${agentId})`);
 
   let text = extractText(resp);
 
-  console.log(
-    "[debate] agent",
-    agentId,
-    "status=",
-    resp?.status || null,
-    "id=",
-    resp?.id || null,
-    "len=",
-    (text || "").length
-  );
+  console.log("[debate] agent", agentId, "status=", resp?.status || null, "id=", resp?.id || null, "len=", (text || "").length);
 
   if (!String(text || "").trim()) {
     logRawIfEmpty("agent", agentId, resp, text);
@@ -260,7 +239,17 @@ function extractJsonFromText(text) {
   const s0 = String(text || "").trim();
   if (!s0) return null;
 
-  // Prefer fenced ```json ... ```
+  // Prefer a clean single JSON object
+  const start = s0.indexOf("{");
+  const end = s0.lastIndexOf("}");
+  if (start >= 0 && end > start) {
+    const slice = s0.slice(start, end + 1);
+    try {
+      return JSON.parse(slice);
+    } catch {}
+  }
+
+  // Fallback: fenced ```json ... ```
   const fence = s0.match(/```json\s*([\s\S]*?)\s*```/i);
   if (fence?.[1]) {
     try {
@@ -268,23 +257,7 @@ function extractJsonFromText(text) {
     } catch {}
   }
 
-  // Try last {...} block
-  const m = s0.match(/\{[\s\S]*\}\s*$/);
-  if (m?.[0]) {
-    try {
-      return JSON.parse(m[0]);
-    } catch {}
-  }
-
   return null;
-}
-
-function extractJsonAfterDelimiter(text, delimiter) {
-  const s0 = String(text || "");
-  const idx = s0.lastIndexOf(delimiter);
-  if (idx < 0) return null;
-  const tail = s0.slice(idx + delimiter.length).trim();
-  return extractJsonFromText(tail);
 }
 
 function fallbackSynthesis(agentNotes = []) {
@@ -297,15 +270,60 @@ function fallbackSynthesis(agentNotes = []) {
   return parts.join("\n\n").trim();
 }
 
+function buildFallbackProposalFromText(finalAnswer) {
+  const summary = String(finalAnswer || "").replace(/\s+/g, " ").trim().slice(0, 320) || "Plan summary";
+
+  // 7 day skeleton (always full)
+  const steps = Array.from({ length: 7 }, (_, i) => {
+    const day = i + 1;
+    return {
+      day,
+      title: `Gün ${day}`,
+      tasks: [
+        "ICP və təklifin dəqiqləşdirilməsi",
+        "Kanal icrası (email/LinkedIn/IG/WhatsApp) planı",
+        "Demo/booked görüş hədəfi və follow-up",
+      ],
+    };
+  });
+
+  const kpis = [
+    "Reply rate (cavab nisbəti)",
+    "Demo booked",
+    "Demo show-up",
+    "SQL sayı",
+    "Təklif göndərilənlər",
+    "Win rate",
+  ];
+
+  const ownerMap = {
+    orion: "Strategiya, ICP, offer, risklər",
+    nova: "Kontent, kreativ, CTA, sosial sübut",
+    atlas: "Outreach, skriptlər, pipeline, CRM əməliyyat",
+    echo: "KPI, tracking, experiment, dashboard",
+  };
+
+  return {
+    type: "plan",
+    title: "Debate Proposal",
+    payload: { summary, steps, kpis, ownerMap },
+  };
+}
+
+/**
+ * GUARANTEED proposal:
+ * - Always produces human-readable final plan
+ * - If mode=proposal => second call returns JSON-only (strict) then parsed
+ */
 async function synthesizeFinal({ openai, message, agentNotes, mode, timeoutMs }) {
   const notesText = (agentNotes || [])
     .map((n) => `### ${n.agentId}\n${String(n.text || "").trim()}`)
     .join("\n\n");
 
-  const DELIM = "---PROPOSAL_JSON---";
-  const maxOut = Number(cfg.OPENAI_DEBATE_SYNTH_TOKENS || 1200);
+  const maxOut = Number(cfg.OPENAI_DEBATE_SYNTH_TOKENS || 1400);
 
-  const sys = `
+  // (A) Text synthesis (always)
+  const sysText = `
 Sən AI HQ “Kernel”sən. 4 agentin töhfələrini birləşdirib yekun çıxar.
 
 QAYDALAR:
@@ -316,17 +334,10 @@ QAYDALAR:
   3) Risklər (bəndlərlə)
   4) Next Actions (icra taskları)
 
-Əgər mode=proposal:
-- Sonda delimiteri DƏQİQ yaz: ${DELIM}
-- Delimiterdən sonra təkcə JSON ver (əlavə mətn yox).
-JSON formatı:
-{"type":"plan","title":"...","payload":{"summary":"...","steps":[...],"kpis":[...],"ownerMap":{...}}}
-
 ÇOX VACİB: BOŞ CAVAB QADAĞANDIR.
 `.trim();
 
-  const user = `
-MODE: ${mode}
+  const userText = `
 İSTİFADƏÇİ MESAJI:
 ${message}
 
@@ -334,40 +345,167 @@ AGENT NOTLARI:
 ${notesText || "(agent notları boşdur)"}
 `.trim();
 
-  const resp = await withTimeout(
-    openai.responses.create({
+  const reqText = {
+    model: cfg.OPENAI_MODEL || "gpt-5",
+    text: { format: { type: "text" } },
+    reasoning: { effort: "low" },
+    max_output_tokens: maxOut,
+    input: [
+      { role: "system", content: sysText },
+      { role: "user", content: userText },
+    ],
+  };
+
+  const respText = await withTimeout(openai.responses.create(reqText), timeoutMs, "OpenAI timeout (synthesis-text)");
+
+  let finalAnswer = extractText(respText);
+  if (!String(finalAnswer || "").trim()) {
+    logRawIfEmpty("synth-text", "kernel", respText, finalAnswer);
+    finalAnswer = visibleEmptyMarker("synth-text", "kernel", respText);
+  }
+  finalAnswer = String(finalAnswer || "").trim();
+  if (!finalAnswer) finalAnswer = fallbackSynthesis(agentNotes);
+
+  // (B) Proposal JSON synthesis (only if requested)
+  let proposal = null;
+
+  if (mode === "proposal") {
+    const sysJson = `
+You generate ONLY valid JSON. No markdown. No extra text.
+Output must be a single JSON object.
+
+Schema:
+{
+  "type": "plan",
+  "title": "string",
+  "payload": {
+    "summary": "string",
+    "steps": [{"day": 1, "title": "string", "tasks": ["..."]}],
+    "kpis": ["..."],
+    "ownerMap": {"orion": "...", "nova": "...", "atlas": "...", "echo": "..."}
+  }
+}
+
+Rules:
+- steps must have days 1..7 (exactly 7 items)
+- tasks array must be 3-6 items per day
+- kpis must be 5-10 items
+- Keep strings short and executable
+`.trim();
+
+    // ✅ IMPORTANT: Do NOT include agent notes here (they may contain stray '{' and break JSON-only)
+    const userJson = `
+User request:
+${message}
+
+Use this synthesized plan as the only context:
+${finalAnswer}
+`.trim();
+
+    const reqJson = {
       model: cfg.OPENAI_MODEL || "gpt-5",
       text: { format: { type: "text" } },
       reasoning: { effort: "low" },
-      temperature: 0.6,
-      max_output_tokens: maxOut,
+      max_output_tokens: clamp(Number(cfg.OPENAI_DEBATE_SYNTH_TOKENS || 1400), 700, 2000),
       input: [
-        { role: "system", content: sys },
-        { role: "user", content: user },
+        { role: "system", content: sysJson },
+        { role: "user", content: userJson },
       ],
-    }),
-    timeoutMs,
-    "OpenAI timeout (synthesis)"
-  );
+    };
 
-  let text = extractText(resp);
+    const respJson = await withTimeout(openai.responses.create(reqJson), timeoutMs, "OpenAI timeout (synthesis-json)");
 
-  console.log("[debate] synthesis", "status=", resp?.status || null, "id=", resp?.id || null, "len=", (text || "").length);
+    let jsonText = extractText(respJson);
+    if (!String(jsonText || "").trim()) {
+      logRawIfEmpty("synth-json", "kernel", respJson, jsonText);
+      jsonText = visibleEmptyMarker("synth-json", "kernel", respJson);
+    }
 
-  if (!String(text || "").trim()) {
-    logRawIfEmpty("synth", "kernel", resp, text);
-    text = visibleEmptyMarker("synth", "kernel", resp);
+    proposal = extractJsonFromText(jsonText);
+
+    // If parsing failed, one repair pass (still JSON-only)
+    if (!proposal) {
+      const repairSys = `
+You will be given text that should be JSON but may be invalid.
+Return ONLY corrected valid JSON object. No extra text.
+`.trim();
+
+      const repairReq = {
+        model: cfg.OPENAI_MODEL || "gpt-5",
+        text: { format: { type: "text" } },
+        reasoning: { effort: "low" },
+        max_output_tokens: 1000,
+        input: [
+          { role: "system", content: repairSys },
+          { role: "user", content: String(jsonText || "") },
+        ],
+      };
+
+      try {
+        const respFix = await withTimeout(openai.responses.create(repairReq), timeoutMs, "OpenAI timeout (json-repair)");
+        const fixed = extractText(respFix);
+        proposal = extractJsonFromText(fixed);
+      } catch {}
+    }
+
+    // Last resort: build a FULL proposal from finalAnswer (NOT empty arrays)
+    if (!proposal || typeof proposal !== "object") {
+      proposal = buildFallbackProposalFromText(finalAnswer);
+    } else {
+      // normalize / guarantee shape
+      const p = proposal;
+      const payload = (p.payload && typeof p.payload === "object") ? p.payload : {};
+      const steps = Array.isArray(payload.steps) ? payload.steps : [];
+      const kpis = Array.isArray(payload.kpis) ? payload.kpis : [];
+      const ownerMap = (payload.ownerMap && typeof payload.ownerMap === "object") ? payload.ownerMap : {};
+
+      // ensure full 7 days
+      if (steps.length !== 7) {
+        proposal = buildFallbackProposalFromText(finalAnswer);
+      } else {
+        // ensure tasks per day
+        const fixedSteps = steps.map((st, i) => {
+          const day = clamp(st?.day ?? i + 1, 1, 7);
+          const title = String(st?.title || `Gün ${day}`).trim() || `Gün ${day}`;
+          let tasks = Array.isArray(st?.tasks) ? st.tasks.map((x) => String(x || "").trim()).filter(Boolean) : [];
+          if (tasks.length < 3) {
+            tasks = [
+              ...tasks,
+              "ICP/offer refinement",
+              "Outreach execution",
+              "Follow-up + demo scheduling",
+            ].slice(0, 3);
+          }
+          if (tasks.length > 6) tasks = tasks.slice(0, 6);
+          return { day, title, tasks };
+        });
+
+        let fixedKpis = kpis.map((x) => String(x || "").trim()).filter(Boolean);
+        if (fixedKpis.length < 5) fixedKpis = ["Reply rate", "Demo booked", "Show-up", "SQL", "Win rate"];
+        if (fixedKpis.length > 10) fixedKpis = fixedKpis.slice(0, 10);
+
+        const fixedOwner = {
+          orion: String(ownerMap.orion || "Strategiya + KPI + risk"),
+          nova: String(ownerMap.nova || "Kontent + CTA + kreatv"),
+          atlas: String(ownerMap.atlas || "Outreach + CRM + skript"),
+          echo: String(ownerMap.echo || "Analitika + ölçmə + dashboard"),
+        };
+
+        proposal = {
+          type: String(p.type || "plan"),
+          title: String(p.title || "Debate Proposal"),
+          payload: {
+            summary: String(payload.summary || "").trim() || String(finalAnswer || "").slice(0, 240),
+            steps: fixedSteps,
+            kpis: fixedKpis,
+            ownerMap: fixedOwner,
+          },
+        };
+      }
+    }
   }
 
-  let finalAnswer = String(text || "").trim();
-  if (!finalAnswer) finalAnswer = fallbackSynthesis(agentNotes);
-
-  let proposal = null;
-  if (mode === "proposal" && finalAnswer) {
-    proposal = extractJsonAfterDelimiter(finalAnswer, DELIM) || extractJsonFromText(finalAnswer);
-  }
-
-  return { finalAnswer: finalAnswer || "", proposal };
+  return { finalAnswer, proposal };
 }
 
 export async function runDebate({ message, agents = DEFAULT_AGENTS, rounds = 2, mode = "answer" }) {
@@ -385,7 +523,6 @@ export async function runDebate({ message, agents = DEFAULT_AGENTS, rounds = 2, 
     .filter(Boolean);
 
   const rCount = clamp(Number(rounds || 2), 1, 3);
-
   const timeoutMs = Number(cfg.OPENAI_TIMEOUT_MS || 25_000);
   const concurrency = clamp(Number(cfg.OPENAI_DEBATE_CONCURRENCY || 2), 1, 4);
 
