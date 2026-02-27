@@ -1,8 +1,8 @@
-// src/routes/api.js
+// src/routes/api.js (FINAL)
 import express from "express";
 import crypto from "crypto";
 import { cfg } from "../config.js";
-import { runDebate } from "../kernel/debateEngine.js";
+import { runDebate, DEBATE_ENGINE_VERSION } from "../kernel/debateEngine.js";
 import { kernelHandle, listAgents, debugOpenAI } from "../kernel/agentKernel.js";
 import { postToN8n } from "../utils/n8n.js";
 
@@ -138,9 +138,7 @@ function notifyN8n(event, proposal, extra = {}) {
     timeoutMs: Number(cfg.N8N_TIMEOUT_MS || 10_000),
     payload,
   })
-    .then((r) =>
-      console.log(`[n8n] ${event} →`, r.ok, r.status || r.error, (r.text || "").slice(0, 120))
-    )
+    .then((r) => console.log(`[n8n] ${event} →`, r.ok, r.status || r.error, (r.text || "").slice(0, 120)))
     .catch((e) => console.log("[n8n] error", String(e?.message || e)));
 }
 
@@ -163,6 +161,7 @@ export function apiRouter({ db, wsHub }) {
       ok: true,
       service: "ai-hq-backend",
       db: { enabled: isDbReady(db) },
+      debateEngine: DEBATE_ENGINE_VERSION,
       endpoints: [
         "GET /api",
         "GET /api/agents",
@@ -381,6 +380,8 @@ export function apiRouter({ db, wsHub }) {
     let threadId = threadIdIn || crypto.randomUUID();
 
     try {
+      console.log("[api/debate] start", { engine: DEBATE_ENGINE_VERSION, mode, rounds, agents });
+
       if (!isDbReady(db)) {
         memEnsureThread(threadId);
         memAddMessage(threadId, { role: "user", agent: agent || null, content: message, meta: { kind: "debate" } });
@@ -400,10 +401,8 @@ export function apiRouter({ db, wsHub }) {
 
       let synthesisText = String(out.finalAnswer || "").trim();
 
-      // ✅ if empty, build fallback from agent notes
-      if (!synthesisText) {
-        synthesisText = fallbackSynthesisFromNotes(out);
-      }
+      // ✅ if empty, build fallback from agent notes (should not be empty now, but keep)
+      if (!synthesisText) synthesisText = fallbackSynthesisFromNotes(out);
 
       // persist synthesis message
       if (!isDbReady(db)) {
@@ -441,6 +440,7 @@ export function apiRouter({ db, wsHub }) {
       }
 
       const debug = {
+        engineVersion: DEBATE_ENGINE_VERSION,
         mode,
         rounds,
         agents,
@@ -451,6 +451,8 @@ export function apiRouter({ db, wsHub }) {
           len: String(x.text || "").length,
         })),
       };
+
+      console.log("[api/debate] done", debug);
 
       return okJson(res, {
         ok: true,

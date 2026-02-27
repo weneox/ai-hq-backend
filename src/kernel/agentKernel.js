@@ -1,4 +1,4 @@
-// src/kernel/agentKernel.js
+// src/kernel/agentKernel.js  (FINAL — FIXED output_text extraction)
 import OpenAI from "openai";
 import { cfg } from "../config.js";
 
@@ -41,6 +41,7 @@ function pickString(x) {
   return typeof x === "string" ? x : "";
 }
 
+// Handles: "string", {value:"..."}, {text:"..."}
 function pickStringDeep(x) {
   if (typeof x === "string") return x;
   if (x && typeof x === "object") {
@@ -50,23 +51,41 @@ function pickStringDeep(x) {
   return "";
 }
 
+/**
+ * ✅ FINAL extractor (matches your raw Response shape):
+ * output: [
+ *   { type:"message", content:[ { type:"output_text", text:"..." } ] }
+ * ]
+ */
 function extractText(resp) {
   if (!resp) return "";
 
+  // Top-level convenience
   const direct = pickString(resp.output_text).trim();
   if (direct) return direct;
 
+  // Some SDK wrappers (rare)
   const direct2 = pickString(resp?.outputText).trim();
   if (direct2) return direct2;
 
+  // Standard output parse
   const out = resp.output;
   if (Array.isArray(out)) {
     const parts = [];
+
     for (const item of out) {
       const content = item?.content;
 
       if (Array.isArray(content)) {
         for (const block of content) {
+          // ✅ critical: output_text block
+          if (block?.type === "output_text") {
+            const t = pickStringDeep(block?.text);
+            if (t) parts.push(t);
+            continue;
+          }
+
+          // fallbacks
           const t1 = pickStringDeep(block?.text);
           if (t1) parts.push(t1);
 
@@ -88,6 +107,7 @@ function extractText(resp) {
     if (joined) return joined;
   }
 
+  // Legacy chat-completions fallback (rare)
   const choices = resp?.choices;
   if (Array.isArray(choices)) {
     const parts = [];
@@ -99,25 +119,35 @@ function extractText(resp) {
     if (joined) return joined;
   }
 
-  // deep scan fallback
+  // Deep scan fallback (last resort)
   try {
     const seen = new Set();
     const parts = [];
+
     const walk = (node) => {
       if (!node || typeof node !== "object") return;
       if (seen.has(node)) return;
       seen.add(node);
 
       if (typeof node.output_text === "string") parts.push(node.output_text);
-      if (typeof node.text === "string") parts.push(node.text);
-      if (node.text && typeof node.text === "object" && typeof node.text.value === "string") parts.push(node.text.value);
-      if (typeof node.transcript === "string") parts.push(node.transcript);
+
+      if (node.type === "output_text") {
+        const t = pickStringDeep(node.text);
+        if (t) parts.push(t);
+      }
+
+      const t2 = pickStringDeep(node.text);
+      if (t2) parts.push(t2);
+
+      const tr = pickStringDeep(node.transcript);
+      if (tr) parts.push(tr);
 
       for (const v of Object.values(node)) {
         if (Array.isArray(v)) v.forEach(walk);
         else if (v && typeof v === "object") walk(v);
       }
     };
+
     walk(resp);
     const joined = parts.join("").trim();
     if (joined) return joined;
@@ -148,7 +178,12 @@ export async function kernelHandle({ message, agentHint } = {}) {
 
   const openai = ensureOpenAI();
   if (!openai) {
-    return { ok: false, agent, replyText: "OpenAI aktiv deyil. OPENAI_API_KEY yoxdur.", proposal: null };
+    return {
+      ok: false,
+      agent,
+      replyText: "OpenAI aktiv deyil. OPENAI_API_KEY yoxdur.",
+      proposal: null,
+    };
   }
 
   const model = clampModelName(cfg.OPENAI_MODEL);
@@ -203,12 +238,12 @@ export async function debugOpenAI({ agent = "orion", message = "ping" } = {}) {
     });
 
     const extractedText = extractText(resp);
+
     return {
       ok: true,
       status: resp?.status || null,
       agent: a,
       extractedText,
-      // raw can be huge; stringify safely
       raw: JSON.stringify(resp, null, 2),
     };
   } catch (e) {
