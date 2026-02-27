@@ -41,28 +41,61 @@ Rules:
 };
 
 function pickAgentFromText(text = "") {
-  const t = text.toLowerCase();
+  const t = String(text || "").toLowerCase();
   if (t.includes("instagram") || t.includes("reels") || t.includes("post") || t.includes("story")) return "nova";
   if (t.includes("satış") || t.includes("satis") || t.includes("whatsapp") || t.includes("lead") || t.includes("funnel")) return "atlas";
   if (t.includes("analitika") || t.includes("report") || t.includes("kpi") || t.includes("dashboard")) return "echo";
   return "orion";
 }
 
-function extractProposal(replyText) {
-  // looks for <proposal>{...}</proposal>
-  const m = replyText.match(/<proposal>\s*([\s\S]*?)\s*<\/proposal>/i);
-  if (!m) return { cleaned: replyText.trim(), proposal: null };
-
-  const raw = m[1].trim();
-  let proposal = null;
+function safeJsonParse(s) {
   try {
-    proposal = JSON.parse(raw);
+    return JSON.parse(s);
   } catch {
-    proposal = null;
+    return null;
+  }
+}
+
+function extractProposal(replyText) {
+  const text = String(replyText || "");
+  const m = text.match(/<proposal>\s*([\s\S]*?)\s*<\/proposal>/i);
+  if (!m) return { cleaned: text.trim(), proposal: null };
+
+  const raw = (m[1] || "").trim();
+
+  // Allow the model to sometimes wrap JSON in ```json ... ```
+  const rawStripped = raw.replace(/^```(?:json)?\s*/i, "").replace(/```$/i, "").trim();
+
+  const proposal = safeJsonParse(rawStripped);
+
+  const cleaned = text.replace(m[0], "").trim();
+  return { cleaned, proposal };
+}
+
+function collectTextFromResponses(data) {
+  // 1) direct
+  if (typeof data?.output_text === "string" && data.output_text.trim()) {
+    return data.output_text.trim();
   }
 
-  const cleaned = replyText.replace(m[0], "").trim();
-  return { cleaned, proposal };
+  // 2) walk output -> content
+  const pieces = [];
+  const output = Array.isArray(data?.output) ? data.output : [];
+  for (const item of output) {
+    const content = Array.isArray(item?.content) ? item.content : [];
+    for (const c of content) {
+      // Most common
+      if (c?.type === "output_text" && typeof c?.text === "string") pieces.push(c.text);
+      if (c?.type === "text" && typeof c?.text === "string") pieces.push(c.text);
+
+      // Some variants
+      if (typeof c?.content === "string") pieces.push(c.content);
+      if (typeof c?.text?.value === "string") pieces.push(c.text.value);
+    }
+  }
+
+  const joined = pieces.join("\n").trim();
+  return joined;
 }
 
 async function callOpenAI({ system, user }) {
@@ -76,46 +109,70 @@ async function callOpenAI({ system, user }) {
       { role: "system", content: system },
       { role: "user", content: user }
     ],
+
+    // ✅ Force text output for Responses API (prevents "(no text)" in many cases)
+    text: { format: { type: "text" } },
+
     max_output_tokens: cfg.OPENAI_MAX_OUTPUT_TOKENS
   };
 
   const r = await fetch("https://api.openai.com/v1/responses", {
     method: "POST",
     headers: {
-      "Authorization": `Bearer ${cfg.OPENAI_API_KEY}`,
+      Authorization: `Bearer ${cfg.OPENAI_API_KEY}`,
       "Content-Type": "application/json"
     },
     body: JSON.stringify(body)
   });
 
+  const raw = await r.text().catch(() => "");
+
   if (!r.ok) {
-    const txt = await r.text().catch(() => "");
-    throw new Error(`OpenAI error ${r.status}: ${txt.slice(0, 400)}`);
+    // keep message small to avoid log spam
+    throw new Error(`OpenAI error ${r.status}: ${raw.slice(0, 400)}`);
   }
 
-  const data = await r.json();
+  const data = raw ? safeJsonParse(raw) : null;
 
-  // robust extract
-  if (typeof data.output_text === "string" && data.output_text.trim()) return data.output_text.trim();
+  const text = collectTextFromResponses(data);
+  if (text && text.trim()) return text.trim();
 
-  // fallback walk
-  const out = [];
-  const output = Array.isArray(data.output) ? data.output : [];
-  for (const item of output) {
-    const content = Array.isArray(item.content) ? item.content : [];
-    for (const c of content) {
-      if (c.type === "output_text" && typeof c.text === "string") out.push(c.text);
-      if (c.type === "text" && typeof c.text === "string") out.push(c.text);
-    }
-  }
-  return out.join("\n").trim() || "(no text)";
+  // Final fallback: if API returned JSON but no text
+  return "(no text)";
 }
 
 export async function kernelHandle({ message, agentHint }) {
   const agentKey = (agentHint && AGENTS[agentHint]) ? agentHint : pickAgentFromText(message);
   const agent = AGENTS[agentKey];
 
-  const replyRaw = await callOpenAI({ system: agent.system, user: message });
+  let replyRaw = "";
+  try {
+    replyRaw = await callOpenAI({ system: agent.system, user: message });
+  } catch (e) {
+    // ✅ Don't crash the route; return a readable error
+    return {
+      agent: agentKey,
+      agentName: agent.name,
+      replyText: `OpenAI xətası: ${String(e?.message || e)}`,
+      proposal: null
+    };
+  }
+
+  // If still empty, return an actionable hint
+  if (!replyRaw || !String(replyRaw).trim() || String(replyRaw).trim() === "(no text)") {
+    const hint =
+      `Cavab boş gəldi. Bu adətən model/format uyğunsuzluğudur.\n` +
+      `Tövsiyə: Railway-də OPENAI_MODEL-i müvəqqəti "gpt-4.1-mini" et və yenidən yoxla.\n` +
+      `Sən istəsən mən də serverdə debug endpoint əlavə edib OpenAI raw cavabı gizli log edərəm.`;
+
+    return {
+      agent: agentKey,
+      agentName: agent.name,
+      replyText: hint,
+      proposal: null
+    };
+  }
+
   const { cleaned, proposal } = extractProposal(replyRaw);
 
   return {
