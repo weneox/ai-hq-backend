@@ -1,15 +1,28 @@
--- AI HQ schema (upgrade-safe)
+-- AI HQ schema (upgrade-safe + legacy fixes)
 
 create extension if not exists pgcrypto;
 
+-- ----------------------------
 -- threads
+-- ----------------------------
 create table if not exists threads (
   id uuid primary key default gen_random_uuid(),
   title text,
   created_at timestamptz not null default now()
 );
 
+-- Ensure legacy threads.id has default
+do $$
+begin
+  begin
+    alter table threads alter column id set default gen_random_uuid();
+  exception when others then null;
+  end;
+end$$;
+
+-- ----------------------------
 -- messages
+-- ----------------------------
 create table if not exists messages (
   id uuid primary key default gen_random_uuid(),
   thread_id uuid not null references threads(id) on delete cascade,
@@ -20,7 +33,8 @@ create table if not exists messages (
   created_at timestamptz not null default now()
 );
 
--- In case old messages table exists without columns
+-- Legacy upgrades: add missing columns if table existed before
+alter table messages add column if not exists id uuid;
 alter table messages add column if not exists thread_id uuid;
 alter table messages add column if not exists role text;
 alter table messages add column if not exists agent text;
@@ -28,18 +42,24 @@ alter table messages add column if not exists content text;
 alter table messages add column if not exists meta jsonb default '{}'::jsonb;
 alter table messages add column if not exists created_at timestamptz default now();
 
--- ensure FK on messages.thread_id if possible
+-- ✅ FIX: ensure messages.id has uuid default (prevents null id inserts)
 do $$
 begin
-  if not exists (
-    select 1 from pg_constraint where conname = 'messages_thread_id_fkey'
-  ) then
+  begin
+    alter table messages alter column id set default gen_random_uuid();
+  exception when others then null;
+  end;
+end$$;
+
+-- Ensure FK on messages.thread_id if possible
+do $$
+begin
+  if not exists (select 1 from pg_constraint where conname = 'messages_thread_id_fkey') then
     begin
       alter table messages
         add constraint messages_thread_id_fkey
         foreign key (thread_id) references threads(id) on delete cascade;
     exception when others then
-      -- ignore if existing data breaks FK or type mismatch
       null;
     end;
   end if;
@@ -47,7 +67,9 @@ end$$;
 
 create index if not exists idx_messages_thread_created on messages(thread_id, created_at);
 
+-- ----------------------------
 -- proposals (approval flow)
+-- ----------------------------
 create table if not exists proposals (
   id uuid primary key default gen_random_uuid(),
   thread_id uuid,
@@ -61,7 +83,8 @@ create table if not exists proposals (
   decision_by text
 );
 
--- If proposals exists but missing columns (this is your error)
+-- Legacy upgrades for proposals
+alter table proposals add column if not exists id uuid;
 alter table proposals add column if not exists thread_id uuid;
 alter table proposals add column if not exists agent text;
 alter table proposals add column if not exists type text;
@@ -72,14 +95,21 @@ alter table proposals add column if not exists created_at timestamptz default no
 alter table proposals add column if not exists decided_at timestamptz;
 alter table proposals add column if not exists decision_by text;
 
-create index if not exists idx_proposals_status_created on proposals(status, created_at desc);
-
--- optional FK for proposals.thread_id
+-- ✅ FIX: ensure proposals.id has uuid default
 do $$
 begin
-  if not exists (
-    select 1 from pg_constraint where conname = 'proposals_thread_id_fkey'
-  ) then
+  begin
+    alter table proposals alter column id set default gen_random_uuid();
+  exception when others then null;
+  end;
+end$$;
+
+create index if not exists idx_proposals_status_created on proposals(status, created_at desc);
+
+-- Optional FK for proposals.thread_id
+do $$
+begin
+  if not exists (select 1 from pg_constraint where conname = 'proposals_thread_id_fkey') then
     begin
       alter table proposals
         add constraint proposals_thread_id_fkey
