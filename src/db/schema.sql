@@ -1,6 +1,10 @@
--- AI HQ schema (upgrade-safe + legacy fixes)
--- 100% fix for legacy messages.conversation_id NOT NULL issues
--- Keeps data, no DROP tables
+-- AI HQ schema (upgrade-safe + FULL legacy fixes)
+-- Fixes legacy:
+--   - messages.conversation_id NOT NULL
+--   - messages_conversation_id_fkey (FK constraint)
+--   - missing uuid defaults for id columns
+--   - adds/ensures thread_id + FK to threads
+-- No DROP TABLE. Safe for production.
 
 create extension if not exists pgcrypto;
 
@@ -35,28 +39,35 @@ create table if not exists messages (
   created_at timestamptz not null default now()
 );
 
--- ---- Legacy rename: conversation_id -> thread_id (only if thread_id missing)
+-- ---- If old schema used conversation_id, we do NOT rely on it.
+--      We keep it nullable and remove its legacy constraints.
+
+-- Drop legacy FK that references conversation_id (if exists)
 do $$
 begin
-  if exists (
-    select 1
-    from information_schema.columns
-    where table_name = 'messages' and column_name = 'conversation_id'
-  )
-  and not exists (
-    select 1
-    from information_schema.columns
-    where table_name = 'messages' and column_name = 'thread_id'
-  ) then
+  if exists (select 1 from pg_constraint where conname = 'messages_conversation_id_fkey') then
     begin
-      alter table messages rename column conversation_id to thread_id;
-    exception when others then
-      null;
+      execute 'alter table messages drop constraint messages_conversation_id_fkey';
+    exception when others then null;
     end;
   end if;
 end$$;
 
--- ---- Add missing columns safely
+-- If conversation_id exists, drop NOT NULL so inserts won't fail
+do $$
+begin
+  if exists (
+    select 1 from information_schema.columns
+    where table_name='messages' and column_name='conversation_id'
+  ) then
+    begin
+      execute 'alter table messages alter column conversation_id drop not null';
+    exception when others then null;
+    end;
+  end if;
+end$$;
+
+-- ---- Add missing columns safely (legacy upgrades)
 alter table messages add column if not exists id uuid;
 alter table messages add column if not exists thread_id uuid;
 alter table messages add column if not exists role text;
@@ -65,25 +76,7 @@ alter table messages add column if not exists content text;
 alter table messages add column if not exists meta jsonb default '{}'::jsonb;
 alter table messages add column if not exists created_at timestamptz default now();
 
--- ---- If both exist, copy conversation_id -> thread_id where thread_id is null
-do $$
-begin
-  if exists (
-    select 1 from information_schema.columns
-    where table_name='messages' and column_name='conversation_id'
-  ) and exists (
-    select 1 from information_schema.columns
-    where table_name='messages' and column_name='thread_id'
-  ) then
-    begin
-      execute 'update messages set thread_id = conversation_id where thread_id is null';
-    exception when others then
-      null;
-    end;
-  end if;
-end$$;
-
--- ---- Ensure messages.id default uuid
+-- Ensure messages.id default uuid
 do $$
 begin
   begin
@@ -92,17 +85,18 @@ begin
   end;
 end$$;
 
--- ---- Ensure thread_id NOT NULL if possible (best-effort)
+-- Ensure thread_id NOT NULL if possible (best-effort)
 do $$
 begin
   begin
     alter table messages alter column thread_id set not null;
   exception when others then
+    -- if there are legacy rows with null thread_id, keep it nullable
     null;
   end;
 end$$;
 
--- ---- Ensure FK on messages.thread_id (best-effort)
+-- Ensure FK on messages.thread_id (best-effort)
 do $$
 begin
   if not exists (select 1 from pg_constraint where conname = 'messages_thread_id_fkey') then
@@ -134,6 +128,7 @@ create table if not exists proposals (
   decision_by text
 );
 
+-- Legacy upgrades for proposals
 alter table proposals add column if not exists id uuid;
 alter table proposals add column if not exists thread_id uuid;
 alter table proposals add column if not exists agent text;
@@ -164,66 +159,6 @@ begin
       alter table proposals
         add constraint proposals_thread_id_fkey
         foreign key (thread_id) references threads(id) on delete set null;
-    exception when others then
-      null;
-    end;
-  end if;
-end$$;
-
--- ============================================================
--- ✅ HARD FIX: legacy conversation_id NOT NULL (this is your current crash)
--- If conversation_id exists, drop NOT NULL and auto-fill from thread_id
--- ============================================================
-
-do $$
-begin
-  if exists (
-    select 1 from information_schema.columns
-    where table_name='messages' and column_name='conversation_id'
-  ) then
-    begin
-      execute 'alter table messages alter column conversation_id drop not null';
-    exception when others then
-      null;
-    end;
-  end if;
-end$$;
-
-create or replace function messages_fill_conversation_id()
-returns trigger as $$
-begin
-  -- Only act if legacy column exists
-  if exists (
-    select 1 from information_schema.columns
-    where table_name='messages' and column_name='conversation_id'
-  ) then
-    if NEW.conversation_id is null then
-      NEW.conversation_id := NEW.thread_id;
-    end if;
-  end if;
-
-  return NEW;
-end;
-$$ language plpgsql;
-
-do $$
-begin
-  if exists (
-    select 1 from information_schema.columns
-    where table_name='messages' and column_name='conversation_id'
-  ) then
-    -- recreate trigger idempotently
-    begin
-      execute 'drop trigger if exists trg_messages_fill_conversation_id on messages';
-    exception when others then
-      null;
-    end;
-
-    begin
-      execute 'create trigger trg_messages_fill_conversation_id
-               before insert on messages
-               for each row
-               execute function messages_fill_conversation_id()';
     exception when others then
       null;
     end;
