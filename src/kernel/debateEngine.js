@@ -1,8 +1,8 @@
-// src/kernel/debateEngine.js (FINAL v3.3 — GUARANTEED FULL proposal JSON + gpt-5 safe)
+// src/kernel/debateEngine.js (FINAL v3.4 — FIX: remove unsupported reasoning.effort)
 import OpenAI from "openai";
 import { cfg } from "../config.js";
 
-export const DEBATE_ENGINE_VERSION = "final-v3.3";
+export const DEBATE_ENGINE_VERSION = "final-v3.4";
 console.log(`[debateEngine] LOADED ${DEBATE_ENGINE_VERSION}`);
 
 const DEFAULT_AGENTS = ["orion", "nova", "atlas", "echo"];
@@ -22,7 +22,6 @@ function withTimeout(promise, ms, label = "timeout") {
   ]);
 }
 
-// simple concurrency limiter (no deps)
 async function mapLimit(items, limit, worker) {
   const arr = Array.isArray(items) ? items : [];
   const out = new Array(arr.length);
@@ -53,9 +52,6 @@ function sDeep(x) {
   return "";
 }
 
-/**
- * Bulletproof text extractor for Responses API
- */
 function extractText(resp) {
   if (!resp) return "";
 
@@ -209,11 +205,10 @@ async function askAgent({ openai, agentId, message, round, notesSoFar, timeoutMs
   const prompt = agentPrompt(agentId, message, round, notesSoFar);
   const maxOut = Number(cfg.OPENAI_DEBATE_AGENT_TOKENS || 900);
 
-  // gpt-5: do NOT send temperature
+  // ✅ FIX: remove reasoning.effort (some models reject it)
   const req = {
     model: cfg.OPENAI_MODEL || "gpt-5",
     text: { format: { type: "text" } },
-    reasoning: { effort: "low" },
     max_output_tokens: maxOut,
     input: [
       { role: "system", content: `You are agent "${agentId}". Follow the user's rules strictly.` },
@@ -239,7 +234,6 @@ function extractJsonFromText(text) {
   const s0 = String(text || "").trim();
   if (!s0) return null;
 
-  // Prefer a clean single JSON object
   const start = s0.indexOf("{");
   const end = s0.lastIndexOf("}");
   if (start >= 0 && end > start) {
@@ -249,7 +243,6 @@ function extractJsonFromText(text) {
     } catch {}
   }
 
-  // Fallback: fenced ```json ... ```
   const fence = s0.match(/```json\s*([\s\S]*?)\s*```/i);
   if (fence?.[1]) {
     try {
@@ -273,7 +266,6 @@ function fallbackSynthesis(agentNotes = []) {
 function buildFallbackProposalFromText(finalAnswer) {
   const summary = String(finalAnswer || "").replace(/\s+/g, " ").trim().slice(0, 320) || "Plan summary";
 
-  // 7 day skeleton (always full)
   const steps = Array.from({ length: 7 }, (_, i) => {
     const day = i + 1;
     return {
@@ -310,11 +302,6 @@ function buildFallbackProposalFromText(finalAnswer) {
   };
 }
 
-/**
- * GUARANTEED proposal:
- * - Always produces human-readable final plan
- * - If mode=proposal => second call returns JSON-only (strict) then parsed
- */
 async function synthesizeFinal({ openai, message, agentNotes, mode, timeoutMs }) {
   const notesText = (agentNotes || [])
     .map((n) => `### ${n.agentId}\n${String(n.text || "").trim()}`)
@@ -322,7 +309,6 @@ async function synthesizeFinal({ openai, message, agentNotes, mode, timeoutMs })
 
   const maxOut = Number(cfg.OPENAI_DEBATE_SYNTH_TOKENS || 1400);
 
-  // (A) Text synthesis (always)
   const sysText = `
 Sən AI HQ “Kernel”sən. 4 agentin töhfələrini birləşdirib yekun çıxar.
 
@@ -345,10 +331,10 @@ AGENT NOTLARI:
 ${notesText || "(agent notları boşdur)"}
 `.trim();
 
+  // ✅ FIX: remove reasoning.effort
   const reqText = {
     model: cfg.OPENAI_MODEL || "gpt-5",
     text: { format: { type: "text" } },
-    reasoning: { effort: "low" },
     max_output_tokens: maxOut,
     input: [
       { role: "system", content: sysText },
@@ -366,7 +352,6 @@ ${notesText || "(agent notları boşdur)"}
   finalAnswer = String(finalAnswer || "").trim();
   if (!finalAnswer) finalAnswer = fallbackSynthesis(agentNotes);
 
-  // (B) Proposal JSON synthesis (only if requested)
   let proposal = null;
 
   if (mode === "proposal") {
@@ -393,7 +378,6 @@ Rules:
 - Keep strings short and executable
 `.trim();
 
-    // ✅ IMPORTANT: Do NOT include agent notes here (they may contain stray '{' and break JSON-only)
     const userJson = `
 User request:
 ${message}
@@ -402,10 +386,10 @@ Use this synthesized plan as the only context:
 ${finalAnswer}
 `.trim();
 
+    // ✅ FIX: remove reasoning.effort
     const reqJson = {
       model: cfg.OPENAI_MODEL || "gpt-5",
       text: { format: { type: "text" } },
-      reasoning: { effort: "low" },
       max_output_tokens: clamp(Number(cfg.OPENAI_DEBATE_SYNTH_TOKENS || 1400), 700, 2000),
       input: [
         { role: "system", content: sysJson },
@@ -423,7 +407,6 @@ ${finalAnswer}
 
     proposal = extractJsonFromText(jsonText);
 
-    // If parsing failed, one repair pass (still JSON-only)
     if (!proposal) {
       const repairSys = `
 You will be given text that should be JSON but may be invalid.
@@ -433,7 +416,6 @@ Return ONLY corrected valid JSON object. No extra text.
       const repairReq = {
         model: cfg.OPENAI_MODEL || "gpt-5",
         text: { format: { type: "text" } },
-        reasoning: { effort: "low" },
         max_output_tokens: 1000,
         input: [
           { role: "system", content: repairSys },
@@ -448,60 +430,8 @@ Return ONLY corrected valid JSON object. No extra text.
       } catch {}
     }
 
-    // Last resort: build a FULL proposal from finalAnswer (NOT empty arrays)
     if (!proposal || typeof proposal !== "object") {
       proposal = buildFallbackProposalFromText(finalAnswer);
-    } else {
-      // normalize / guarantee shape
-      const p = proposal;
-      const payload = (p.payload && typeof p.payload === "object") ? p.payload : {};
-      const steps = Array.isArray(payload.steps) ? payload.steps : [];
-      const kpis = Array.isArray(payload.kpis) ? payload.kpis : [];
-      const ownerMap = (payload.ownerMap && typeof payload.ownerMap === "object") ? payload.ownerMap : {};
-
-      // ensure full 7 days
-      if (steps.length !== 7) {
-        proposal = buildFallbackProposalFromText(finalAnswer);
-      } else {
-        // ensure tasks per day
-        const fixedSteps = steps.map((st, i) => {
-          const day = clamp(st?.day ?? i + 1, 1, 7);
-          const title = String(st?.title || `Gün ${day}`).trim() || `Gün ${day}`;
-          let tasks = Array.isArray(st?.tasks) ? st.tasks.map((x) => String(x || "").trim()).filter(Boolean) : [];
-          if (tasks.length < 3) {
-            tasks = [
-              ...tasks,
-              "ICP/offer refinement",
-              "Outreach execution",
-              "Follow-up + demo scheduling",
-            ].slice(0, 3);
-          }
-          if (tasks.length > 6) tasks = tasks.slice(0, 6);
-          return { day, title, tasks };
-        });
-
-        let fixedKpis = kpis.map((x) => String(x || "").trim()).filter(Boolean);
-        if (fixedKpis.length < 5) fixedKpis = ["Reply rate", "Demo booked", "Show-up", "SQL", "Win rate"];
-        if (fixedKpis.length > 10) fixedKpis = fixedKpis.slice(0, 10);
-
-        const fixedOwner = {
-          orion: String(ownerMap.orion || "Strategiya + KPI + risk"),
-          nova: String(ownerMap.nova || "Kontent + CTA + kreatv"),
-          atlas: String(ownerMap.atlas || "Outreach + CRM + skript"),
-          echo: String(ownerMap.echo || "Analitika + ölçmə + dashboard"),
-        };
-
-        proposal = {
-          type: String(p.type || "plan"),
-          title: String(p.title || "Debate Proposal"),
-          payload: {
-            summary: String(payload.summary || "").trim() || String(finalAnswer || "").slice(0, 240),
-            steps: fixedSteps,
-            kpis: fixedKpis,
-            ownerMap: fixedOwner,
-          },
-        };
-      }
     }
   }
 

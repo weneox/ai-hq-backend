@@ -1,4 +1,4 @@
-// src/kernel/agentKernel.js (FINAL v2 — stable extraction + better incomplete handling)
+// src/kernel/agentKernel.js (FINAL v2.1 — FIX: remove unsupported reasoning.effort)
 import OpenAI from "openai";
 import { cfg } from "../config.js";
 
@@ -125,7 +125,6 @@ function makeEmptyHelp(resp, model) {
   const outTok = usage?.output_tokens ?? null;
   const reasonTok = usage?.output_tokens_details?.reasoning_tokens ?? null;
 
-  // If incomplete, most likely hit token cap
   const hint =
     status === "incomplete"
       ? "Model cavabı yarımçıq bağladı (çox vaxt token limiti). OPENAI_MAX_OUTPUT_TOKENS artır."
@@ -147,11 +146,12 @@ export async function kernelHandle({ message, agentHint } = {}) {
   const model = clampModelName(cfg.OPENAI_MODEL);
 
   try {
-    const maxTok = Number(cfg.OPENAI_MAX_OUTPUT_TOKENS || 800); // ✅ default ↑
+    const maxTok = Number(cfg.OPENAI_MAX_OUTPUT_TOKENS || 800);
+
+    // ✅ FIX: remove reasoning.effort (some models reject it with 400)
     const resp = await openai.responses.create({
       model,
       text: { format: { type: "text" } },
-      reasoning: { effort: "low" },
       max_output_tokens: maxTok,
       input: [
         { role: "system", content: AGENTS[agent].system },
@@ -181,10 +181,11 @@ export async function debugOpenAI({ agent = "orion", message = "ping" } = {}) {
 
   try {
     const maxTok = Number(cfg.OPENAI_MAX_OUTPUT_TOKENS || 800);
+
+    // ✅ FIX: remove reasoning.effort
     const resp = await openai.responses.create({
       model,
       text: { format: { type: "text" } },
-      reasoning: { effort: "low" },
       max_output_tokens: maxTok,
       input: [
         { role: "system", content: AGENTS[a].system },
