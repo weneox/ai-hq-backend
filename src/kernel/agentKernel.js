@@ -62,57 +62,43 @@ function extractProposal(replyText) {
   if (!m) return { cleaned: text.trim(), proposal: null };
 
   const raw = (m[1] || "").trim();
-
-  // Allow the model to sometimes wrap JSON in ```json ... ```
   const rawStripped = raw.replace(/^```(?:json)?\s*/i, "").replace(/```$/i, "").trim();
 
   const proposal = safeJsonParse(rawStripped);
-
   const cleaned = text.replace(m[0], "").trim();
   return { cleaned, proposal };
 }
 
 function collectTextFromResponses(data) {
-  // 1) direct
   if (typeof data?.output_text === "string" && data.output_text.trim()) {
     return data.output_text.trim();
   }
 
-  // 2) walk output -> content
   const pieces = [];
   const output = Array.isArray(data?.output) ? data.output : [];
   for (const item of output) {
     const content = Array.isArray(item?.content) ? item.content : [];
     for (const c of content) {
-      // Most common
       if (c?.type === "output_text" && typeof c?.text === "string") pieces.push(c.text);
       if (c?.type === "text" && typeof c?.text === "string") pieces.push(c.text);
 
-      // Some variants
       if (typeof c?.content === "string") pieces.push(c.content);
       if (typeof c?.text?.value === "string") pieces.push(c.text.value);
     }
   }
 
-  const joined = pieces.join("\n").trim();
-  return joined;
+  return pieces.join("\n").trim();
 }
 
-async function callOpenAI({ system, user }) {
-  if (!cfg.OPENAI_API_KEY) {
-    return `OpenAI API key yoxdur. Mən hələlik lokal cavab verə bilərəm.\n\nSualını daha qısa yaz, hansı agent cavablasın? (orion/nova/atlas/echo)`;
-  }
-
+async function rawOpenAIResponsesCall({ system, user }) {
   const body = {
     model: cfg.OPENAI_MODEL,
     input: [
       { role: "system", content: system },
       { role: "user", content: user }
     ],
-
-    // ✅ Force text output for Responses API (prevents "(no text)" in many cases)
+    // Force text output (helps a lot)
     text: { format: { type: "text" } },
-
     max_output_tokens: cfg.OPENAI_MAX_OUTPUT_TOKENS
   };
 
@@ -126,19 +112,30 @@ async function callOpenAI({ system, user }) {
   });
 
   const raw = await r.text().catch(() => "");
+  let data = null;
+  if (raw) data = safeJsonParse(raw);
 
-  if (!r.ok) {
-    // keep message small to avoid log spam
-    throw new Error(`OpenAI error ${r.status}: ${raw.slice(0, 400)}`);
+  return {
+    ok: r.ok,
+    status: r.status,
+    raw,
+    data
+  };
+}
+
+async function callOpenAI({ system, user }) {
+  if (!cfg.OPENAI_API_KEY) {
+    return `OpenAI API key yoxdur. Railway Variables-a OPENAI_API_KEY əlavə et.`;
   }
 
-  const data = raw ? safeJsonParse(raw) : null;
+  const resp = await rawOpenAIResponsesCall({ system, user });
 
-  const text = collectTextFromResponses(data);
-  if (text && text.trim()) return text.trim();
+  if (!resp.ok) {
+    throw new Error(`OpenAI error ${resp.status}: ${String(resp.raw || "").slice(0, 400)}`);
+  }
 
-  // Final fallback: if API returned JSON but no text
-  return "(no text)";
+  const out = collectTextFromResponses(resp.data);
+  return out && out.trim() ? out.trim() : "(no text)";
 }
 
 export async function kernelHandle({ message, agentHint }) {
@@ -149,7 +146,6 @@ export async function kernelHandle({ message, agentHint }) {
   try {
     replyRaw = await callOpenAI({ system: agent.system, user: message });
   } catch (e) {
-    // ✅ Don't crash the route; return a readable error
     return {
       agent: agentKey,
       agentName: agent.name,
@@ -158,17 +154,12 @@ export async function kernelHandle({ message, agentHint }) {
     };
   }
 
-  // If still empty, return an actionable hint
   if (!replyRaw || !String(replyRaw).trim() || String(replyRaw).trim() === "(no text)") {
-    const hint =
-      `Cavab boş gəldi. Bu adətən model/format uyğunsuzluğudur.\n` +
-      `Tövsiyə: Railway-də OPENAI_MODEL-i müvəqqəti "gpt-4.1-mini" et və yenidən yoxla.\n` +
-      `Sən istəsən mən də serverdə debug endpoint əlavə edib OpenAI raw cavabı gizli log edərəm.`;
-
     return {
       agent: agentKey,
       agentName: agent.name,
-      replyText: hint,
+      replyText:
+        `Cavab boş gəldi. Tövsiyə: Railway-də OPENAI_MODEL-i müvəqqəti "gpt-4.1-mini" et və yenidən yoxla.`,
       proposal: null
     };
   }
@@ -185,4 +176,32 @@ export async function kernelHandle({ message, agentHint }) {
 
 export function listAgents() {
   return Object.keys(AGENTS).map((k) => ({ key: k, name: AGENTS[k].name, role: AGENTS[k].role }));
+}
+
+/**
+ * ✅ Debug export: raw OpenAI response + extracted text
+ * This is used by /api/debug/openai (token-protected).
+ */
+export async function debugOpenAI({ agent = "orion", message = "ping" }) {
+  const agentKey = AGENTS[agent] ? agent : "orion";
+  const system = AGENTS[agentKey].system;
+
+  if (!cfg.OPENAI_API_KEY) {
+    return {
+      ok: false,
+      error: "OPENAI_API_KEY missing",
+      agent: agentKey
+    };
+  }
+
+  const resp = await rawOpenAIResponsesCall({ system, user: message });
+  const extracted = resp.ok ? collectTextFromResponses(resp.data) : "";
+
+  return {
+    ok: resp.ok,
+    status: resp.status,
+    agent: agentKey,
+    extractedText: extracted || "",
+    raw: resp.raw || ""
+  };
 }

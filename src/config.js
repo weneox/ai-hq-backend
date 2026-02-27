@@ -17,6 +17,9 @@ export const cfg = {
 
   WS_AUTH_TOKEN: s(process.env.WS_AUTH_TOKEN, ""),
 
+  // ✅ Debug endpoint token (protects /api/debug/openai)
+  DEBUG_API_TOKEN: s(process.env.DEBUG_API_TOKEN, ""),
+
   OPENAI_API_KEY: s(process.env.OPENAI_API_KEY, ""),
   OPENAI_MODEL: s(process.env.OPENAI_MODEL, "gpt-5"),
   OPENAI_MAX_OUTPUT_TOKENS: n(process.env.OPENAI_MAX_OUTPUT_TOKENS, 450)
