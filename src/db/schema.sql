@@ -1,5 +1,5 @@
--- AI HQ schema (upgrade-safe + FULL legacy fixes) — FINAL v5
--- ✅ Adds: notifications, jobs, audit_log
+-- AI HQ schema (upgrade-safe + FULL legacy fixes) — FINAL v6
+-- ✅ Adds: notifications, jobs, audit_log, push_subscriptions
 -- ✅ Keeps: legacy fixes (messages/proposals conversation_id + agent_key)
 -- Safe for production: no DROP TABLE.
 
@@ -196,11 +196,11 @@ begin
 end$$;
 
 -- ============================================================
--- ✅ notifications (CEO-only now, later user_id/tenant_id əlavə edərik)
+-- notifications
 -- ============================================================
 create table if not exists notifications (
   id uuid primary key default gen_random_uuid(),
-  recipient text not null default 'ceo', -- CEO-only MVP
+  recipient text not null default 'ceo',
   type text not null default 'info',
   title text not null default '',
   body text not null default '',
@@ -230,7 +230,7 @@ create index if not exists idx_notifications_recipient_created on notifications(
 create index if not exists idx_notifications_unread on notifications(recipient) where read_at is null;
 
 -- ============================================================
--- ✅ jobs (execution tracking: approve -> n8n -> callback)
+-- jobs
 -- ============================================================
 create table if not exists jobs (
   id uuid primary key default gen_random_uuid(),
@@ -279,7 +279,7 @@ begin
 end$$;
 
 -- ============================================================
--- ✅ audit_log (SaaS üçün əsas: kim nə etdi)
+-- audit_log
 -- ============================================================
 create table if not exists audit_log (
   id uuid primary key default gen_random_uuid(),
@@ -309,3 +309,29 @@ end$$;
 
 create index if not exists idx_audit_created on audit_log(created_at desc);
 create index if not exists idx_audit_action on audit_log(action, created_at desc);
+
+-- ============================================================
+-- ✅ push_subscriptions (PWA push to your phone)
+-- ============================================================
+create table if not exists push_subscriptions (
+  id uuid primary key default gen_random_uuid(),
+  recipient text not null default 'ceo',
+  endpoint text not null,
+  p256dh text not null,
+  auth text not null,
+  user_agent text,
+  created_at timestamptz not null default now(),
+  last_seen_at timestamptz
+);
+
+alter table push_subscriptions add column if not exists id uuid;
+alter table push_subscriptions add column if not exists recipient text;
+alter table push_subscriptions add column if not exists endpoint text;
+alter table push_subscriptions add column if not exists p256dh text;
+alter table push_subscriptions add column if not exists auth text;
+alter table push_subscriptions add column if not exists user_agent text;
+alter table push_subscriptions add column if not exists created_at timestamptz default now();
+alter table push_subscriptions add column if not exists last_seen_at timestamptz;
+
+create unique index if not exists uq_push_endpoint on push_subscriptions(endpoint);
+create index if not exists idx_push_recipient on push_subscriptions(recipient, created_at desc);

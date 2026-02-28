@@ -1,4 +1,4 @@
-// src/db/index.js
+// src/db/index.js (FINAL v1.2)
 import pg from "pg";
 import fs from "fs";
 import path from "path";
@@ -25,20 +25,21 @@ export function getDb() {
 export async function initDb() {
   const url = String(cfg.DATABASE_URL || "").trim();
 
-  // ✅ No DATABASE_URL => DB OFF
+  // No DATABASE_URL => DB OFF
   if (!url) {
     _db = null;
     return null;
   }
 
+  // Railway Postgres: SSL çox vaxt lazımdır (rejectUnauthorized false)
   const pool = new Pool({
     connectionString: url,
     max: 5,
     idleTimeoutMillis: 10_000,
-    connectionTimeoutMillis: 5_000,
+    connectionTimeoutMillis: 7_000,
+    ssl: { rejectUnauthorized: false },
   });
 
-  // ✅ Connectivity test (fail fast, but don't crash local dev)
   try {
     await pool.query("select 1 as ok");
     console.log("[ai-hq] DB=ON", redact(url));
@@ -47,7 +48,9 @@ export async function initDb() {
   } catch (e) {
     console.error("[ai-hq] DB connect failed:", redact(url));
     console.error(String(e?.message || e));
-    try { await pool.end(); } catch {}
+    try {
+      await pool.end();
+    } catch {}
     _db = null;
     return null;
   }

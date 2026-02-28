@@ -1,17 +1,12 @@
-// src/routes/api.js (FINAL v2.5 — Notifications + Jobs + n8n callback + Audit)
-// ✅ CEO-only in-app notifications (DB + memory fallback)
-// ✅ Jobs tracking: approve -> create job -> send to n8n -> callback updates job
-// ✅ Legacy-safe proposals.id TEXT/UUID decision endpoint (id::text)
-// ✅ WS events: proposal.created / proposal.updated / thread.message / notification.* / job.updated
-// ✅ n8n payload contract stabilized: {event, proposalId, threadId, jobId, callback{url,tokenHeader}, ...}
-// ✅ Callback hardened: header-only token, uuid guard, status validation
-
+// src/routes/api.js (FINAL v2.6 — Push + Telegram toggle + Jobs + n8n callback + Audit)
 import express from "express";
 import crypto from "crypto";
 import { cfg } from "../config.js";
 import { runDebate, DEBATE_ENGINE_VERSION } from "../kernel/debateEngine.js";
 import { kernelHandle, listAgents, debugOpenAI } from "../kernel/agentKernel.js";
 import { postToN8n } from "../utils/n8n.js";
+import { sendTelegram } from "../utils/telegram.js";
+import { pushSendOne } from "../utils/push.js";
 
 function okJson(res, payload) {
   res.setHeader("Content-Type", "application/json; charset=utf-8");
@@ -27,7 +22,6 @@ function clamp(n, a, b) {
 function requireDebugToken(req) {
   const expected = String(cfg.DEBUG_API_TOKEN || "").trim();
   if (!expected) return false;
-
   const token = String(req.headers["x-debug-token"] || req.query.token || req.body?.token || "").trim();
   return Boolean(token) && token === expected;
 }
@@ -39,13 +33,7 @@ function isDbReady(db) {
 function serializeError(err) {
   const e = err || {};
   const isAgg = e && (e.name === "AggregateError" || Array.isArray(e.errors));
-
-  const base = {
-    name: e.name || "Error",
-    message: e.message || String(e),
-    stack: e.stack || null,
-  };
-
+  const base = { name: e.name || "Error", message: e.message || String(e), stack: e.stack || null };
   if (isAgg) {
     base.errors = (e.errors || []).map((x) => ({
       name: x?.name || "Error",
@@ -53,7 +41,6 @@ function serializeError(err) {
       stack: x?.stack || null,
     }));
   }
-
   if (e.cause) {
     base.cause = {
       name: e.cause?.name,
@@ -61,7 +48,6 @@ function serializeError(err) {
       stack: e.cause?.stack || null,
     };
   }
-
   return base;
 }
 
@@ -92,32 +78,27 @@ function callbackTokenExpected() {
 
 function requireCallbackToken(req) {
   const expected = callbackTokenExpected();
-  if (!expected) return true; // dev allow if not configured
-
-  // header-only (most reliable + matches your n8n setup)
+  if (!expected) return true; // dev allow
   const got = String(req.headers["x-webhook-token"] || req.headers["x-callback-token"] || "").trim();
   return Boolean(got) && got === expected;
 }
 
 /** ===========================
- *  In-memory fallback (DB off)
+ * In-memory fallback (DB off)
  * =========================== */
 const mem = {
   threads: new Map(),
   messages: new Map(),
   proposals: new Map(),
-  notifications: new Map(), // id -> row
-  jobs: new Map(), // id -> row
+  notifications: new Map(),
+  jobs: new Map(),
+  pushSubs: new Map(), // endpoint -> {recipient, endpoint, p256dh, auth, user_agent}
   audit: [],
 };
 
 function memEnsureThread(threadId, title) {
   if (!mem.threads.has(threadId)) {
-    mem.threads.set(threadId, {
-      id: threadId,
-      title: title || `Thread ${nowIso()}`,
-      created_at: nowIso(),
-    });
+    mem.threads.set(threadId, { id: threadId, title: title || `Thread ${nowIso()}`, created_at: nowIso() });
   }
   if (!mem.messages.has(threadId)) mem.messages.set(threadId, []);
   return mem.threads.get(threadId);
@@ -159,25 +140,14 @@ function memCreateProposal(threadId, { agent, type, title, payload }) {
 
 function memListProposals(status = "pending") {
   const out = [];
-  for (const p of mem.proposals.values()) {
-    if (String(p.status) === String(status)) out.push(p);
-  }
+  for (const p of mem.proposals.values()) if (String(p.status) === String(status)) out.push(p);
   out.sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
   return out.slice(0, 100);
 }
 
 function memCreateNotification({ recipient = "ceo", type = "info", title = "", body = "", payload = {} }) {
   const id = crypto.randomUUID();
-  const row = {
-    id,
-    recipient,
-    type,
-    title,
-    body,
-    payload,
-    read_at: null,
-    created_at: nowIso(),
-  };
+  const row = { id, recipient, type, title, body, payload, read_at: null, created_at: nowIso() };
   mem.notifications.set(id, row);
   return row;
 }
@@ -238,7 +208,69 @@ function memAudit(actor, action, objectType, objectId, meta = {}) {
 }
 
 /** ===========================
- *  n8n notify helper (stable contract)
+ * Push helpers
+ * =========================== */
+async function dbUpsertPushSub(db, { recipient = "ceo", endpoint, p256dh, auth, userAgent }) {
+  const q = await db.query(
+    `insert into push_subscriptions (recipient, endpoint, p256dh, auth, user_agent, last_seen_at)
+     values ($1::text, $2::text, $3::text, $4::text, $5::text, now())
+     on conflict (endpoint) do update
+       set recipient = excluded.recipient,
+           p256dh = excluded.p256dh,
+           auth = excluded.auth,
+           user_agent = excluded.user_agent,
+           last_seen_at = now()
+     returning id, recipient, endpoint, p256dh, auth, user_agent, created_at, last_seen_at`,
+    [recipient, endpoint, p256dh, auth, userAgent || null]
+  );
+  return q.rows?.[0] || null;
+}
+
+async function dbListPushSubs(db, recipient = "ceo") {
+  const q = await db.query(
+    `select recipient, endpoint, p256dh, auth
+     from push_subscriptions
+     where recipient = $1::text
+     order by created_at desc
+     limit 30`,
+    [recipient]
+  );
+  return q.rows || [];
+}
+
+async function pushBroadcastToCeo({ db, title, body, data }) {
+  if (!cfg.PUSH_ENABLED) return;
+
+  const payload = {
+    title: title || "AI HQ",
+    body: body || "",
+    data: data || {},
+  };
+
+  // DB mode
+  if (isDbReady(db)) {
+    const subs = await dbListPushSubs(db, "ceo");
+    for (const s of subs) {
+      await pushSendOne(
+        { endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } },
+        payload
+      );
+    }
+    return;
+  }
+
+  // Memory mode
+  for (const s of mem.pushSubs.values()) {
+    if (s.recipient !== "ceo") continue;
+    await pushSendOne(
+      { endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } },
+      payload
+    );
+  }
+}
+
+/** ===========================
+ * n8n notify helper (stable contract)
  * =========================== */
 function notifyN8n(event, proposal, extra = {}) {
   const url = String(cfg.N8N_WEBHOOK_URL || "").trim();
@@ -246,35 +278,18 @@ function notifyN8n(event, proposal, extra = {}) {
 
   const payload = {
     event,
-
-    // stable ids
     proposalId: extra.proposalId || proposal?.id || null,
     threadId: extra.threadId || proposal?.thread_id || null,
-
-    // who/when
     by: extra.by || proposal?.decision_by || "unknown",
     decidedAt: extra.decidedAt || proposal?.decided_at || null,
-
-    // execution tracking
     jobId: extra.jobId || null,
-
-    // callback contract for n8n
-    callback: extra.callback || {
-      url: "/api/executions/callback",
-      tokenHeader: "x-webhook-token",
-    },
-
-    // optional structured fields (if you include them in proposal payload)
+    callback: extra.callback || { url: "/api/executions/callback", tokenHeader: "x-webhook-token" },
     title: proposal?.title || extra.title || null,
     summary: extra.summary || null,
     tasks: extra.tasks || null,
     ownerMap: extra.ownerMap || null,
     decision: extra.decision || proposal?.status || null,
-
-    // full context
     proposal: proposal || null,
-
-    // allow extension
     ...extra,
   };
 
@@ -300,7 +315,7 @@ function fallbackSynthesisFromNotes(out) {
 }
 
 /** ===========================
- *  DB helpers: notifications/jobs/audit
+ * DB helpers: notifications/jobs/audit
  * =========================== */
 async function dbAudit(db, actor, action, objectType, objectId, meta) {
   if (!isDbReady(db)) return;
@@ -391,7 +406,7 @@ async function dbUpdateJob(db, id, patch) {
 }
 
 /** ===========================
- *  Router
+ * Router
  * =========================== */
 export function apiRouter({ db, wsHub }) {
   const r = express.Router();
@@ -412,16 +427,48 @@ export function apiRouter({ db, wsHub }) {
         "POST /api/proposals/:id/decision",
         "GET /api/notifications?recipient=ceo&unread=1",
         "POST /api/notifications/:id/read",
+        "POST /api/push/subscribe",
         "POST /api/executions/callback (token)",
         "POST /api/debug/openai (token)",
       ],
+      telegram: { enabled: cfg.TELEGRAM_ENABLED },
+      push: { enabled: cfg.PUSH_ENABLED, vapidPublicKey: cfg.VAPID_PUBLIC_KEY ? "set" : "missing" },
     })
   );
 
   r.get("/agents", (_req, res) => okJson(res, { ok: true, agents: listAgents() }));
 
   /** ===========================
-   * Notifications (CEO-only)
+   * Push: subscribe from phone/PWA
+   * =========================== */
+  r.post("/push/subscribe", async (req, res) => {
+    const recipient = String(req.body?.recipient || "ceo").trim() || "ceo";
+    const sub = req.body?.subscription || req.body?.sub || null;
+    const endpoint = String(sub?.endpoint || "").trim();
+    const p256dh = String(sub?.keys?.p256dh || "").trim();
+    const auth = String(sub?.keys?.auth || "").trim();
+    const ua = String(req.headers["user-agent"] || "").trim();
+
+    if (!endpoint || !p256dh || !auth) {
+      return okJson(res, { ok: false, error: "subscription {endpoint, keys.p256dh, keys.auth} required" });
+    }
+
+    try {
+      if (!isDbReady(db)) {
+        mem.pushSubs.set(endpoint, { recipient, endpoint, p256dh, auth, user_agent: ua, created_at: nowIso() });
+        return okJson(res, { ok: true, dbDisabled: true });
+      }
+
+      await dbUpsertPushSub(db, { recipient, endpoint, p256dh, auth, userAgent: ua });
+      return okJson(res, { ok: true });
+    } catch (e) {
+      const details = serializeError(e);
+      return okJson(res, { ok: false, error: details.name, details });
+    }
+  });
+
+  /** ===========================
+   * Notifications
    * =========================== */
   r.get("/notifications", async (req, res) => {
     const recipient = String(req.query.recipient || "ceo").trim() || "ceo";
@@ -433,12 +480,10 @@ export function apiRouter({ db, wsHub }) {
         const rows = memListNotifications({ recipient, unreadOnly, limit });
         return okJson(res, { ok: true, recipient, unreadOnly, notifications: rows, dbDisabled: true });
       }
-
       const rows = await dbListNotifications(db, { recipient, unreadOnly, limit });
       return okJson(res, { ok: true, recipient, unreadOnly, notifications: rows });
     } catch (e) {
       const details = serializeError(e);
-      console.error("[api/notifications] ERROR", details);
       return okJson(res, { ok: false, error: details.name, details });
     }
   });
@@ -451,24 +496,18 @@ export function apiRouter({ db, wsHub }) {
       if (!isDbReady(db)) {
         const row = memMarkRead(id);
         if (!row) return okJson(res, { ok: false, error: "not found", dbDisabled: true });
-        try {
-          wsHub?.broadcast?.({ type: "notification.read", notification: row });
-        } catch {}
+        wsHub?.broadcast?.({ type: "notification.read", notification: row });
         memAudit("ceo", "notification.read", "notification", id, {});
         return okJson(res, { ok: true, notification: row, dbDisabled: true });
       }
 
       const row = await dbMarkNotificationRead(db, id);
       if (!row) return okJson(res, { ok: false, error: "not found" });
-
-      try {
-        wsHub?.broadcast?.({ type: "notification.read", notification: row });
-      } catch {}
+      wsHub?.broadcast?.({ type: "notification.read", notification: row });
       await dbAudit(db, "ceo", "notification.read", "notification", String(row.id), {});
       return okJson(res, { ok: true, notification: row });
     } catch (e) {
       const details = serializeError(e);
-      console.error("[api/notifications/:id/read] ERROR", details);
       return okJson(res, { ok: false, error: details.name, details });
     }
   });
@@ -477,9 +516,7 @@ export function apiRouter({ db, wsHub }) {
    * n8n -> HQ callback (job updates)
    * =========================== */
   r.post("/executions/callback", async (req, res) => {
-    if (!requireCallbackToken(req)) {
-      return okJson(res, { ok: false, error: "forbidden (missing/invalid token)" });
-    }
+    if (!requireCallbackToken(req)) return okJson(res, { ok: false, error: "forbidden (missing/invalid token)" });
 
     const jobId = String(req.body?.jobId || req.body?.id || "").trim();
     const status = String(req.body?.status || "").trim().toLowerCase();
@@ -493,21 +530,19 @@ export function apiRouter({ db, wsHub }) {
     }
 
     try {
-      // MEMORY mode
+      const patch = {
+        status,
+        output: result || {},
+        error: error || null,
+        started_at: status === "running" ? nowIso() : null,
+        finished_at: status === "completed" || status === "failed" ? nowIso() : null,
+      };
+
       if (!isDbReady(db)) {
-        const patch = {
-          status,
-          output: result || {},
-          error: error || null,
-          started_at: status === "running" ? nowIso() : null,
-          finished_at: status === "completed" || status === "failed" ? nowIso() : null,
-        };
         const row = memUpdateJob(jobId, patch);
         if (!row) return okJson(res, { ok: false, error: "job not found", dbDisabled: true });
 
-        try {
-          wsHub?.broadcast?.({ type: "job.updated", job: row });
-        } catch {}
+        wsHub?.broadcast?.({ type: "job.updated", job: row });
         memAudit("n8n", "job.update", "job", jobId, { status });
 
         const n = memCreateNotification({
@@ -517,28 +552,22 @@ export function apiRouter({ db, wsHub }) {
           body: status === "failed" ? error || "Execution failed" : "Execution update received",
           payload: { jobId, status, result },
         });
-        try {
-          wsHub?.broadcast?.({ type: "notification.created", notification: n });
-        } catch {}
+        wsHub?.broadcast?.({ type: "notification.created", notification: n });
+
+        await pushBroadcastToCeo({
+          db,
+          title: "AI HQ Execution",
+          body: `${status.toUpperCase()} — job ${jobId.slice(0, 8)}`,
+          data: { type: "job.updated", jobId, status },
+        });
 
         return okJson(res, { ok: true, job: row, notification: n, dbDisabled: true });
       }
 
-      // DB mode
-      const patch = {
-        status,
-        output: result || {},
-        error: error || null,
-        started_at: status === "running" ? nowIso() : null,
-        finished_at: status === "completed" || status === "failed" ? nowIso() : null,
-      };
-
       const row = await dbUpdateJob(db, jobId, patch);
       if (!row) return okJson(res, { ok: false, error: "job not found" });
 
-      try {
-        wsHub?.broadcast?.({ type: "job.updated", job: row });
-      } catch {}
+      wsHub?.broadcast?.({ type: "job.updated", job: row });
       await dbAudit(db, "n8n", "job.update", "job", String(jobId), { status });
 
       const notif = await dbCreateNotification(db, {
@@ -548,14 +577,18 @@ export function apiRouter({ db, wsHub }) {
         body: status === "failed" ? error || "Execution failed" : "Execution update received",
         payload: { jobId, status, result },
       });
-      try {
-        wsHub?.broadcast?.({ type: "notification.created", notification: notif });
-      } catch {}
+      wsHub?.broadcast?.({ type: "notification.created", notification: notif });
+
+      await pushBroadcastToCeo({
+        db,
+        title: "AI HQ Execution",
+        body: `${status.toUpperCase()} — job ${jobId.slice(0, 8)}`,
+        data: { type: "job.updated", jobId, status },
+      });
 
       return okJson(res, { ok: true, job: row, notification: notif });
     } catch (e) {
       const details = serializeError(e);
-      console.error("[api/executions/callback] ERROR", details);
       return okJson(res, { ok: false, error: details.name, details });
     }
   });
@@ -584,7 +617,6 @@ export function apiRouter({ db, wsHub }) {
       return okJson(res, { ok: true, threadId, messages: q.rows || [] });
     } catch (e) {
       const details = serializeError(e);
-      console.error("[api/threads/:id/messages] ERROR", details);
       return okJson(res, { ok: false, error: details.name, details });
     }
   });
@@ -613,13 +645,12 @@ export function apiRouter({ db, wsHub }) {
       return okJson(res, { ok: true, status, proposals: q.rows || [] });
     } catch (e) {
       const details = serializeError(e);
-      console.error("[api/proposals] ERROR", details);
       return okJson(res, { ok: false, error: details.name, details });
     }
   });
 
   /** ===========================
-   * Decision endpoint (ONE-SHOT) + Job + n8n + notify
+   * Decision + Job + n8n + notify + push (+ optional Telegram)
    * =========================== */
   r.post("/proposals/:id/decision", async (req, res) => {
     const id = String(req.params.id || "").trim();
@@ -637,26 +668,15 @@ export function apiRouter({ db, wsHub }) {
       if (!isDbReady(db)) {
         const row = mem.proposals.get(id);
         if (!row) return okJson(res, { ok: false, error: "proposal not found", dbDisabled: true });
-
-        if (isFinalStatus(row.status)) {
-          return okJson(res, { ok: false, error: "proposal already decided", proposal: row, dbDisabled: true });
-        }
+        if (isFinalStatus(row.status)) return okJson(res, { ok: false, error: "proposal already decided", proposal: row, dbDisabled: true });
 
         row.status = decision;
         row.decided_at = nowIso();
         row.decision_by = by;
-
         row.payload = row.payload && typeof row.payload === "object" ? row.payload : {};
-        row.payload.decision = {
-          by,
-          decision,
-          reason: decision === "rejected" ? reason : "",
-          at: row.decided_at,
-        };
+        row.payload.decision = { by, decision, reason: decision === "rejected" ? reason : "", at: row.decided_at };
 
-        try {
-          wsHub?.broadcast?.({ type: "proposal.updated", proposal: row });
-        } catch {}
+        wsHub?.broadcast?.({ type: "proposal.updated", proposal: row });
         memAudit(by, "proposal.decision", "proposal", id, { decision });
 
         const notif = memCreateNotification({
@@ -666,22 +686,22 @@ export function apiRouter({ db, wsHub }) {
           body: row.title || "",
           payload: { proposalId: row.id, threadId: row.thread_id, decision, reason },
         });
-        try {
-          wsHub?.broadcast?.({ type: "notification.created", notification: notif });
-        } catch {}
+        wsHub?.broadcast?.({ type: "notification.created", notification: notif });
+
+        await pushBroadcastToCeo({
+          db,
+          title: "AI HQ Proposal",
+          body: `${decision.toUpperCase()} — ${row.title || "Proposal"}`,
+          data: { type: "proposal.updated", proposalId: row.id, decision },
+        });
+
+        // Telegram optional (OFF by default)
+        await sendTelegram({ text: `AI HQ: proposal ${decision}\n${row.title || row.id}` });
 
         let job = null;
         if (decision === "approved") {
-          job = memCreateJob({
-            proposalId: row.id,
-            type: String(row.type || "generic"),
-            status: "queued",
-            input: { proposal: row },
-          });
-
-          try {
-            wsHub?.broadcast?.({ type: "job.updated", job });
-          } catch {}
+          job = memCreateJob({ proposalId: row.id, type: String(row.type || "generic"), status: "queued", input: { proposal: row } });
+          wsHub?.broadcast?.({ type: "job.updated", job });
           memAudit("system", "job.create", "job", job.id, { proposalId: row.id });
 
           notifyN8n("proposal.approved", row, {
@@ -698,7 +718,7 @@ export function apiRouter({ db, wsHub }) {
         return okJson(res, { ok: true, proposal: row, notification: notif, job, dbDisabled: true });
       }
 
-      // DB mode — atomic update ONLY if pending
+      // DB mode
       const q = await db.query(
         `update proposals
          set status = $1::text,
@@ -733,9 +753,7 @@ export function apiRouter({ db, wsHub }) {
         return okJson(res, { ok: false, error: "proposal already decided", proposal: existing });
       }
 
-      try {
-        wsHub?.broadcast?.({ type: "proposal.updated", proposal: row });
-      } catch {}
+      wsHub?.broadcast?.({ type: "proposal.updated", proposal: row });
       await dbAudit(db, by, "proposal.decision", "proposal", String(row.id), { decision });
 
       const notif = await dbCreateNotification(db, {
@@ -745,9 +763,16 @@ export function apiRouter({ db, wsHub }) {
         body: row.title || "",
         payload: { proposalId: row.id, threadId: row.thread_id, decision, reason: decision === "rejected" ? reason : "" },
       });
-      try {
-        wsHub?.broadcast?.({ type: "notification.created", notification: notif });
-      } catch {}
+      wsHub?.broadcast?.({ type: "notification.created", notification: notif });
+
+      await pushBroadcastToCeo({
+        db,
+        title: "AI HQ Proposal",
+        body: `${decision.toUpperCase()} — ${row.title || "Proposal"}`,
+        data: { type: "proposal.updated", proposalId: String(row.id), decision },
+      });
+
+      await sendTelegram({ text: `AI HQ: proposal ${decision}\n${row.title || row.id}` });
 
       let job = null;
       if (decision === "approved") {
@@ -758,9 +783,7 @@ export function apiRouter({ db, wsHub }) {
           input: { proposal: row },
         });
 
-        try {
-          wsHub?.broadcast?.({ type: "job.updated", job });
-        } catch {}
+        wsHub?.broadcast?.({ type: "job.updated", job });
         await dbAudit(db, "system", "job.create", "job", String(job.id), { proposalId: String(row.id) });
 
         notifyN8n("proposal.approved", row, {
@@ -777,19 +800,17 @@ export function apiRouter({ db, wsHub }) {
       return okJson(res, { ok: true, proposal: row, notification: notif, job });
     } catch (e) {
       const details = serializeError(e);
-      console.error("[api/proposals/:id/decision] ERROR", details);
       return okJson(res, { ok: false, error: details.name, details });
     }
   });
 
   /** ===========================
-   * Chat (single agent)
+   * Chat
    * =========================== */
   r.post("/chat", async (req, res) => {
     const message = String(req.body?.message || "").trim();
     const agent = String(req.body?.agent || req.body?.agentId || "").trim();
     const threadIdIn = String(req.body?.threadId || "").trim();
-
     if (!message) return okJson(res, { ok: false, error: "message required" });
 
     let threadId = threadIdIn || crypto.randomUUID();
@@ -802,14 +823,7 @@ export function apiRouter({ db, wsHub }) {
         const out = await kernelHandle({ message, agentHint: agent || undefined });
 
         memAddMessage(threadId, { role: "assistant", agent: out.agent || null, content: out.replyText || "", meta: {} });
-
-        try {
-          wsHub?.broadcast?.({
-            type: "thread.message",
-            threadId,
-            message: { role: "assistant", agent: out.agent, content: out.replyText, at: nowIso() },
-          });
-        } catch {}
+        wsHub?.broadcast?.({ type: "thread.message", threadId, message: { role: "assistant", agent: out.agent, content: out.replyText, at: nowIso() } });
 
         return okJson(res, { ok: true, threadId, agent: out.agent, replyText: out.replyText || "(no text)", proposal: null, dbDisabled: true });
       }
@@ -833,24 +847,17 @@ export function apiRouter({ db, wsHub }) {
         [threadId, out.agent || null, out.replyText || "", {}]
       );
 
-      try {
-        wsHub?.broadcast?.({
-          type: "thread.message",
-          threadId,
-          message: { role: "assistant", agent: out.agent, content: out.replyText, at: nowIso() },
-        });
-      } catch {}
+      wsHub?.broadcast?.({ type: "thread.message", threadId, message: { role: "assistant", agent: out.agent, content: out.replyText, at: nowIso() } });
 
       return okJson(res, { ok: true, threadId, agent: out.agent, replyText: out.replyText || "(no text)", proposal: null });
     } catch (e) {
       const details = serializeError(e);
-      console.error("[api/chat] ERROR", details);
       return okJson(res, { ok: false, error: details.name, details });
     }
   });
 
   /** ===========================
-   * Debate (multi-agent -> proposal)
+   * Debate
    * =========================== */
   r.post("/debate", async (req, res) => {
     const message = String(req.body?.message || "").trim();
@@ -870,8 +877,6 @@ export function apiRouter({ db, wsHub }) {
     let threadId = threadIdIn || crypto.randomUUID();
 
     try {
-      console.log("[api/debate] start", { engine: DEBATE_ENGINE_VERSION, mode, rounds, agents });
-
       if (!isDbReady(db)) {
         memEnsureThread(threadId);
         memAddMessage(threadId, { role: "user", agent: agent || null, content: message, meta: { kind: "debate" } });
@@ -922,47 +927,32 @@ export function apiRouter({ db, wsHub }) {
           savedProposal = ins.rows?.[0] || null;
         }
 
-        try {
-          wsHub?.broadcast?.({ type: "proposal.created", proposal: savedProposal });
-        } catch {}
+        wsHub?.broadcast?.({ type: "proposal.created", proposal: savedProposal });
+
+        // create notification
+        const notifPayload = { proposalId: savedProposal?.id, threadId };
+        let notif = null;
 
         if (!isDbReady(db)) {
-          const notif = memCreateNotification({
-            recipient: "ceo",
-            type: "info",
-            title: "New Proposal Needs Review",
-            body: savedProposal?.title || "",
-            payload: { proposalId: savedProposal?.id, threadId },
-          });
-          try {
-            wsHub?.broadcast?.({ type: "notification.created", notification: notif });
-          } catch {}
+          notif = memCreateNotification({ recipient: "ceo", type: "info", title: "New Proposal Needs Review", body: savedProposal?.title || "", payload: notifPayload });
+          wsHub?.broadcast?.({ type: "notification.created", notification: notif });
         } else {
-          const notif = await dbCreateNotification(db, {
-            recipient: "ceo",
-            type: "info",
-            title: "New Proposal Needs Review",
-            body: savedProposal?.title || "",
-            payload: { proposalId: savedProposal?.id, threadId },
-          });
-          try {
-            wsHub?.broadcast?.({ type: "notification.created", notification: notif });
-          } catch {}
+          notif = await dbCreateNotification(db, { recipient: "ceo", type: "info", title: "New Proposal Needs Review", body: savedProposal?.title || "", payload: notifPayload });
+          wsHub?.broadcast?.({ type: "notification.created", notification: notif });
           await dbAudit(db, "kernel", "proposal.create", "proposal", String(savedProposal?.id || ""), { type });
         }
+
+        // ✅ Push to phone
+        await pushBroadcastToCeo({
+          db,
+          title: "New Proposal",
+          body: savedProposal?.title || "New proposal needs review",
+          data: { type: "proposal.created", proposalId: String(savedProposal?.id || "") },
+        });
+
+        // Telegram optional (OFF)
+        await sendTelegram({ text: `AI HQ: new proposal\n${savedProposal?.title || savedProposal?.id}` });
       }
-
-      const debug = {
-        engineVersion: DEBATE_ENGINE_VERSION,
-        mode,
-        rounds,
-        agents,
-        synthesisLen: synthesisText.length,
-        hasProposal: Boolean(savedProposal),
-        agentLens: (out.agentNotes || []).map((x) => ({ agentId: x.agentId, len: String(x.text || "").length })),
-      };
-
-      console.log("[api/debate] done", debug);
 
       return okJson(res, {
         ok: true,
@@ -971,11 +961,9 @@ export function apiRouter({ db, wsHub }) {
         agentNotes: out.agentNotes || [],
         proposal: savedProposal,
         dbDisabled: !isDbReady(db),
-        debug,
       });
     } catch (e) {
       const details = serializeError(e);
-      console.error("[api/debate] ERROR", details);
       return okJson(res, { ok: false, error: details.name, details });
     }
   });
@@ -984,9 +972,7 @@ export function apiRouter({ db, wsHub }) {
    * Debug OpenAI
    * =========================== */
   r.post("/debug/openai", async (req, res) => {
-    if (!requireDebugToken(req)) {
-      return okJson(res, { ok: false, error: "forbidden (missing/invalid token)" });
-    }
+    if (!requireDebugToken(req)) return okJson(res, { ok: false, error: "forbidden (missing/invalid token)" });
 
     try {
       const agent = String(req.body?.agent || "orion").trim();
@@ -1004,7 +990,6 @@ export function apiRouter({ db, wsHub }) {
       });
     } catch (e) {
       const details = serializeError(e);
-      console.error("[api/debug/openai] ERROR", details);
       return okJson(res, { ok: false, error: details.name, details });
     }
   });
