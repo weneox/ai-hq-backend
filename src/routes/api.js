@@ -1,4 +1,4 @@
-// src/routes/api.js (FINAL v2.6 — Push + Telegram toggle + Jobs + n8n callback + Audit)
+// src/routes/api.js (FINAL v2.7 — Push ON, Telegram OFF by flag, Jobs + n8n callback + Audit)
 import express from "express";
 import crypto from "crypto";
 import { cfg } from "../config.js";
@@ -81,6 +81,14 @@ function requireCallbackToken(req) {
   if (!expected) return true; // dev allow
   const got = String(req.headers["x-webhook-token"] || req.headers["x-callback-token"] || "").trim();
   return Boolean(got) && got === expected;
+}
+
+// ✅ Telegram hard toggle: OFF by default (only sends when TELEGRAM_ENABLED=1)
+async function maybeTelegram(text) {
+  if (!cfg.TELEGRAM_ENABLED) return;
+  try {
+    await sendTelegram({ text });
+  } catch {}
 }
 
 /** ===========================
@@ -247,30 +255,22 @@ async function pushBroadcastToCeo({ db, title, body, data }) {
     data: data || {},
   };
 
-  // DB mode
   if (isDbReady(db)) {
     const subs = await dbListPushSubs(db, "ceo");
     for (const s of subs) {
-      await pushSendOne(
-        { endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } },
-        payload
-      );
+      await pushSendOne({ endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } }, payload);
     }
     return;
   }
 
-  // Memory mode
   for (const s of mem.pushSubs.values()) {
     if (s.recipient !== "ceo") continue;
-    await pushSendOne(
-      { endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } },
-      payload
-    );
+    await pushSendOne({ endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } }, payload);
   }
 }
 
 /** ===========================
- * n8n notify helper (stable contract)
+ * n8n notify helper
  * =========================== */
 function notifyN8n(event, proposal, extra = {}) {
   const url = String(cfg.N8N_WEBHOOK_URL || "").trim();
@@ -431,15 +431,15 @@ export function apiRouter({ db, wsHub }) {
         "POST /api/executions/callback (token)",
         "POST /api/debug/openai (token)",
       ],
-      telegram: { enabled: cfg.TELEGRAM_ENABLED },
-      push: { enabled: cfg.PUSH_ENABLED, vapidPublicKey: cfg.VAPID_PUBLIC_KEY ? "set" : "missing" },
+      telegram: { enabled: Boolean(cfg.TELEGRAM_ENABLED) },
+      push: { enabled: Boolean(cfg.PUSH_ENABLED), vapidPublicKey: cfg.VAPID_PUBLIC_KEY ? "set" : "missing" },
     })
   );
 
   r.get("/agents", (_req, res) => okJson(res, { ok: true, agents: listAgents() }));
 
   /** ===========================
-   * Push: subscribe from phone/PWA
+   * Push: subscribe
    * =========================== */
   r.post("/push/subscribe", async (req, res) => {
     const recipient = String(req.body?.recipient || "ceo").trim() || "ceo";
@@ -650,7 +650,7 @@ export function apiRouter({ db, wsHub }) {
   });
 
   /** ===========================
-   * Decision + Job + n8n + notify + push (+ optional Telegram)
+   * Decision + Job + n8n + notify + push
    * =========================== */
   r.post("/proposals/:id/decision", async (req, res) => {
     const id = String(req.params.id || "").trim();
@@ -668,7 +668,9 @@ export function apiRouter({ db, wsHub }) {
       if (!isDbReady(db)) {
         const row = mem.proposals.get(id);
         if (!row) return okJson(res, { ok: false, error: "proposal not found", dbDisabled: true });
-        if (isFinalStatus(row.status)) return okJson(res, { ok: false, error: "proposal already decided", proposal: row, dbDisabled: true });
+        if (isFinalStatus(row.status)) {
+          return okJson(res, { ok: false, error: "proposal already decided", proposal: row, dbDisabled: true });
+        }
 
         row.status = decision;
         row.decided_at = nowIso();
@@ -695,12 +697,17 @@ export function apiRouter({ db, wsHub }) {
           data: { type: "proposal.updated", proposalId: row.id, decision },
         });
 
-        // Telegram optional (OFF by default)
-        await sendTelegram({ text: `AI HQ: proposal ${decision}\n${row.title || row.id}` });
+        // Telegram OFF unless TELEGRAM_ENABLED=1
+        await maybeTelegram(`AI HQ: proposal ${decision}\n${row.title || row.id}`);
 
         let job = null;
         if (decision === "approved") {
-          job = memCreateJob({ proposalId: row.id, type: String(row.type || "generic"), status: "queued", input: { proposal: row } });
+          job = memCreateJob({
+            proposalId: row.id,
+            type: String(row.type || "generic"),
+            status: "queued",
+            input: { proposal: row },
+          });
           wsHub?.broadcast?.({ type: "job.updated", job });
           memAudit("system", "job.create", "job", job.id, { proposalId: row.id });
 
@@ -772,7 +779,8 @@ export function apiRouter({ db, wsHub }) {
         data: { type: "proposal.updated", proposalId: String(row.id), decision },
       });
 
-      await sendTelegram({ text: `AI HQ: proposal ${decision}\n${row.title || row.id}` });
+      // Telegram OFF unless TELEGRAM_ENABLED=1
+      await maybeTelegram(`AI HQ: proposal ${decision}\n${row.title || row.id}`);
 
       let job = null;
       if (decision === "approved") {
@@ -823,9 +831,20 @@ export function apiRouter({ db, wsHub }) {
         const out = await kernelHandle({ message, agentHint: agent || undefined });
 
         memAddMessage(threadId, { role: "assistant", agent: out.agent || null, content: out.replyText || "", meta: {} });
-        wsHub?.broadcast?.({ type: "thread.message", threadId, message: { role: "assistant", agent: out.agent, content: out.replyText, at: nowIso() } });
+        wsHub?.broadcast?.({
+          type: "thread.message",
+          threadId,
+          message: { role: "assistant", agent: out.agent, content: out.replyText, at: nowIso() },
+        });
 
-        return okJson(res, { ok: true, threadId, agent: out.agent, replyText: out.replyText || "(no text)", proposal: null, dbDisabled: true });
+        return okJson(res, {
+          ok: true,
+          threadId,
+          agent: out.agent,
+          replyText: out.replyText || "(no text)",
+          proposal: null,
+          dbDisabled: true,
+        });
       }
 
       if (!threadIdIn) {
@@ -847,9 +866,19 @@ export function apiRouter({ db, wsHub }) {
         [threadId, out.agent || null, out.replyText || "", {}]
       );
 
-      wsHub?.broadcast?.({ type: "thread.message", threadId, message: { role: "assistant", agent: out.agent, content: out.replyText, at: nowIso() } });
+      wsHub?.broadcast?.({
+        type: "thread.message",
+        threadId,
+        message: { role: "assistant", agent: out.agent, content: out.replyText, at: nowIso() },
+      });
 
-      return okJson(res, { ok: true, threadId, agent: out.agent, replyText: out.replyText || "(no text)", proposal: null });
+      return okJson(res, {
+        ok: true,
+        threadId,
+        agent: out.agent,
+        replyText: out.replyText || "(no text)",
+        proposal: null,
+      });
     } catch (e) {
       const details = serializeError(e);
       return okJson(res, { ok: false, error: details.name, details });
@@ -899,7 +928,12 @@ export function apiRouter({ db, wsHub }) {
       if (!synthesisText) synthesisText = fallbackSynthesisFromNotes(out);
 
       if (!isDbReady(db)) {
-        memAddMessage(threadId, { role: "assistant", agent: "kernel", content: synthesisText, meta: { kind: "debate.synthesis" } });
+        memAddMessage(threadId, {
+          role: "assistant",
+          agent: "kernel",
+          content: synthesisText,
+          meta: { kind: "debate.synthesis" },
+        });
       } else {
         await db.query(
           `insert into messages (thread_id, role, agent, content, meta)
@@ -934,10 +968,22 @@ export function apiRouter({ db, wsHub }) {
         let notif = null;
 
         if (!isDbReady(db)) {
-          notif = memCreateNotification({ recipient: "ceo", type: "info", title: "New Proposal Needs Review", body: savedProposal?.title || "", payload: notifPayload });
+          notif = memCreateNotification({
+            recipient: "ceo",
+            type: "info",
+            title: "New Proposal Needs Review",
+            body: savedProposal?.title || "",
+            payload: notifPayload,
+          });
           wsHub?.broadcast?.({ type: "notification.created", notification: notif });
         } else {
-          notif = await dbCreateNotification(db, { recipient: "ceo", type: "info", title: "New Proposal Needs Review", body: savedProposal?.title || "", payload: notifPayload });
+          notif = await dbCreateNotification(db, {
+            recipient: "ceo",
+            type: "info",
+            title: "New Proposal Needs Review",
+            body: savedProposal?.title || "",
+            payload: notifPayload,
+          });
           wsHub?.broadcast?.({ type: "notification.created", notification: notif });
           await dbAudit(db, "kernel", "proposal.create", "proposal", String(savedProposal?.id || ""), { type });
         }
@@ -950,8 +996,8 @@ export function apiRouter({ db, wsHub }) {
           data: { type: "proposal.created", proposalId: String(savedProposal?.id || "") },
         });
 
-        // Telegram optional (OFF)
-        await sendTelegram({ text: `AI HQ: new proposal\n${savedProposal?.title || savedProposal?.id}` });
+        // Telegram OFF unless TELEGRAM_ENABLED=1
+        await maybeTelegram(`AI HQ: new proposal\n${savedProposal?.title || savedProposal?.id}`);
       }
 
       return okJson(res, {
