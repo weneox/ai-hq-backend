@@ -1,4 +1,4 @@
-// src/utils/push.js (FINAL v1.0)
+// src/utils/push.js (FINAL v1.1)
 import webpush from "web-push";
 import { cfg } from "../config.js";
 
@@ -19,15 +19,39 @@ function ensureConfigured() {
   return true;
 }
 
+function safeStringify(x) {
+  try {
+    return JSON.stringify(x ?? {});
+  } catch {
+    return JSON.stringify({ title: "AI HQ", body: "Notification", data: {} });
+  }
+}
+
 // subscription: { endpoint, keys:{p256dh,auth} }
-export async function pushSendOne(subscription, payloadObj) {
+// payloadObj: { title, body, data }
+export async function pushSendOne(subscription, payloadObj, options = {}) {
   if (!cfg.PUSH_ENABLED) return { ok: true, skipped: "PUSH_ENABLED=0" };
   if (!ensureConfigured()) return { ok: false, error: "missing VAPID keys" };
 
+  const ttl = Number.isFinite(Number(options.ttl)) ? Number(options.ttl) : 60; // seconds
+  const payload = safeStringify(payloadObj || {});
+
   try {
-    await webpush.sendNotification(subscription, JSON.stringify(payloadObj || {}));
+    await webpush.sendNotification(subscription, payload, { TTL: ttl });
     return { ok: true };
   } catch (e) {
-    return { ok: false, error: String(e?.message || e) };
+    const statusCode = e?.statusCode || e?.status || null;
+    const body = e?.body || null;
+
+    // Common: 410 Gone / 404 Not Found => subscription expired/invalid
+    const expired = statusCode === 410 || statusCode === 404;
+
+    return {
+      ok: false,
+      error: String(e?.message || e),
+      statusCode,
+      expired,
+      body: typeof body === "string" ? body.slice(0, 500) : body,
+    };
   }
 }
