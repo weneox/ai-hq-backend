@@ -15,12 +15,14 @@ async function main() {
 
   if (cfg.TRUST_PROXY) app.set("trust proxy", 1);
 
+  // security headers
   app.use(helmet());
 
+  // CORS: allow server-to-server (no Origin) + allow listed origins
   app.use(
     cors({
       origin: (origin, cb) => {
-        if (!origin) return cb(null, true);
+        if (!origin) return cb(null, true); // ✅ server-to-server / curl / powershell
         const allowed =
           cfg.CORS_ORIGIN === "*" ||
           String(cfg.CORS_ORIGIN || "")
@@ -35,10 +37,24 @@ async function main() {
     })
   );
 
+  // Body parsers
   app.use(express.json({ limit: "1mb" }));
+  app.use(express.urlencoded({ extended: false })); // ✅ safe fallback
+
+  // Root info (so browser doesn't show Not found)
+  app.get("/", (_req, res) => {
+    res.setHeader("Content-Type", "application/json; charset=utf-8");
+    res.status(200).json({
+      ok: true,
+      service: "ai-hq-backend",
+      env: cfg.APP_ENV,
+      endpoints: ["GET /health", "GET /__whoami", "GET /api"],
+    });
+  });
 
   app.get("/__whoami", (_req, res) => {
-    res.json({
+    res.setHeader("Content-Type", "application/json; charset=utf-8");
+    res.status(200).json({
       ok: true,
       service: "ai-hq-backend",
       env: cfg.APP_ENV,
@@ -60,7 +76,10 @@ async function main() {
       db: { enabled: hasDbUrl, ok: false },
     };
 
-    if (!hasDbUrl || !db) return res.json(out);
+    if (!hasDbUrl || !db) {
+      res.setHeader("Content-Type", "application/json; charset=utf-8");
+      return res.status(200).json(out);
+    }
 
     try {
       const r = await db.query("select 1 as ok");
@@ -69,7 +88,8 @@ async function main() {
       out.db.ok = false;
     }
 
-    res.json(out);
+    res.setHeader("Content-Type", "application/json; charset=utf-8");
+    return res.status(200).json(out);
   });
 
   // ✅ init DB BEFORE mounting routes so getDb() is real
@@ -87,8 +107,18 @@ async function main() {
   // ✅ mount AFTER DB init
   app.use("/api", apiRouter({ db: getDb(), wsHub }));
 
+  // Fallback 404 (JSON)
   app.use((req, res) => {
+    res.setHeader("Content-Type", "application/json; charset=utf-8");
     res.status(404).json({ ok: false, error: "Not found", path: req.path });
+  });
+
+  // Global error handler (JSON)
+  // eslint-disable-next-line no-unused-vars
+  app.use((err, _req, res, _next) => {
+    console.error("[api] error:", err?.message || err);
+    res.setHeader("Content-Type", "application/json; charset=utf-8");
+    res.status(500).json({ ok: false, error: "Server error" });
   });
 
   server.listen(cfg.PORT, () => {

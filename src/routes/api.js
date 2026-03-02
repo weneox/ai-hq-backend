@@ -1,4 +1,4 @@
-// src/routes/api.js (FINAL v2.7 — Push ON, Telegram OFF by flag, Jobs + n8n callback + Audit)
+// src/routes/api.js (FINAL v2.7.2 — Push ON, Telegram OFF by flag, Jobs + n8n callback + Audit)
 import express from "express";
 import crypto from "crypto";
 import { cfg } from "../config.js";
@@ -258,14 +258,18 @@ async function pushBroadcastToCeo({ db, title, body, data }) {
   if (isDbReady(db)) {
     const subs = await dbListPushSubs(db, "ceo");
     for (const s of subs) {
-      await pushSendOne({ endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } }, payload);
+      try {
+        await pushSendOne({ endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } }, payload);
+      } catch {}
     }
     return;
   }
 
   for (const s of mem.pushSubs.values()) {
     if (s.recipient !== "ceo") continue;
-    await pushSendOne({ endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } }, payload);
+    try {
+      await pushSendOne({ endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } }, payload);
+    } catch {}
   }
 }
 
@@ -441,6 +445,13 @@ export function apiRouter({ db, wsHub }) {
   /** ===========================
    * Push: subscribe
    * =========================== */
+
+  // ✅ So browser GET doesn't look like missing route
+  r.get("/push/subscribe", (_req, res) => {
+    res.setHeader("Content-Type", "application/json; charset=utf-8");
+    return res.status(405).json({ ok: false, error: "Method Not Allowed. Use POST /api/push/subscribe" });
+  });
+
   r.post("/push/subscribe", async (req, res) => {
     const recipient = String(req.body?.recipient || "ceo").trim() || "ceo";
     const sub = req.body?.subscription || req.body?.sub || null;
