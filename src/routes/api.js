@@ -1,4 +1,4 @@
-// src/routes/api.js (FINAL v2.7.2 — Push ON, Telegram OFF by flag, Jobs + n8n callback + Audit)
+// src/routes/api.js (FINAL v2.7.3 — Push ON, Telegram OFF by flag, Jobs + n8n callback + Audit)
 import express from "express";
 import crypto from "crypto";
 import { cfg } from "../config.js";
@@ -431,6 +431,7 @@ export function apiRouter({ db, wsHub }) {
         "POST /api/proposals/:id/decision",
         "GET /api/notifications?recipient=ceo&unread=1",
         "POST /api/notifications/:id/read",
+        "GET /api/push/vapid",
         "POST /api/push/subscribe",
         "POST /api/executions/callback (token)",
         "POST /api/debug/openai (token)",
@@ -441,6 +442,18 @@ export function apiRouter({ db, wsHub }) {
   );
 
   r.get("/agents", (_req, res) => okJson(res, { ok: true, agents: listAgents() }));
+
+  /** ===========================
+   * Push: VAPID public key
+   * =========================== */
+  r.get("/push/vapid", (_req, res) => {
+    if (!cfg.PUSH_ENABLED) return okJson(res, { ok: false, error: "push disabled" });
+
+    const publicKey = String(cfg.VAPID_PUBLIC_KEY || "").trim();
+    if (!publicKey) return okJson(res, { ok: false, error: "VAPID_PUBLIC_KEY not set" });
+
+    return okJson(res, { ok: true, publicKey });
+  });
 
   /** ===========================
    * Push: subscribe
