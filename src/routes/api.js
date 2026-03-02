@@ -13,15 +13,16 @@ function okJson(res, payload) {
   return res.status(200).json(payload);
 }
 
-function clamp(n, a, b) {
-  const x = Number(n);
+function clamp(nv, a, b) {
+  const x = Number(nv);
   if (!Number.isFinite(x)) return a;
   return Math.max(a, Math.min(b, x));
 }
 
+// ✅ If DEBUG_API_TOKEN is set => require it. If not set => allow (dev-friendly)
 function requireDebugToken(req) {
   const expected = String(cfg.DEBUG_API_TOKEN || "").trim();
-  if (!expected) return false;
+  if (!expected) return true;
   const token = String(req.headers["x-debug-token"] || req.query.token || req.body?.token || "").trim();
   return Boolean(token) && token === expected;
 }
@@ -83,7 +84,7 @@ function requireCallbackToken(req) {
   return Boolean(got) && got === expected;
 }
 
-// ✅ Telegram hard toggle: OFF by default (only sends when TELEGRAM_ENABLED=1)
+// ✅ Telegram hard toggle: OFF by default
 async function maybeTelegram(text) {
   if (!cfg.TELEGRAM_ENABLED) return;
   try {
@@ -246,7 +247,7 @@ async function dbListPushSubs(db, recipient = "ceo") {
   return q.rows || [];
 }
 
-// ✅ NEW: expired subs cleanup
+// ✅ expired subs cleanup
 async function dbDeletePushSub(db, endpoint) {
   if (!isDbReady(db)) return;
   try {
@@ -268,9 +269,7 @@ async function pushBroadcastToCeo({ db, title, body, data }) {
     for (const s of subs) {
       try {
         const r = await pushSendOne({ endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } }, payload);
-        if (!r.ok && r.expired) {
-          await dbDeletePushSub(db, s.endpoint);
-        }
+        if (!r.ok && r.expired) await dbDeletePushSub(db, s.endpoint);
       } catch {}
     }
     return;
@@ -279,13 +278,8 @@ async function pushBroadcastToCeo({ db, title, body, data }) {
   for (const s of mem.pushSubs.values()) {
     if (s.recipient !== "ceo") continue;
     try {
-      const r = await pushSendOne(
-        { endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } },
-        payload
-      );
-      if (!r.ok && r.expired) {
-        mem.pushSubs.delete(s.endpoint);
-      }
+      const r = await pushSendOne({ endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } }, payload);
+      if (!r.ok && r.expired) mem.pushSubs.delete(s.endpoint);
     } catch {}
   }
 }
@@ -361,6 +355,7 @@ async function dbCreateNotification(db, { recipient = "ceo", type = "info", titl
 
 async function dbListNotifications(db, { recipient = "ceo", unreadOnly = false, limit = 50 }) {
   const lim = Math.max(1, Math.min(200, Number(limit) || 50));
+
   if (unreadOnly) {
     const q = await db.query(
       `select id, recipient, type, title, body, payload, read_at, created_at
@@ -417,8 +412,8 @@ async function dbUpdateJob(db, id, patch) {
      set status = coalesce($2::text, status),
          output = case when $3::jsonb is null then output else (coalesce(output,'{}'::jsonb) || $3::jsonb) end,
          error = coalesce($4::text, error),
-         started_at = coalesce($5::timestamptz, started_at),
-         finished_at = coalesce($6::timestamptz, finished_at)
+         started_at = case when $5::timestamptz is null then started_at else $5::timestamptz end,
+         finished_at = case when $6::timestamptz is null then finished_at else $6::timestamptz end
      where id = $1::uuid
      returning id, proposal_id, type, status, input, output, error, created_at, started_at, finished_at`,
     [id, status, output, error, started, finished]
@@ -452,7 +447,7 @@ export function apiRouter({ db, wsHub }) {
         "POST /api/push/subscribe",
         "POST /api/push/test (token if DEBUG_API_TOKEN set)",
         "POST /api/executions/callback (token)",
-        "POST /api/debug/openai (token)",
+        "POST /api/debug/openai (token if DEBUG_API_TOKEN set)",
       ],
       telegram: { enabled: Boolean(cfg.TELEGRAM_ENABLED) },
       push: { enabled: Boolean(cfg.PUSH_ENABLED), vapidPublicKey: cfg.VAPID_PUBLIC_KEY ? "set" : "missing" },
@@ -476,7 +471,6 @@ export function apiRouter({ db, wsHub }) {
   /** ===========================
    * Push: subscribe
    * =========================== */
-
   r.get("/push/subscribe", (_req, res) => {
     res.setHeader("Content-Type", "application/json; charset=utf-8");
     return res.status(405).json({ ok: false, error: "Method Not Allowed. Use POST /api/push/subscribe" });
@@ -512,9 +506,9 @@ export function apiRouter({ db, wsHub }) {
    * Push: TEST SEND ✅
    * =========================== */
   r.post("/push/test", async (req, res) => {
-    // Əgər DEBUG_API_TOKEN set olunubsa — token tələb edirik (Railway prod üçün yaxşıdır)
-    if (String(cfg.DEBUG_API_TOKEN || "").trim()) {
-      if (!requireDebugToken(req)) return okJson(res, { ok: false, error: "forbidden (missing/invalid debug token)" });
+    // If token configured -> require it
+    if (!requireDebugToken(req)) {
+      return okJson(res, { ok: false, error: "forbidden (missing/invalid debug token)" });
     }
 
     if (!cfg.PUSH_ENABLED) return okJson(res, { ok: false, error: "push disabled" });
@@ -526,8 +520,9 @@ export function apiRouter({ db, wsHub }) {
     try {
       await pushBroadcastToCeo({ db, title, body, data });
 
-      // (optional) UI-da da görünsün deyə notification yaradırıq
+      // optional: keep in UI notifications
       let notif = null;
+
       if (!isDbReady(db)) {
         notif = memCreateNotification({
           recipient: "ceo",
@@ -621,16 +616,23 @@ export function apiRouter({ db, wsHub }) {
     }
 
     try {
+      // ✅ do NOT overwrite started/finished with null
       const patch = {
         status,
         output: result || {},
         error: error || null,
-        started_at: status === "running" ? nowIso() : null,
-        finished_at: status === "completed" || status === "failed" ? nowIso() : null,
+        started_at: status === "running" ? nowIso() : undefined,
+        finished_at: status === "completed" || status === "failed" ? nowIso() : undefined,
       };
 
       if (!isDbReady(db)) {
-        const row = memUpdateJob(jobId, patch);
+        const row = memUpdateJob(jobId, {
+          status: patch.status,
+          output: { ...(mem.jobs.get(jobId)?.output || {}), ...(patch.output || {}) },
+          error: patch.error ?? null,
+          ...(patch.started_at ? { started_at: patch.started_at } : {}),
+          ...(patch.finished_at ? { finished_at: patch.finished_at } : {}),
+        });
         if (!row) return okJson(res, { ok: false, error: "job not found", dbDisabled: true });
 
         wsHub?.broadcast?.({ type: "job.updated", job: row });
@@ -655,7 +657,16 @@ export function apiRouter({ db, wsHub }) {
         return okJson(res, { ok: true, job: row, notification: n, dbDisabled: true });
       }
 
-      const row = await dbUpdateJob(db, jobId, patch);
+      // DB mode
+      const dbPatch = {
+        status: patch.status,
+        output: patch.output || {},
+        error: patch.error || null,
+        started_at: patch.started_at || null,
+        finished_at: patch.finished_at || null,
+      };
+
+      const row = await dbUpdateJob(db, jobId, dbPatch);
       if (!row) return okJson(res, { ok: false, error: "job not found" });
 
       wsHub?.broadcast?.({ type: "job.updated", job: row });
@@ -1017,12 +1028,7 @@ export function apiRouter({ db, wsHub }) {
       if (!synthesisText) synthesisText = fallbackSynthesisFromNotes(out);
 
       if (!isDbReady(db)) {
-        memAddMessage(threadId, {
-          role: "assistant",
-          agent: "kernel",
-          content: synthesisText,
-          meta: { kind: "debate.synthesis" },
-        });
+        memAddMessage(threadId, { role: "assistant", agent: "kernel", content: synthesisText, meta: { kind: "debate.synthesis" } });
       } else {
         await db.query(
           `insert into messages (thread_id, role, agent, content, meta)
@@ -1052,7 +1058,6 @@ export function apiRouter({ db, wsHub }) {
 
         wsHub?.broadcast?.({ type: "proposal.created", proposal: savedProposal });
 
-        // create notification
         const notifPayload = { proposalId: savedProposal?.id, threadId };
         let notif = null;
 
@@ -1077,7 +1082,6 @@ export function apiRouter({ db, wsHub }) {
           await dbAudit(db, "kernel", "proposal.create", "proposal", String(savedProposal?.id || ""), { type });
         }
 
-        // ✅ Push to phone
         await pushBroadcastToCeo({
           db,
           title: "New Proposal",
@@ -1106,7 +1110,7 @@ export function apiRouter({ db, wsHub }) {
    * Debug OpenAI
    * =========================== */
   r.post("/debug/openai", async (req, res) => {
-    if (!requireDebugToken(req)) return okJson(res, { ok: false, error: "forbidden (missing/invalid token)" });
+    if (!requireDebugToken(req)) return okJson(res, { ok: false, error: "forbidden (missing/invalid debug token)" });
 
     try {
       const agent = String(req.body?.agent || "orion").trim();

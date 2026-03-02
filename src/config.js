@@ -1,6 +1,10 @@
-// src/config.js (FINAL v2.3)
+// src/config.js (FINAL v2.4)
 // - Telegram toggle (default OFF)
 // - Web Push (VAPID) config
+// - Meta/Instagram Publish config (Page Access Token)
+// - Cron security secret
+// - SaaS defaults (tenant key / timezone / publish time)
+
 function s(v, d = "") {
   return String(v ?? d).trim();
 }
@@ -26,6 +30,7 @@ export const cfg = {
   DATABASE_URL: s(process.env.DATABASE_URL, ""),
   WS_AUTH_TOKEN: s(process.env.WS_AUTH_TOKEN, ""),
 
+  // If set => required for /api/debug/openai and /api/push/test
   DEBUG_API_TOKEN: s(process.env.DEBUG_API_TOKEN, ""),
 
   OPENAI_API_KEY: s(process.env.OPENAI_API_KEY, ""),
@@ -49,11 +54,27 @@ export const cfg = {
   TELEGRAM_BOT_TOKEN: s(process.env.TELEGRAM_BOT_TOKEN, ""),
   TELEGRAM_CHAT_ID: s(process.env.TELEGRAM_CHAT_ID, ""),
 
-  // ✅ Web Push (DEFAULT ON/OFF)
+  // ✅ Web Push
   PUSH_ENABLED: b(process.env.PUSH_ENABLED, true),
   VAPID_PUBLIC_KEY: s(process.env.VAPID_PUBLIC_KEY, ""),
   VAPID_PRIVATE_KEY: s(process.env.VAPID_PRIVATE_KEY, ""),
   VAPID_SUBJECT: s(process.env.VAPID_SUBJECT, "mailto:info@weneox.com"),
+
+  // ✅ Daily automation defaults (SaaS-ready even if you use only NEOX now)
+  DEFAULT_TENANT_KEY: s(process.env.DEFAULT_TENANT_KEY, "neox"),
+  DEFAULT_TIMEZONE: s(process.env.DEFAULT_TIMEZONE, "Asia/Baku"),
+  DAILY_PUBLISH_HOUR_LOCAL: n(process.env.DAILY_PUBLISH_HOUR_LOCAL, 10),
+  DAILY_PUBLISH_MINUTE_LOCAL: n(process.env.DAILY_PUBLISH_MINUTE_LOCAL, 0),
+
+  // ✅ Cron security (Railway cron will call your endpoint)
+  // If CRON_SECRET is set -> require x-cron-secret header
+  CRON_SECRET: s(process.env.CRON_SECRET, ""),
+
+  // ✅ Meta / Instagram publish (Phase-1: single token stored in server env)
+  META_PAGE_ACCESS_TOKEN: s(process.env.META_PAGE_ACCESS_TOKEN, ""),
+  META_PAGE_ID: s(process.env.META_PAGE_ID, "1034647199727587"),
+  META_IG_USER_ID: s(process.env.META_IG_USER_ID, "17841473956986087"),
+  META_API_VERSION: s(process.env.META_API_VERSION, "v23.0"),
 
   LOG_LEVEL: s(process.env.LOG_LEVEL, "info"),
   DEBUG_DEBATE_RAW: b(process.env.DEBUG_DEBATE_RAW, false),

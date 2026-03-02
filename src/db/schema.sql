@@ -335,3 +335,85 @@ alter table push_subscriptions add column if not exists last_seen_at timestamptz
 
 create unique index if not exists uq_push_endpoint on push_subscriptions(endpoint);
 create index if not exists idx_push_recipient on push_subscriptions(recipient, created_at desc);
+
+-- ============================================================
+-- ✅ tenants (SaaS-ready; NEOX is default)
+-- ============================================================
+create table if not exists tenants (
+  id uuid primary key default gen_random_uuid(),
+  tenant_key text not null unique,        -- e.g. 'neox'
+  name text not null default '',
+  brand jsonb not null default '{}'::jsonb, -- {colors, logoUrl, font, styleGuides}
+  meta jsonb not null default '{}'::jsonb,  -- {pageId, igUserId}
+  schedule jsonb not null default '{}'::jsonb, -- {publishHourLocal:10, tz:'Asia/Baku'}
+  created_at timestamptz not null default now()
+);
+
+create index if not exists idx_tenants_key on tenants(tenant_key);
+
+-- Seed NEOX if missing
+do $$
+begin
+  if not exists (select 1 from tenants where tenant_key='neox') then
+    insert into tenants (tenant_key, name, brand, meta, schedule)
+    values (
+      'neox',
+      'NEOX',
+      '{}'::jsonb,
+      jsonb_build_object(
+        'pageId', '1034647199727587',
+        'igUserId', '17841473956986087'
+      ),
+      jsonb_build_object(
+        'tz', 'Asia/Baku',
+        'publishHourLocal', 10,
+        'publishMinuteLocal', 0
+      )
+    );
+  end if;
+exception when others then null;
+end$$;
+
+-- ============================================================
+-- ✅ content_items (daily posts: draft -> approval -> publish)
+-- ============================================================
+create table if not exists content_items (
+  id uuid primary key default gen_random_uuid(),
+  tenant_key text not null default 'neox',
+  type text not null default 'image' check (type in ('image','video','carousel','story')),
+  status text not null default 'pending_approval'
+    check (status in ('pending_approval','approved','rejected','publishing','published','failed')),
+  title text not null default '',
+  caption text not null default '',
+  hashtags text not null default '',
+  media jsonb not null default '{}'::jsonb,   -- {imageUrl, videoUrl, thumbUrl, assets:[...]}
+  schedule_at timestamptz,                    -- when to publish (UTC)
+  approved_at timestamptz,
+  approved_by text,
+  published_at timestamptz,
+  publish jsonb not null default '{}'::jsonb, -- {igPostId, creationId, error, raw}
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create index if not exists idx_content_tenant_status on content_items(tenant_key, status, created_at desc);
+create index if not exists idx_content_schedule on content_items(status, schedule_at);
+
+-- auto updated_at (best-effort)
+do $$
+begin
+  if not exists (select 1 from pg_trigger where tgname = 'trg_content_items_updated_at') then
+    execute '
+      create or replace function set_updated_at() returns trigger as $f$
+      begin
+        new.updated_at = now();
+        return new;
+      end; $f$ language plpgsql;
+
+      create trigger trg_content_items_updated_at
+      before update on content_items
+      for each row execute function set_updated_at();
+    ';
+  end if;
+exception when others then null;
+end$$;
