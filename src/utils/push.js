@@ -1,4 +1,3 @@
-// src/utils/push.js (FINAL v1.1)
 import webpush from "web-push";
 import { cfg } from "../config.js";
 

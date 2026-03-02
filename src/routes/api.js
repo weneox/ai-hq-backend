@@ -1,4 +1,4 @@
-// src/routes/api.js (FINAL v2.7.3 — Push ON, Telegram OFF by flag, Jobs + n8n callback + Audit)
+// src/routes/api.js (FINAL v2.7.4 — Push TEST endpoint + expired cleanup)
 import express from "express";
 import crypto from "crypto";
 import { cfg } from "../config.js";
@@ -216,7 +216,7 @@ function memAudit(actor, action, objectType, objectId, meta = {}) {
 }
 
 /** ===========================
- * Push helpers
+ * Push helpers (DB)
  * =========================== */
 async function dbUpsertPushSub(db, { recipient = "ceo", endpoint, p256dh, auth, userAgent }) {
   const q = await db.query(
@@ -246,6 +246,14 @@ async function dbListPushSubs(db, recipient = "ceo") {
   return q.rows || [];
 }
 
+// ✅ NEW: expired subs cleanup
+async function dbDeletePushSub(db, endpoint) {
+  if (!isDbReady(db)) return;
+  try {
+    await db.query(`delete from push_subscriptions where endpoint = $1::text`, [endpoint]);
+  } catch {}
+}
+
 async function pushBroadcastToCeo({ db, title, body, data }) {
   if (!cfg.PUSH_ENABLED) return;
 
@@ -259,7 +267,10 @@ async function pushBroadcastToCeo({ db, title, body, data }) {
     const subs = await dbListPushSubs(db, "ceo");
     for (const s of subs) {
       try {
-        await pushSendOne({ endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } }, payload);
+        const r = await pushSendOne({ endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } }, payload);
+        if (!r.ok && r.expired) {
+          await dbDeletePushSub(db, s.endpoint);
+        }
       } catch {}
     }
     return;
@@ -268,7 +279,13 @@ async function pushBroadcastToCeo({ db, title, body, data }) {
   for (const s of mem.pushSubs.values()) {
     if (s.recipient !== "ceo") continue;
     try {
-      await pushSendOne({ endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } }, payload);
+      const r = await pushSendOne(
+        { endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } },
+        payload
+      );
+      if (!r.ok && r.expired) {
+        mem.pushSubs.delete(s.endpoint);
+      }
     } catch {}
   }
 }
@@ -433,6 +450,7 @@ export function apiRouter({ db, wsHub }) {
         "POST /api/notifications/:id/read",
         "GET /api/push/vapid",
         "POST /api/push/subscribe",
+        "POST /api/push/test (token if DEBUG_API_TOKEN set)",
         "POST /api/executions/callback (token)",
         "POST /api/debug/openai (token)",
       ],
@@ -459,7 +477,6 @@ export function apiRouter({ db, wsHub }) {
    * Push: subscribe
    * =========================== */
 
-  // ✅ So browser GET doesn't look like missing route
   r.get("/push/subscribe", (_req, res) => {
     res.setHeader("Content-Type", "application/json; charset=utf-8");
     return res.status(405).json({ ok: false, error: "Method Not Allowed. Use POST /api/push/subscribe" });
@@ -485,6 +502,56 @@ export function apiRouter({ db, wsHub }) {
 
       await dbUpsertPushSub(db, { recipient, endpoint, p256dh, auth, userAgent: ua });
       return okJson(res, { ok: true });
+    } catch (e) {
+      const details = serializeError(e);
+      return okJson(res, { ok: false, error: details.name, details });
+    }
+  });
+
+  /** ===========================
+   * Push: TEST SEND ✅
+   * =========================== */
+  r.post("/push/test", async (req, res) => {
+    // Əgər DEBUG_API_TOKEN set olunubsa — token tələb edirik (Railway prod üçün yaxşıdır)
+    if (String(cfg.DEBUG_API_TOKEN || "").trim()) {
+      if (!requireDebugToken(req)) return okJson(res, { ok: false, error: "forbidden (missing/invalid debug token)" });
+    }
+
+    if (!cfg.PUSH_ENABLED) return okJson(res, { ok: false, error: "push disabled" });
+
+    const title = String(req.body?.title || "AI HQ Test").trim();
+    const body = String(req.body?.body || "Push is working ✅").trim();
+    const data = req.body?.data && typeof req.body.data === "object" ? req.body.data : { type: "push.test" };
+
+    try {
+      await pushBroadcastToCeo({ db, title, body, data });
+
+      // (optional) UI-da da görünsün deyə notification yaradırıq
+      let notif = null;
+      if (!isDbReady(db)) {
+        notif = memCreateNotification({
+          recipient: "ceo",
+          type: "info",
+          title: "Push Test Sent",
+          body,
+          payload: { title, body, data },
+        });
+        wsHub?.broadcast?.({ type: "notification.created", notification: notif });
+        memAudit("system", "push.test", "push", null, { title });
+        return okJson(res, { ok: true, sent: true, notification: notif, dbDisabled: true });
+      }
+
+      notif = await dbCreateNotification(db, {
+        recipient: "ceo",
+        type: "info",
+        title: "Push Test Sent",
+        body,
+        payload: { title, body, data },
+      });
+      wsHub?.broadcast?.({ type: "notification.created", notification: notif });
+      await dbAudit(db, "system", "push.test", "push", null, { title });
+
+      return okJson(res, { ok: true, sent: true, notification: notif });
     } catch (e) {
       const details = serializeError(e);
       return okJson(res, { ok: false, error: details.name, details });
@@ -721,7 +788,6 @@ export function apiRouter({ db, wsHub }) {
           data: { type: "proposal.updated", proposalId: row.id, decision },
         });
 
-        // Telegram OFF unless TELEGRAM_ENABLED=1
         await maybeTelegram(`AI HQ: proposal ${decision}\n${row.title || row.id}`);
 
         let job = null;
@@ -803,7 +869,6 @@ export function apiRouter({ db, wsHub }) {
         data: { type: "proposal.updated", proposalId: String(row.id), decision },
       });
 
-      // Telegram OFF unless TELEGRAM_ENABLED=1
       await maybeTelegram(`AI HQ: proposal ${decision}\n${row.title || row.id}`);
 
       let job = null;
@@ -1020,7 +1085,6 @@ export function apiRouter({ db, wsHub }) {
           data: { type: "proposal.created", proposalId: String(savedProposal?.id || "") },
         });
 
-        // Telegram OFF unless TELEGRAM_ENABLED=1
         await maybeTelegram(`AI HQ: new proposal\n${savedProposal?.title || savedProposal?.id}`);
       }
 
