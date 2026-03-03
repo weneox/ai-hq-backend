@@ -1,4 +1,4 @@
-// src/routes/api.js (FINAL v2.7.5 — Mojibake auto-fix + Push TEST endpoint + expired cleanup)
+// src/routes/api.js (FINAL v2.7.6 — Mojibake auto-fix + Push TEST endpoint + Executions list/detail + expired cleanup)
 import express from "express";
 import crypto from "crypto";
 import { cfg } from "../config.js";
@@ -532,6 +532,8 @@ export function apiRouter({ db, wsHub }) {
         "GET /api/push/vapid",
         "POST /api/push/subscribe",
         "POST /api/push/test (token if DEBUG_API_TOKEN set)",
+        "GET /api/executions?status=&limit=",
+        "GET /api/executions/:id",
         "POST /api/executions/callback (token)",
         "POST /api/debug/openai (token if DEBUG_API_TOKEN set)",
       ],
@@ -771,6 +773,87 @@ export function apiRouter({ db, wsHub }) {
       });
 
       return okJson(res, { ok: true, job: row, notification: notif });
+    } catch (e) {
+      const details = serializeError(e);
+      return okJson(res, { ok: false, error: details.name, details });
+    }
+  });
+
+  /** ===========================
+   * Executions (Jobs) list + detail ✅ (NEW)
+   * =========================== */
+  r.get("/executions", async (req, res) => {
+    const status = String(req.query.status || "").trim().toLowerCase();
+    const limit = clamp(req.query.limit ?? 50, 1, 200);
+
+    try {
+      // MEMORY mode
+      if (!isDbReady(db)) {
+        let rows = Array.from(mem.jobs.values());
+        if (status) rows = rows.filter((j) => String(j.status || "").toLowerCase() === status);
+        rows.sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
+        rows = rows.slice(0, limit);
+        return okJson(res, { ok: true, executions: rows, dbDisabled: true });
+      }
+
+      // DB mode
+      const where = status ? `where status = $1::text` : ``;
+      const params = status ? [status] : [];
+
+      const q = await db.query(
+        `select id, proposal_id, type, status, input, output, error, created_at, started_at, finished_at
+         from jobs
+         ${where}
+         order by created_at desc
+         limit ${limit}`,
+        params
+      );
+
+      const rows = (q.rows || []).map((x) => ({
+        ...x,
+        input: deepFix(x.input),
+        output: deepFix(x.output),
+        error: x.error ? fixText(String(x.error)) : null,
+      }));
+
+      return okJson(res, { ok: true, executions: rows });
+    } catch (e) {
+      const details = serializeError(e);
+      return okJson(res, { ok: false, error: details.name, details });
+    }
+  });
+
+  r.get("/executions/:id", async (req, res) => {
+    const id = String(req.params.id || "").trim();
+    if (!id) return okJson(res, { ok: false, error: "execution id required" });
+
+    try {
+      // MEMORY mode
+      if (!isDbReady(db)) {
+        const row = mem.jobs.get(id);
+        if (!row) return okJson(res, { ok: false, error: "not found", dbDisabled: true });
+        return okJson(res, { ok: true, execution: row, dbDisabled: true });
+      }
+
+      // DB mode
+      if (!isUuid(id)) return okJson(res, { ok: false, error: "id must be uuid" });
+
+      const q = await db.query(
+        `select id, proposal_id, type, status, input, output, error, created_at, started_at, finished_at
+         from jobs
+         where id = $1::uuid
+         limit 1`,
+        [id]
+      );
+
+      const row = q.rows?.[0] || null;
+      if (!row) return okJson(res, { ok: false, error: "not found" });
+
+      row.input = deepFix(row.input);
+      row.output = deepFix(row.output);
+      row.error = row.error ? fixText(String(row.error)) : null;
+
+      return okJson(res, { ok: true, execution: row });
     } catch (e) {
       const details = serializeError(e);
       return okJson(res, { ok: false, error: details.name, details });
