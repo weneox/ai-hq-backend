@@ -1,8 +1,8 @@
-// src/kernel/debateEngine.js (FINAL v3.4 — FIX: remove unsupported reasoning.effort)
+// src/kernel/debateEngine.js (FINAL v3.5 — UTF fix + safer JSON parse)
 import OpenAI from "openai";
 import { cfg } from "../config.js";
 
-export const DEBATE_ENGINE_VERSION = "final-v3.4";
+export const DEBATE_ENGINE_VERSION = "final-v3.5";
 console.log(`[debateEngine] LOADED ${DEBATE_ENGINE_VERSION}`);
 
 const DEFAULT_AGENTS = ["orion", "nova", "atlas", "echo"];
@@ -16,10 +16,7 @@ function clamp(n, a, b) {
 function withTimeout(promise, ms, label = "timeout") {
   const t = Number(ms);
   if (!Number.isFinite(t) || t <= 0) return promise;
-  return Promise.race([
-    promise,
-    new Promise((_, rej) => setTimeout(() => rej(new Error(label)), t)),
-  ]);
+  return Promise.race([promise, new Promise((_, rej) => setTimeout(() => rej(new Error(label)), t))]);
 }
 
 async function mapLimit(items, limit, worker) {
@@ -52,11 +49,29 @@ function sDeep(x) {
   return "";
 }
 
+// ✅ Mojibake repair (UTF-8 stored/decoded as latin1 -> "gÃ¼nlÃ¼k")
+function fixMojibake(input) {
+  const t = String(input || "");
+  if (!t) return t;
+
+  // only attempt if typical broken markers appear
+  if (!/[ÃÂ]|â€™|â€œ|â€�|â€“|â€”|â€¦/.test(t)) return t;
+
+  try {
+    const fixed = Buffer.from(t, "latin1").toString("utf8");
+    // if it got worse, keep original
+    if (/[�]/.test(fixed) && !/[�]/.test(t)) return t;
+    return fixed;
+  } catch {
+    return t;
+  }
+}
+
 function extractText(resp) {
   if (!resp) return "";
 
   const direct = s(resp.output_text).trim();
-  if (direct) return direct;
+  if (direct) return fixMojibake(direct);
 
   const out = resp.output;
   if (Array.isArray(out)) {
@@ -101,7 +116,7 @@ function extractText(resp) {
     }
 
     const joined = parts.join("\n").trim();
-    if (joined) return joined;
+    if (joined) return fixMojibake(joined);
   }
 
   // last resort deep scan
@@ -136,7 +151,7 @@ function extractText(resp) {
 
     walk(resp);
     const joined = parts.join("\n").trim();
-    if (joined) return joined;
+    if (joined) return fixMojibake(joined);
   } catch {}
 
   return "";
@@ -205,7 +220,6 @@ async function askAgent({ openai, agentId, message, round, notesSoFar, timeoutMs
   const prompt = agentPrompt(agentId, message, round, notesSoFar);
   const maxOut = Number(cfg.OPENAI_DEBATE_AGENT_TOKENS || 900);
 
-  // ✅ FIX: remove reasoning.effort (some models reject it)
   const req = {
     model: cfg.OPENAI_MODEL || "gpt-5",
     text: { format: { type: "text" } },
@@ -220,29 +234,45 @@ async function askAgent({ openai, agentId, message, round, notesSoFar, timeoutMs
 
   let text = extractText(resp);
 
-  console.log("[debate] agent", agentId, "status=", resp?.status || null, "id=", resp?.id || null, "len=", (text || "").length);
+  console.log(
+    "[debate] agent",
+    agentId,
+    "status=",
+    resp?.status || null,
+    "id=",
+    resp?.id || null,
+    "len=",
+    (text || "").length
+  );
 
   if (!String(text || "").trim()) {
     logRawIfEmpty("agent", agentId, resp, text);
     text = visibleEmptyMarker("agent", agentId, resp);
   }
 
-  return text;
+  return fixMojibake(text);
 }
 
 function extractJsonFromText(text) {
   const s0 = String(text || "").trim();
   if (!s0) return null;
 
+  // Try direct parse first
+  try {
+    return JSON.parse(s0);
+  } catch {}
+
+  // If there's extra text, slice { ... }
   const start = s0.indexOf("{");
   const end = s0.lastIndexOf("}");
   if (start >= 0 && end > start) {
-    const slice = s0.slice(start, end + 1);
+    const slice = s0.slice(start, end + 1).trim();
     try {
       return JSON.parse(slice);
     } catch {}
   }
 
+  // code fence
   const fence = s0.match(/```json\s*([\s\S]*?)\s*```/i);
   if (fence?.[1]) {
     try {
@@ -271,22 +301,11 @@ function buildFallbackProposalFromText(finalAnswer) {
     return {
       day,
       title: `Gün ${day}`,
-      tasks: [
-        "ICP və təklifin dəqiqləşdirilməsi",
-        "Kanal icrası (email/LinkedIn/IG/WhatsApp) planı",
-        "Demo/booked görüş hədəfi və follow-up",
-      ],
+      tasks: ["ICP və təklifin dəqiqləşdirilməsi", "Kanal icrası (email/LinkedIn/IG/WhatsApp) planı", "Demo/booked görüş hədəfi və follow-up"],
     };
   });
 
-  const kpis = [
-    "Reply rate (cavab nisbəti)",
-    "Demo booked",
-    "Demo show-up",
-    "SQL sayı",
-    "Təklif göndərilənlər",
-    "Win rate",
-  ];
+  const kpis = ["Reply rate (cavab nisbəti)", "Demo booked", "Demo show-up", "SQL sayı", "Təklif göndərilənlər", "Win rate"];
 
   const ownerMap = {
     orion: "Strategiya, ICP, offer, risklər",
@@ -295,11 +314,7 @@ function buildFallbackProposalFromText(finalAnswer) {
     echo: "KPI, tracking, experiment, dashboard",
   };
 
-  return {
-    type: "plan",
-    title: "Debate Proposal",
-    payload: { summary, steps, kpis, ownerMap },
-  };
+  return { type: "plan", title: "Debate Proposal", payload: { summary, steps, kpis, ownerMap } };
 }
 
 async function synthesizeFinal({ openai, message, agentNotes, mode, timeoutMs }) {
@@ -331,7 +346,6 @@ AGENT NOTLARI:
 ${notesText || "(agent notları boşdur)"}
 `.trim();
 
-  // ✅ FIX: remove reasoning.effort
   const reqText = {
     model: cfg.OPENAI_MODEL || "gpt-5",
     text: { format: { type: "text" } },
@@ -349,7 +363,8 @@ ${notesText || "(agent notları boşdur)"}
     logRawIfEmpty("synth-text", "kernel", respText, finalAnswer);
     finalAnswer = visibleEmptyMarker("synth-text", "kernel", respText);
   }
-  finalAnswer = String(finalAnswer || "").trim();
+
+  finalAnswer = fixMojibake(String(finalAnswer || "").trim());
   if (!finalAnswer) finalAnswer = fallbackSynthesis(agentNotes);
 
   let proposal = null;
@@ -386,7 +401,6 @@ Use this synthesized plan as the only context:
 ${finalAnswer}
 `.trim();
 
-    // ✅ FIX: remove reasoning.effort
     const reqJson = {
       model: cfg.OPENAI_MODEL || "gpt-5",
       text: { format: { type: "text" } },
@@ -404,6 +418,8 @@ ${finalAnswer}
       logRawIfEmpty("synth-json", "kernel", respJson, jsonText);
       jsonText = visibleEmptyMarker("synth-json", "kernel", respJson);
     }
+
+    jsonText = fixMojibake(jsonText);
 
     proposal = extractJsonFromText(jsonText);
 
@@ -425,7 +441,7 @@ Return ONLY corrected valid JSON object. No extra text.
 
       try {
         const respFix = await withTimeout(openai.responses.create(repairReq), timeoutMs, "OpenAI timeout (json-repair)");
-        const fixed = extractText(respFix);
+        const fixed = fixMojibake(extractText(respFix));
         proposal = extractJsonFromText(fixed);
       } catch {}
     }
@@ -434,6 +450,12 @@ Return ONLY corrected valid JSON object. No extra text.
       proposal = buildFallbackProposalFromText(finalAnswer);
     }
   }
+
+  // final cleanup (avoid mojibake in fields)
+  try {
+    if (proposal?.title) proposal.title = fixMojibake(proposal.title);
+    if (proposal?.payload?.summary) proposal.payload.summary = fixMojibake(proposal.payload.summary);
+  } catch {}
 
   return { finalAnswer, proposal };
 }
@@ -448,9 +470,7 @@ export async function runDebate({ message, agents = DEFAULT_AGENTS, rounds = 2, 
     };
   }
 
-  const agentIds = (Array.isArray(agents) ? agents : DEFAULT_AGENTS)
-    .map((x) => String(x || "").trim())
-    .filter(Boolean);
+  const agentIds = (Array.isArray(agents) ? agents : DEFAULT_AGENTS).map((x) => String(x || "").trim()).filter(Boolean);
 
   const rCount = clamp(Number(rounds || 2), 1, 3);
   const timeoutMs = Number(cfg.OPENAI_TIMEOUT_MS || 25_000);
@@ -463,7 +483,7 @@ export async function runDebate({ message, agents = DEFAULT_AGENTS, rounds = 2, 
     const roundNotes = await mapLimit(agentIds, concurrency, async (agentId) => {
       try {
         const text = await askAgent({ openai, agentId, message, round, notesSoFar, timeoutMs });
-        return { agentId, text: text || "" };
+        return { agentId, text: fixMojibake(text || "") };
       } catch (e) {
         return { agentId, text: `⚠️ failed: ${String(e?.message || e)}` };
       }
@@ -476,8 +496,8 @@ export async function runDebate({ message, agents = DEFAULT_AGENTS, rounds = 2, 
   const synth = await synthesizeFinal({ openai, message, agentNotes, mode, timeoutMs });
 
   return {
-    finalAnswer: synth.finalAnswer,
-    agentNotes,
+    finalAnswer: fixMojibake(synth.finalAnswer),
+    agentNotes: agentNotes.map((n) => ({ agentId: n.agentId, text: fixMojibake(n.text) })),
     proposal: synth.proposal,
   };
 }

@@ -1,4 +1,4 @@
-// src/kernel/agentKernel.js (FINAL v2.1 — FIX: remove unsupported reasoning.effort)
+// src/kernel/agentKernel.js (FINAL v2.2 — UTF fix + clean outputs)
 import OpenAI from "openai";
 import { cfg } from "../config.js";
 
@@ -50,11 +50,27 @@ function pickStringDeep(x) {
   return "";
 }
 
+// ✅ Mojibake repair (UTF-8 shown as latin1 -> "gÃ¼nlÃ¼k")
+function fixMojibake(input) {
+  const t = String(input || "");
+  if (!t) return t;
+
+  if (!/[ÃÂ]|â€™|â€œ|â€�|â€“|â€”|â€¦/.test(t)) return t;
+
+  try {
+    const fixed = Buffer.from(t, "latin1").toString("utf8");
+    if (/[�]/.test(fixed) && !/[�]/.test(t)) return t;
+    return fixed;
+  } catch {
+    return t;
+  }
+}
+
 function extractText(resp) {
   if (!resp) return "";
 
   const direct = pickString(resp.output_text).trim();
-  if (direct) return direct;
+  if (direct) return fixMojibake(direct);
 
   const out = resp.output;
   if (Array.isArray(out)) {
@@ -85,7 +101,7 @@ function extractText(resp) {
     }
 
     const joined = parts.join("\n").trim();
-    if (joined) return joined;
+    if (joined) return fixMojibake(joined);
   }
 
   // legacy fallback
@@ -97,7 +113,7 @@ function extractText(resp) {
       if (t) parts.push(t);
     }
     const joined = parts.join("\n").trim();
-    if (joined) return joined;
+    if (joined) return fixMojibake(joined);
   }
 
   return "";
@@ -135,7 +151,7 @@ function makeEmptyHelp(resp, model) {
 
 export async function kernelHandle({ message, agentHint } = {}) {
   const text = normalizeUserMessage(message);
-  const agentId = (String(agentHint || "orion").trim().toLowerCase() || "orion");
+  const agentId = String(agentHint || "orion").trim().toLowerCase() || "orion";
   const agent = AGENTS[agentId] ? agentId : "orion";
 
   const openai = ensureOpenAI();
@@ -148,7 +164,6 @@ export async function kernelHandle({ message, agentHint } = {}) {
   try {
     const maxTok = Number(cfg.OPENAI_MAX_OUTPUT_TOKENS || 800);
 
-    // ✅ FIX: remove reasoning.effort (some models reject it with 400)
     const resp = await openai.responses.create({
       model,
       text: { format: { type: "text" } },
@@ -159,7 +174,7 @@ export async function kernelHandle({ message, agentHint } = {}) {
       ],
     });
 
-    const replyText = extractText(resp);
+    const replyText = fixMojibake(extractText(resp));
 
     if (!String(replyText || "").trim()) {
       return { ok: true, agent, replyText: makeEmptyHelp(resp, model), proposal: null };
@@ -167,7 +182,7 @@ export async function kernelHandle({ message, agentHint } = {}) {
 
     return { ok: true, agent, replyText, proposal: null };
   } catch (e) {
-    const msg = String(e?.message || e);
+    const msg = fixMojibake(String(e?.message || e));
     return { ok: false, agent, replyText: `OpenAI xətası: ${msg}`, proposal: null };
   }
 }
@@ -182,7 +197,6 @@ export async function debugOpenAI({ agent = "orion", message = "ping" } = {}) {
   try {
     const maxTok = Number(cfg.OPENAI_MAX_OUTPUT_TOKENS || 800);
 
-    // ✅ FIX: remove reasoning.effort
     const resp = await openai.responses.create({
       model,
       text: { format: { type: "text" } },
@@ -193,7 +207,7 @@ export async function debugOpenAI({ agent = "orion", message = "ping" } = {}) {
       ],
     });
 
-    const extractedText = extractText(resp);
+    const extractedText = fixMojibake(extractText(resp));
 
     return {
       ok: true,
@@ -208,7 +222,7 @@ export async function debugOpenAI({ agent = "orion", message = "ping" } = {}) {
       status: e?.status || null,
       agent: a,
       extractedText: "",
-      raw: String(e?.message || e),
+      raw: fixMojibake(String(e?.message || e)),
     };
   }
 }

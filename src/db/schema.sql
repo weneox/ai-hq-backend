@@ -1,6 +1,7 @@
--- AI HQ schema (upgrade-safe + FULL legacy fixes) — FINAL v6
--- ✅ Adds: notifications, jobs, audit_log, push_subscriptions
+-- AI HQ schema (upgrade-safe + FULL legacy fixes) — FINAL v7
+-- ✅ Adds: notifications, jobs, audit_log, push_subscriptions, tenants, content_items
 -- ✅ Keeps: legacy fixes (messages/proposals conversation_id + agent_key)
+-- ✅ NEW: best-effort mojibake repair for UTF-8 text stored as latin1 (gÃ¼nlÃ¼k -> günlük)
 -- Safe for production: no DROP TABLE.
 
 create extension if not exists pgcrypto;
@@ -311,7 +312,7 @@ create index if not exists idx_audit_created on audit_log(created_at desc);
 create index if not exists idx_audit_action on audit_log(action, created_at desc);
 
 -- ============================================================
--- ✅ push_subscriptions (PWA push to your phone)
+-- push_subscriptions
 -- ============================================================
 create table if not exists push_subscriptions (
   id uuid primary key default gen_random_uuid(),
@@ -337,21 +338,20 @@ create unique index if not exists uq_push_endpoint on push_subscriptions(endpoin
 create index if not exists idx_push_recipient on push_subscriptions(recipient, created_at desc);
 
 -- ============================================================
--- ✅ tenants (SaaS-ready; NEOX is default)
+-- tenants (SaaS-ready; NEOX is default)
 -- ============================================================
 create table if not exists tenants (
   id uuid primary key default gen_random_uuid(),
-  tenant_key text not null unique,        -- e.g. 'neox'
+  tenant_key text not null unique,
   name text not null default '',
-  brand jsonb not null default '{}'::jsonb, -- {colors, logoUrl, font, styleGuides}
-  meta jsonb not null default '{}'::jsonb,  -- {pageId, igUserId}
-  schedule jsonb not null default '{}'::jsonb, -- {publishHourLocal:10, tz:'Asia/Baku'}
+  brand jsonb not null default '{}'::jsonb,
+  meta jsonb not null default '{}'::jsonb,
+  schedule jsonb not null default '{}'::jsonb,
   created_at timestamptz not null default now()
 );
 
 create index if not exists idx_tenants_key on tenants(tenant_key);
 
--- Seed NEOX if missing
 do $$
 begin
   if not exists (select 1 from tenants where tenant_key='neox') then
@@ -375,7 +375,7 @@ exception when others then null;
 end$$;
 
 -- ============================================================
--- ✅ content_items (daily posts: draft -> approval -> publish)
+-- content_items (daily posts: draft -> approval -> publish)
 -- ============================================================
 create table if not exists content_items (
   id uuid primary key default gen_random_uuid(),
@@ -386,12 +386,12 @@ create table if not exists content_items (
   title text not null default '',
   caption text not null default '',
   hashtags text not null default '',
-  media jsonb not null default '{}'::jsonb,   -- {imageUrl, videoUrl, thumbUrl, assets:[...]}
-  schedule_at timestamptz,                    -- when to publish (UTC)
+  media jsonb not null default '{}'::jsonb,
+  schedule_at timestamptz,
   approved_at timestamptz,
   approved_by text,
   published_at timestamptz,
-  publish jsonb not null default '{}'::jsonb, -- {igPostId, creationId, error, raw}
+  publish jsonb not null default '{}'::jsonb,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -415,5 +415,46 @@ begin
       for each row execute function set_updated_at();
     ';
   end if;
+exception when others then null;
+end$$;
+
+-- ============================================================
+-- ✅ Mojibake repair (best-effort)
+-- If text contains common broken markers, try latin1->utf8 recovery.
+-- This can fix: gÃ¼nlÃ¼k -> günlük, Åž -> Ş, Ä± -> ı, etc.
+-- ============================================================
+do $$
+begin
+  -- messages.content
+  begin
+    update messages
+      set content = convert_from(convert_to(content, 'LATIN1'), 'UTF8')
+    where content ~ 'Ã.|Â.|â€|â€™|â€œ|â€�|â€“|â€”|â€¦';
+  exception when others then null;
+  end;
+
+  -- proposals.title
+  begin
+    update proposals
+      set title = convert_from(convert_to(title, 'LATIN1'), 'UTF8')
+    where title is not null and title ~ 'Ã.|Â.|â€|â€™|â€œ|â€�|â€“|â€”|â€¦';
+  exception when others then null;
+  end;
+
+  -- notifications.title/body
+  begin
+    update notifications
+      set title = convert_from(convert_to(title, 'LATIN1'), 'UTF8')
+    where title is not null and title ~ 'Ã.|Â.|â€|â€™|â€œ|â€�|â€“|â€”|â€¦';
+  exception when others then null;
+  end;
+
+  begin
+    update notifications
+      set body = convert_from(convert_to(body, 'LATIN1'), 'UTF8')
+    where body is not null and body ~ 'Ã.|Â.|â€|â€™|â€œ|â€�|â€“|â€”|â€¦';
+  exception when others then null;
+  end;
+
 exception when others then null;
 end$$;

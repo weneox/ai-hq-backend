@@ -1,4 +1,4 @@
-// src/db/index.js (FINAL v1.2)
+// src/db/index.js (FINAL v1.3 — smart SSL + safe migrate)
 import pg from "pg";
 import fs from "fs";
 import path from "path";
@@ -13,6 +13,27 @@ function redact(url) {
     return u.toString();
   } catch {
     return "(invalid DATABASE_URL)";
+  }
+}
+
+function shouldUseSsl(url) {
+  try {
+    const u = new URL(url);
+
+    // Explicit sslmode=require (or similar)
+    const sslmode = (u.searchParams.get("sslmode") || "").toLowerCase();
+    if (sslmode === "require" || sslmode === "verify-full" || sslmode === "verify-ca") return true;
+
+    // Common hosted db hints
+    const host = (u.hostname || "").toLowerCase();
+    if (host.includes("railway")) return true;
+    if (host.includes("render")) return true;
+    if (host.includes("supabase")) return true;
+    if (host.includes("neon")) return true;
+
+    return false;
+  } catch {
+    return true; // safest default if URL parsing fails
   }
 }
 
@@ -31,18 +52,19 @@ export async function initDb() {
     return null;
   }
 
-  // Railway Postgres: SSL çox vaxt lazımdır (rejectUnauthorized false)
+  const useSsl = shouldUseSsl(url);
+
   const pool = new Pool({
     connectionString: url,
     max: 5,
     idleTimeoutMillis: 10_000,
     connectionTimeoutMillis: 7_000,
-    ssl: { rejectUnauthorized: false },
+    ...(useSsl ? { ssl: { rejectUnauthorized: false } } : {}),
   });
 
   try {
     await pool.query("select 1 as ok");
-    console.log("[ai-hq] DB=ON", redact(url));
+    console.log("[ai-hq] DB=ON", redact(url), `ssl=${useSsl ? "on" : "off"}`);
     _db = pool;
     return pool;
   } catch (e) {
@@ -63,7 +85,10 @@ export async function migrate() {
   try {
     const schemaPath = path.resolve(process.cwd(), "src", "db", "schema.sql");
     const sql = fs.readFileSync(schemaPath, "utf8");
+
+    // Run schema as ONE migration batch
     await db.query(sql);
+
     return { ok: true };
   } catch (e) {
     return { ok: false, error: String(e?.message || e) };

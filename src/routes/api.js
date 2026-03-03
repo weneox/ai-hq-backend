@@ -1,4 +1,4 @@
-// src/routes/api.js (FINAL v2.7.4 — Push TEST endpoint + expired cleanup)
+// src/routes/api.js (FINAL v2.7.5 — Mojibake auto-fix + Push TEST endpoint + expired cleanup)
 import express from "express";
 import crypto from "crypto";
 import { cfg } from "../config.js";
@@ -7,6 +7,77 @@ import { kernelHandle, listAgents, debugOpenAI } from "../kernel/agentKernel.js"
 import { postToN8n } from "../utils/n8n.js";
 import { sendTelegram } from "../utils/telegram.js";
 import { pushSendOne } from "../utils/push.js";
+
+/** ===========================
+ * UTF-8 / Mojibake fix helpers
+ * =========================== */
+
+// Common mojibake markers when UTF-8 bytes were wrongly read as latin1
+const MOJIBAKE_RE = /Ã.|Â.|â€|â€™|â€œ|â€�|â€“|â€”|â€¦|Ð.|Ñ.|Ø.|Þ.|Ý.|ý|þ|ð/;
+
+function scoreTextQuality(s) {
+  if (typeof s !== "string") return 0;
+  const str = s;
+
+  // penalize lots of mojibake markers
+  const moj = (str.match(MOJIBAKE_RE) || []).length;
+
+  // penalize replacement chars
+  const repl = (str.match(/\uFFFD/g) || []).length;
+
+  // reward presence of expected AZ/TR characters (optional)
+  const good = (str.match(/[əğıöüşçƏĞİÖÜŞÇ]/g) || []).length;
+
+  // reward letters/spaces vs symbols
+  const letters = (str.match(/[A-Za-z0-9\u00C0-\u024F\u0400-\u04FFəğıöüşçƏĞİÖÜŞÇ]/g) || []).length;
+  const total = Math.max(1, str.length);
+
+  // Higher is better
+  return good * 3 + (letters / total) * 10 - moj * 4 - repl * 20;
+}
+
+function tryFixMojibake(s) {
+  if (typeof s !== "string") return s;
+  const str = s;
+
+  // Quick check: if no mojibake markers, keep as-is
+  if (!MOJIBAKE_RE.test(str)) return str;
+
+  // Attempt latin1 -> utf8 recovery
+  let candidate = str;
+  try {
+    candidate = Buffer.from(str, "latin1").toString("utf8");
+  } catch {
+    return str;
+  }
+
+  // Choose the better one by score (avoid making it worse)
+  const a = scoreTextQuality(str);
+  const b = scoreTextQuality(candidate);
+
+  return b > a ? candidate : str;
+}
+
+function fixText(x) {
+  if (typeof x !== "string") return x;
+  return tryFixMojibake(x);
+}
+
+function deepFix(obj) {
+  if (obj == null) return obj;
+  if (typeof obj === "string") return fixText(obj);
+  if (Array.isArray(obj)) return obj.map(deepFix);
+  if (typeof obj === "object") {
+    const out = {};
+    for (const [k, v] of Object.entries(obj)) out[k] = deepFix(v);
+    return out;
+  }
+  return obj;
+}
+
+/** ===========================
+ * Common helpers
+ * =========================== */
 
 function okJson(res, payload) {
   res.setHeader("Content-Type", "application/json; charset=utf-8");
@@ -88,7 +159,7 @@ function requireCallbackToken(req) {
 async function maybeTelegram(text) {
   if (!cfg.TELEGRAM_ENABLED) return;
   try {
-    await sendTelegram({ text });
+    await sendTelegram({ text: fixText(text) });
   } catch {}
 }
 
@@ -107,7 +178,7 @@ const mem = {
 
 function memEnsureThread(threadId, title) {
   if (!mem.threads.has(threadId)) {
-    mem.threads.set(threadId, { id: threadId, title: title || `Thread ${nowIso()}`, created_at: nowIso() });
+    mem.threads.set(threadId, { id: threadId, title: fixText(title || `Thread ${nowIso()}`), created_at: nowIso() });
   }
   if (!mem.messages.has(threadId)) mem.messages.set(threadId, []);
   return mem.threads.get(threadId);
@@ -121,8 +192,8 @@ function memAddMessage(threadId, { role, agent, content, meta }) {
     thread_id: threadId,
     role,
     agent: agent || null,
-    content: content || "",
-    meta: meta || {},
+    content: fixText(content || ""),
+    meta: deepFix(meta || {}),
     created_at: nowIso(),
   };
   arr.push(row);
@@ -137,8 +208,8 @@ function memCreateProposal(threadId, { agent, type, title, payload }) {
     agent: agent || "orion",
     type: type || "generic",
     status: "pending",
-    title: title || "",
-    payload: payload || {},
+    title: fixText(title || ""),
+    payload: deepFix(payload || {}),
     created_at: nowIso(),
     decided_at: null,
     decision_by: null,
@@ -156,7 +227,7 @@ function memListProposals(status = "pending") {
 
 function memCreateNotification({ recipient = "ceo", type = "info", title = "", body = "", payload = {} }) {
   const id = crypto.randomUUID();
-  const row = { id, recipient, type, title, body, payload, read_at: null, created_at: nowIso() };
+  const row = { id, recipient, type, title: fixText(title), body: fixText(body), payload: deepFix(payload), read_at: null, created_at: nowIso() };
   mem.notifications.set(id, row);
   return row;
 }
@@ -186,7 +257,7 @@ function memCreateJob({ proposalId = null, type = "generic", status = "queued", 
     proposal_id: proposalId,
     type,
     status,
-    input,
+    input: deepFix(input),
     output: {},
     error: null,
     created_at: nowIso(),
@@ -201,6 +272,9 @@ function memUpdateJob(id, patch) {
   const row = mem.jobs.get(id);
   if (!row) return null;
   Object.assign(row, patch || {});
+  row.input = deepFix(row.input || {});
+  row.output = deepFix(row.output || {});
+  row.error = row.error ? fixText(String(row.error)) : row.error;
   return row;
 }
 
@@ -211,7 +285,7 @@ function memAudit(actor, action, objectType, objectId, meta = {}) {
     action,
     object_type: objectType || "unknown",
     object_id: objectId || null,
-    meta,
+    meta: deepFix(meta),
     created_at: nowIso(),
   });
 }
@@ -259,9 +333,9 @@ async function pushBroadcastToCeo({ db, title, body, data }) {
   if (!cfg.PUSH_ENABLED) return;
 
   const payload = {
-    title: title || "AI HQ",
-    body: body || "",
-    data: data || {},
+    title: fixText(title || "AI HQ"),
+    body: fixText(body || ""),
+    data: deepFix(data || {}),
   };
 
   if (isDbReady(db)) {
@@ -291,7 +365,7 @@ function notifyN8n(event, proposal, extra = {}) {
   const url = String(cfg.N8N_WEBHOOK_URL || "").trim();
   if (!url) return;
 
-  const payload = {
+  const payload = deepFix({
     event,
     proposalId: extra.proposalId || proposal?.id || null,
     threadId: extra.threadId || proposal?.thread_id || null,
@@ -306,7 +380,7 @@ function notifyN8n(event, proposal, extra = {}) {
     decision: extra.decision || proposal?.status || null,
     proposal: proposal || null,
     ...extra,
-  };
+  });
 
   postToN8n({
     url,
@@ -322,7 +396,7 @@ function fallbackSynthesisFromNotes(out) {
   const notes = Array.isArray(out?.agentNotes) ? out.agentNotes : [];
   const parts = [];
   for (const n of notes) {
-    const t = String(n?.text || "").trim();
+    const t = fixText(String(n?.text || "")).trim();
     if (!t) continue;
     parts.push(`### ${n.agentId}\n${t}`);
   }
@@ -338,7 +412,7 @@ async function dbAudit(db, actor, action, objectType, objectId, meta) {
     await db.query(
       `insert into audit_log (actor, action, object_type, object_id, meta)
        values ($1::text, $2::text, $3::text, $4::text, $5::jsonb)`,
-      [actor || "system", action, objectType || "unknown", objectId || null, meta || {}]
+      [fixText(actor || "system"), action, objectType || "unknown", objectId || null, deepFix(meta || {})]
     );
   } catch {}
 }
@@ -348,7 +422,7 @@ async function dbCreateNotification(db, { recipient = "ceo", type = "info", titl
     `insert into notifications (recipient, type, title, body, payload)
      values ($1::text, $2::text, $3::text, $4::text, $5::jsonb)
      returning id, recipient, type, title, body, payload, read_at, created_at`,
-    [recipient, type, title, body, payload]
+    [recipient, type, fixText(title), fixText(body), deepFix(payload)]
   );
   return q.rows?.[0] || null;
 }
@@ -365,7 +439,7 @@ async function dbListNotifications(db, { recipient = "ceo", unreadOnly = false, 
        limit ${lim}`,
       [recipient]
     );
-    return q.rows || [];
+    return (q.rows || []).map((x) => ({ ...x, title: fixText(x.title), body: fixText(x.body), payload: deepFix(x.payload) }));
   }
 
   const q = await db.query(
@@ -376,7 +450,7 @@ async function dbListNotifications(db, { recipient = "ceo", unreadOnly = false, 
      limit ${lim}`,
     [recipient]
   );
-  return q.rows || [];
+  return (q.rows || []).map((x) => ({ ...x, title: fixText(x.title), body: fixText(x.body), payload: deepFix(x.payload) }));
 }
 
 async function dbMarkNotificationRead(db, id) {
@@ -387,7 +461,9 @@ async function dbMarkNotificationRead(db, id) {
      returning id, recipient, type, title, body, payload, read_at, created_at`,
     [id]
   );
-  return q.rows?.[0] || null;
+  const row = q.rows?.[0] || null;
+  if (!row) return null;
+  return { ...row, title: fixText(row.title), body: fixText(row.body), payload: deepFix(row.payload) };
 }
 
 async function dbCreateJob(db, { proposalId = null, type = "generic", status = "queued", input = {} }) {
@@ -395,9 +471,14 @@ async function dbCreateJob(db, { proposalId = null, type = "generic", status = "
     `insert into jobs (proposal_id, type, status, input)
      values ($1::uuid, $2::text, $3::text, $4::jsonb)
      returning id, proposal_id, type, status, input, output, error, created_at, started_at, finished_at`,
-    [proposalId, type, status, input]
+    [proposalId, type, status, deepFix(input)]
   );
-  return q.rows?.[0] || null;
+  const row = q.rows?.[0] || null;
+  if (!row) return null;
+  row.input = deepFix(row.input);
+  row.output = deepFix(row.output);
+  row.error = row.error ? fixText(String(row.error)) : row.error;
+  return row;
 }
 
 async function dbUpdateJob(db, id, patch) {
@@ -416,9 +497,14 @@ async function dbUpdateJob(db, id, patch) {
          finished_at = case when $6::timestamptz is null then finished_at else $6::timestamptz end
      where id = $1::uuid
      returning id, proposal_id, type, status, input, output, error, created_at, started_at, finished_at`,
-    [id, status, output, error, started, finished]
+    [id, status, output ? deepFix(output) : output, error ? fixText(String(error)) : error, started, finished]
   );
-  return q.rows?.[0] || null;
+  const row = q.rows?.[0] || null;
+  if (!row) return null;
+  row.input = deepFix(row.input);
+  row.output = deepFix(row.output);
+  row.error = row.error ? fixText(String(row.error)) : row.error;
+  return row;
 }
 
 /** ===========================
@@ -477,7 +563,7 @@ export function apiRouter({ db, wsHub }) {
   });
 
   r.post("/push/subscribe", async (req, res) => {
-    const recipient = String(req.body?.recipient || "ceo").trim() || "ceo";
+    const recipient = fixText(String(req.body?.recipient || "ceo").trim()) || "ceo";
     const sub = req.body?.subscription || req.body?.sub || null;
     const endpoint = String(sub?.endpoint || "").trim();
     const p256dh = String(sub?.keys?.p256dh || "").trim();
@@ -506,21 +592,19 @@ export function apiRouter({ db, wsHub }) {
    * Push: TEST SEND ✅
    * =========================== */
   r.post("/push/test", async (req, res) => {
-    // If token configured -> require it
     if (!requireDebugToken(req)) {
       return okJson(res, { ok: false, error: "forbidden (missing/invalid debug token)" });
     }
 
     if (!cfg.PUSH_ENABLED) return okJson(res, { ok: false, error: "push disabled" });
 
-    const title = String(req.body?.title || "AI HQ Test").trim();
-    const body = String(req.body?.body || "Push is working ✅").trim();
-    const data = req.body?.data && typeof req.body.data === "object" ? req.body.data : { type: "push.test" };
+    const title = fixText(String(req.body?.title || "AI HQ Test").trim());
+    const body = fixText(String(req.body?.body || "Push is working ✅").trim());
+    const data = req.body?.data && typeof req.body.data === "object" ? deepFix(req.body.data) : { type: "push.test" };
 
     try {
       await pushBroadcastToCeo({ db, title, body, data });
 
-      // optional: keep in UI notifications
       let notif = null;
 
       if (!isDbReady(db)) {
@@ -557,7 +641,7 @@ export function apiRouter({ db, wsHub }) {
    * Notifications
    * =========================== */
   r.get("/notifications", async (req, res) => {
-    const recipient = String(req.query.recipient || "ceo").trim() || "ceo";
+    const recipient = fixText(String(req.query.recipient || "ceo").trim()) || "ceo";
     const unreadOnly = String(req.query.unread || "").trim() === "1";
     const limit = clamp(req.query.limit ?? 50, 1, 200);
 
@@ -606,8 +690,8 @@ export function apiRouter({ db, wsHub }) {
 
     const jobId = String(req.body?.jobId || req.body?.id || "").trim();
     const status = String(req.body?.status || "").trim().toLowerCase();
-    const result = req.body?.result && typeof req.body.result === "object" ? req.body.result : {};
-    const error = String(req.body?.error || "").trim();
+    const result = req.body?.result && typeof req.body.result === "object" ? deepFix(req.body.result) : {};
+    const error = fixText(String(req.body?.error || "").trim());
 
     if (!jobId) return okJson(res, { ok: false, error: "jobId required" });
     if (!isUuid(jobId)) return okJson(res, { ok: false, error: "jobId must be uuid" });
@@ -616,7 +700,6 @@ export function apiRouter({ db, wsHub }) {
     }
 
     try {
-      // ✅ do NOT overwrite started/finished with null
       const patch = {
         status,
         output: result || {},
@@ -657,7 +740,6 @@ export function apiRouter({ db, wsHub }) {
         return okJson(res, { ok: true, job: row, notification: n, dbDisabled: true });
       }
 
-      // DB mode
       const dbPatch = {
         status: patch.status,
         output: patch.output || {},
@@ -704,7 +786,7 @@ export function apiRouter({ db, wsHub }) {
 
     try {
       if (!isDbReady(db)) {
-        const messages = mem.messages.get(threadId) || [];
+        const messages = (mem.messages.get(threadId) || []).map((m) => ({ ...m, content: fixText(m.content), meta: deepFix(m.meta) }));
         return okJson(res, { ok: true, threadId, messages, dbDisabled: true });
       }
 
@@ -716,7 +798,8 @@ export function apiRouter({ db, wsHub }) {
         [threadId]
       );
 
-      return okJson(res, { ok: true, threadId, messages: q.rows || [] });
+      const rows = (q.rows || []).map((m) => ({ ...m, content: fixText(m.content), meta: deepFix(m.meta) }));
+      return okJson(res, { ok: true, threadId, messages: rows });
     } catch (e) {
       const details = serializeError(e);
       return okJson(res, { ok: false, error: details.name, details });
@@ -731,7 +814,7 @@ export function apiRouter({ db, wsHub }) {
 
     try {
       if (!isDbReady(db)) {
-        const proposals = memListProposals(status);
+        const proposals = memListProposals(status).map((p) => ({ ...p, title: fixText(p.title), payload: deepFix(p.payload) }));
         return okJson(res, { ok: true, status, proposals, dbDisabled: true });
       }
 
@@ -744,7 +827,8 @@ export function apiRouter({ db, wsHub }) {
         [status]
       );
 
-      return okJson(res, { ok: true, status, proposals: q.rows || [] });
+      const rows = (q.rows || []).map((p) => ({ ...p, title: fixText(p.title), payload: deepFix(p.payload) }));
+      return okJson(res, { ok: true, status, proposals: rows });
     } catch (e) {
       const details = serializeError(e);
       return okJson(res, { ok: false, error: details.name, details });
@@ -757,8 +841,8 @@ export function apiRouter({ db, wsHub }) {
   r.post("/proposals/:id/decision", async (req, res) => {
     const id = String(req.params.id || "").trim();
     const decision = normalizeDecision(req.body?.decision);
-    const by = String(req.body?.by || "ceo").trim();
-    const reason = String(req.body?.reason || req.body?.note || "").trim();
+    const by = fixText(String(req.body?.by || "ceo").trim());
+    const reason = fixText(String(req.body?.reason || req.body?.note || "").trim());
 
     if (!id) return okJson(res, { ok: false, error: "proposal id required" });
     if (decision !== "approved" && decision !== "rejected") {
@@ -777,7 +861,8 @@ export function apiRouter({ db, wsHub }) {
         row.status = decision;
         row.decided_at = nowIso();
         row.decision_by = by;
-        row.payload = row.payload && typeof row.payload === "object" ? row.payload : {};
+        row.title = fixText(row.title || "");
+        row.payload = deepFix(row.payload && typeof row.payload === "object" ? row.payload : {});
         row.payload.decision = { by, decision, reason: decision === "rejected" ? reason : "", at: row.decided_at };
 
         wsHub?.broadcast?.({ type: "proposal.updated", proposal: row });
@@ -848,7 +933,7 @@ export function apiRouter({ db, wsHub }) {
         [decision, by, id, decision === "rejected" ? reason : ""]
       );
 
-      const row = q.rows?.[0];
+      let row = q.rows?.[0] || null;
       if (!row) {
         const cur = await db.query(
           `select id, thread_id, agent, type, status, title, payload, created_at, decided_at, decision_by
@@ -858,8 +943,12 @@ export function apiRouter({ db, wsHub }) {
         );
         const existing = cur.rows?.[0] || null;
         if (!existing) return okJson(res, { ok: false, error: "proposal not found" });
+        existing.title = fixText(existing.title);
+        existing.payload = deepFix(existing.payload);
         return okJson(res, { ok: false, error: "proposal already decided", proposal: existing });
       }
+
+      row = { ...row, title: fixText(row.title), payload: deepFix(row.payload) };
 
       wsHub?.broadcast?.({ type: "proposal.updated", proposal: row });
       await dbAudit(db, by, "proposal.decision", "proposal", String(row.id), { decision });
@@ -916,8 +1005,8 @@ export function apiRouter({ db, wsHub }) {
    * Chat
    * =========================== */
   r.post("/chat", async (req, res) => {
-    const message = String(req.body?.message || "").trim();
-    const agent = String(req.body?.agent || req.body?.agentId || "").trim();
+    const message = fixText(String(req.body?.message || "")).trim();
+    const agent = fixText(String(req.body?.agent || req.body?.agentId || "")).trim();
     const threadIdIn = String(req.body?.threadId || "").trim();
     if (!message) return okJson(res, { ok: false, error: "message required" });
 
@@ -929,19 +1018,20 @@ export function apiRouter({ db, wsHub }) {
         memAddMessage(threadId, { role: "user", agent: agent || null, content: message, meta: {} });
 
         const out = await kernelHandle({ message, agentHint: agent || undefined });
+        const replyText = fixText(out.replyText || "");
 
-        memAddMessage(threadId, { role: "assistant", agent: out.agent || null, content: out.replyText || "", meta: {} });
+        memAddMessage(threadId, { role: "assistant", agent: out.agent || null, content: replyText, meta: {} });
         wsHub?.broadcast?.({
           type: "thread.message",
           threadId,
-          message: { role: "assistant", agent: out.agent, content: out.replyText, at: nowIso() },
+          message: { role: "assistant", agent: out.agent, content: replyText, at: nowIso() },
         });
 
         return okJson(res, {
           ok: true,
           threadId,
           agent: out.agent,
-          replyText: out.replyText || "(no text)",
+          replyText: replyText || "(no text)",
           proposal: null,
           dbDisabled: true,
         });
@@ -959,24 +1049,25 @@ export function apiRouter({ db, wsHub }) {
       );
 
       const out = await kernelHandle({ message, agentHint: agent || undefined });
+      const replyText = fixText(out.replyText || "");
 
       await db.query(
         `insert into messages (thread_id, role, agent, content, meta)
          values ($1::uuid, 'assistant', $2::text, $3::text, $4::jsonb)`,
-        [threadId, out.agent || null, out.replyText || "", {}]
+        [threadId, out.agent || null, replyText, {}]
       );
 
       wsHub?.broadcast?.({
         type: "thread.message",
         threadId,
-        message: { role: "assistant", agent: out.agent, content: out.replyText, at: nowIso() },
+        message: { role: "assistant", agent: out.agent, content: replyText, at: nowIso() },
       });
 
       return okJson(res, {
         ok: true,
         threadId,
         agent: out.agent,
-        replyText: out.replyText || "(no text)",
+        replyText: replyText || "(no text)",
         proposal: null,
       });
     } catch (e) {
@@ -989,8 +1080,8 @@ export function apiRouter({ db, wsHub }) {
    * Debate
    * =========================== */
   r.post("/debate", async (req, res) => {
-    const message = String(req.body?.message || "").trim();
-    const agent = String(req.body?.agent || "").trim();
+    const message = fixText(String(req.body?.message || "")).trim();
+    const agent = fixText(String(req.body?.agent || "")).trim();
     const threadIdIn = String(req.body?.threadId || "").trim();
     const rounds = clamp(req.body?.rounds ?? 2, 1, 3);
 
@@ -998,7 +1089,7 @@ export function apiRouter({ db, wsHub }) {
     if (mode !== "proposal" && mode !== "answer") mode = "proposal";
 
     let agents = Array.isArray(req.body?.agents) ? req.body.agents : ["orion", "nova", "atlas", "echo"];
-    agents = agents.map((x) => String(x || "").trim()).filter(Boolean);
+    agents = agents.map((x) => fixText(String(x || "").trim())).filter(Boolean);
     if (agents.length === 0) agents = ["orion", "nova", "atlas", "echo"];
 
     if (!message) return okJson(res, { ok: false, error: "message required" });
@@ -1024,7 +1115,7 @@ export function apiRouter({ db, wsHub }) {
 
       const out = await runDebate({ message, agents, rounds, mode });
 
-      let synthesisText = String(out.finalAnswer || "").trim();
+      let synthesisText = fixText(String(out.finalAnswer || "")).trim();
       if (!synthesisText) synthesisText = fallbackSynthesisFromNotes(out);
 
       if (!isDbReady(db)) {
@@ -1039,10 +1130,10 @@ export function apiRouter({ db, wsHub }) {
 
       let savedProposal = null;
       if (out.proposal && typeof out.proposal === "object") {
-        const p = out.proposal || {};
-        const type = String(p.type || "plan");
-        const title = String(p.title || "Debate Proposal");
-        const payload = p.payload || p || {};
+        const p = deepFix(out.proposal || {});
+        const type = fixText(String(p.type || "plan"));
+        const title = fixText(String(p.title || "Debate Proposal"));
+        const payload = deepFix(p.payload || p || {});
 
         if (!isDbReady(db)) {
           savedProposal = memCreateProposal(threadId, { agent: "kernel", type, title, payload });
@@ -1054,6 +1145,10 @@ export function apiRouter({ db, wsHub }) {
             [threadId, "kernel", type, title, payload]
           );
           savedProposal = ins.rows?.[0] || null;
+          if (savedProposal) {
+            savedProposal.title = fixText(savedProposal.title);
+            savedProposal.payload = deepFix(savedProposal.payload);
+          }
         }
 
         wsHub?.broadcast?.({ type: "proposal.created", proposal: savedProposal });
@@ -1096,7 +1191,7 @@ export function apiRouter({ db, wsHub }) {
         ok: true,
         threadId,
         finalAnswer: synthesisText,
-        agentNotes: out.agentNotes || [],
+        agentNotes: deepFix(out.agentNotes || []),
         proposal: savedProposal,
         dbDisabled: !isDbReady(db),
       });
@@ -1113,17 +1208,17 @@ export function apiRouter({ db, wsHub }) {
     if (!requireDebugToken(req)) return okJson(res, { ok: false, error: "forbidden (missing/invalid debug token)" });
 
     try {
-      const agent = String(req.body?.agent || "orion").trim();
-      const message = String(req.body?.message || "ping").trim();
+      const agent = fixText(String(req.body?.agent || "orion").trim());
+      const message = fixText(String(req.body?.message || "ping").trim());
 
       const out = await debugOpenAI({ agent, message });
-      const raw = String(out.raw || "");
+      const raw = fixText(String(out.raw || ""));
 
       return okJson(res, {
         ok: Boolean(out.ok),
         status: out.status || null,
         agent: out.agent,
-        extractedText: out.extractedText || "",
+        extractedText: fixText(out.extractedText || ""),
         raw: raw.slice(0, 4000),
       });
     } catch (e) {
