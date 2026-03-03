@@ -1594,33 +1594,111 @@ export function apiRouter({ db, wsHub }) {
   });
 
   /** ===========================
-   * Proposals list
-   * =========================== */
-  r.get("/proposals", async (req, res) => {
-    const status = String(req.query.status || "pending").trim();
+ * Proposals list (WITH latestDraft) ✅
+ * =========================== */
+r.get("/proposals", async (req, res) => {
+  const status = String(req.query.status || "pending").trim();
 
-    try {
-      if (!isDbReady(db)) {
-        const proposals = memListProposals(status).map((p) => ({ ...p, title: fixText(p.title), payload: deepFix(p.payload) }));
-        return okJson(res, { ok: true, status, proposals, dbDisabled: true });
-      }
+  try {
+    // MEM mode
+    if (!isDbReady(db)) {
+      const proposals = memListProposals(status).map((p) => {
+        const latest = memGetLatestContentByProposal(p.id);
+        const latestDraft = latest
+          ? {
+              id: latest.id,
+              status: fixText(latest.status),
+              updatedAt: latest.updated_at || latest.updatedAt || null,
+              version: Number(latest.version || 1),
+              contentPack: deepFix(latest.content_pack || latest.contentPack || {}),
+              lastFeedback: fixText(latest.last_feedback || latest.lastFeedback || ""),
+            }
+          : null;
 
-      const q = await db.query(
-        `select id, thread_id, agent, type, status, title, payload, created_at, decided_at, decision_by
-         from proposals
-         where status = $1::text
-         order by created_at desc
-         limit 100`,
-        [status]
-      );
+        return {
+          ...p,
+          title: fixText(p.title),
+          payload: deepFix(p.payload),
+          latestDraft,
+        };
+      });
 
-      const rows = (q.rows || []).map((p) => ({ ...p, title: fixText(p.title), payload: deepFix(p.payload) }));
-      return okJson(res, { ok: true, status, proposals: rows });
-    } catch (e) {
-      const details = serializeError(e);
-      return okJson(res, { ok: false, error: details.name, details });
+      return okJson(res, { ok: true, status, proposals, dbDisabled: true });
     }
-  });
+
+    // DB mode (LATERAL join latest draft.*)
+    const q = await db.query(
+      `
+      select
+        p.id,
+        p.thread_id,
+        p.agent,
+        p.type,
+        p.status,
+        p.title,
+        p.payload,
+        p.created_at,
+        p.decided_at,
+        p.decision_by,
+
+        ci.id           as latest_draft_id,
+        ci.status       as latest_draft_status,
+        ci.version      as latest_draft_version,
+        ci.updated_at   as latest_draft_updated_at,
+        ci.content_pack as latest_draft_content_pack,
+        ci.last_feedback as latest_draft_last_feedback
+
+      from proposals p
+      left join lateral (
+        select id, status, version, updated_at, content_pack, last_feedback
+        from content_items
+        where proposal_id = p.id
+          and status like 'draft.%'
+        order by updated_at desc
+        limit 1
+      ) ci on true
+
+      where p.status = $1::text
+      order by p.created_at desc
+      limit 100
+      `,
+      [status]
+    );
+
+    const proposals = (q.rows || []).map((r) => {
+      const latestDraft = r.latest_draft_id
+        ? {
+            id: String(r.latest_draft_id),
+            status: fixText(r.latest_draft_status),
+            updatedAt: r.latest_draft_updated_at || null,
+            version: Number(r.latest_draft_version || 1),
+            contentPack: deepFix(r.latest_draft_content_pack || {}),
+            lastFeedback: fixText(r.latest_draft_last_feedback || ""),
+          }
+        : null;
+
+      // cleanup joined cols (optional, just to keep response clean)
+      delete r.latest_draft_id;
+      delete r.latest_draft_status;
+      delete r.latest_draft_version;
+      delete r.latest_draft_updated_at;
+      delete r.latest_draft_content_pack;
+      delete r.latest_draft_last_feedback;
+
+      return {
+        ...r,
+        title: fixText(r.title),
+        payload: deepFix(r.payload),
+        latestDraft,
+      };
+    });
+
+    return okJson(res, { ok: true, status, proposals });
+  } catch (e) {
+    const details = serializeError(e);
+    return okJson(res, { ok: false, error: details.name, details });
+  }
+});
 
   /** ===========================
    * Decision + Job + n8n + notify + push
