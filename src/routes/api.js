@@ -1,7 +1,8 @@
-// src/routes/api.js (FINAL v2.9.1 — Content Draft + Feedback/Revise/Approve/Publish + Mojibake auto-fix + Push TEST + Executions list/detail)
-// PATCH vs v2.9.0:
-// ✅ /content/:id/approve now emits n8n event: content.approved
-// ✅ n8n payload callback.url becomes ABSOLUTE if cfg.PUBLIC_BASE_URL is set (fallback to relative)
+// src/routes/api.js (FINAL v2.9.2 — Content Draft lifecycle aligned with plan)
+// ✅ FIX: Proposal approve no longer sets status=approved immediately.
+//    - /proposals/:id/decision approve -> status=in_progress + creates job + n8n proposal.approved
+//    - /content/:id/approve -> status=draft.approved AND proposal becomes approved (final)
+// ✅ Keeps: mojibake auto-fix, push test, executions callback auto-draft save, n8n callback absolute url
 
 import express from "express";
 import crypto from "crypto";
@@ -754,7 +755,7 @@ export function apiRouter({ db, wsHub }) {
         "POST /api/chat",
         "POST /api/debate",
         "GET /api/threads/:id/messages",
-        "GET /api/proposals?status=pending",
+        "GET /api/proposals?status=pending|in_progress|approved|rejected",
         "POST /api/proposals/:id/decision",
         "GET /api/notifications?recipient=ceo&unread=1",
         "POST /api/notifications/:id/read",
@@ -1048,7 +1049,10 @@ export function apiRouter({ db, wsHub }) {
   });
 
   /** ===========================
-   * Content — approve draft (✅ + n8n content.approved)
+   * Content — approve draft (FINAL approve) ✅
+   * - content status => draft.approved
+   * - proposal status => approved (final)
+   * - n8n event => content.approved
    * =========================== */
   r.post("/content/:id/approve", async (req, res) => {
     const id = String(req.params.id || "").trim();
@@ -1066,6 +1070,18 @@ export function apiRouter({ db, wsHub }) {
         wsHub?.broadcast?.({ type: "content.updated", content: updated });
         memAudit(by, "content.approve", "content", id, {});
 
+        // ✅ FINAL: proposal becomes approved here
+        const p = row.proposal_id ? mem.proposals.get(String(row.proposal_id)) : null;
+        if (p && !isFinalStatus(p.status)) {
+          p.status = "approved";
+          p.decided_at = p.decided_at || nowIso();
+          p.decision_by = by;
+          p.payload = deepFix(p.payload && typeof p.payload === "object" ? p.payload : {});
+          p.payload.decision = { by, decision: "approved", reason: "", at: p.decided_at, via: "content.approve" };
+          wsHub?.broadcast?.({ type: "proposal.updated", proposal: p });
+          memAudit(by, "proposal.finalize", "proposal", String(p.id), { via: "content.approve" });
+        }
+
         const n = memCreateNotification({
           recipient: "ceo",
           type: "success",
@@ -1082,7 +1098,6 @@ export function apiRouter({ db, wsHub }) {
           data: { type: "content.updated", contentId: id, status: "draft.approved" },
         });
 
-        // ✅ n8n event
         notifyN8n("content.approved", null, {
           by,
           proposalId: row.proposal_id,
@@ -1095,7 +1110,7 @@ export function apiRouter({ db, wsHub }) {
           dbDisabled: true,
         });
 
-        return okJson(res, { ok: true, content: updated, notification: n, dbDisabled: true });
+        return okJson(res, { ok: true, content: updated, notification: n, proposal: p || null, dbDisabled: true });
       }
 
       // DB
@@ -1115,6 +1130,40 @@ export function apiRouter({ db, wsHub }) {
       wsHub?.broadcast?.({ type: "content.updated", content: updated });
       await dbAudit(db, by, "content.approve", "content", String(id), {});
 
+      // ✅ FINAL: proposal becomes approved here
+      let proposalRow = null;
+      if (row.proposal_id) {
+        const uq = await db.query(
+          `update proposals
+           set status = 'approved',
+               decided_at = coalesce(decided_at, now()),
+               decision_by = $2::text,
+               payload = (coalesce(payload,'{}'::jsonb) ||
+                        jsonb_build_object(
+                          'decision',
+                          jsonb_build_object(
+                            'by', $2::text,
+                            'decision', 'approved',
+                            'reason', '',
+                            'at', now(),
+                            'via', 'content.approve'
+                          )
+                        ))
+           where id = $1::uuid
+             and status <> 'approved'
+             and status <> 'rejected'
+           returning id, thread_id, agent, type, status, title, payload, created_at, decided_at, decision_by`,
+          [String(row.proposal_id), by]
+        );
+        proposalRow = uq.rows?.[0] || null;
+        if (proposalRow) {
+          proposalRow.title = fixText(proposalRow.title);
+          proposalRow.payload = deepFix(proposalRow.payload);
+          wsHub?.broadcast?.({ type: "proposal.updated", proposal: proposalRow });
+          await dbAudit(db, by, "proposal.finalize", "proposal", String(proposalRow.id), { via: "content.approve" });
+        }
+      }
+
       const notif = await dbCreateNotification(db, {
         recipient: "ceo",
         type: "success",
@@ -1131,7 +1180,6 @@ export function apiRouter({ db, wsHub }) {
         data: { type: "content.updated", contentId: id, status: "draft.approved" },
       });
 
-      // ✅ n8n event
       notifyN8n("content.approved", null, {
         by,
         proposalId: String(row.proposal_id),
@@ -1144,7 +1192,7 @@ export function apiRouter({ db, wsHub }) {
         dbDisabled: false,
       });
 
-      return okJson(res, { ok: true, content: updated, notification: notif });
+      return okJson(res, { ok: true, content: updated, notification: notif, proposal: proposalRow || null });
     } catch (e) {
       const details = serializeError(e);
       return okJson(res, { ok: false, error: details.name, details });
@@ -1388,7 +1436,6 @@ export function apiRouter({ db, wsHub }) {
 
   /** ===========================
    * Executions (Jobs) list + detail ✅
-   * + Supports query: executionId=54 (matches jobs.output.executionId)
    * =========================== */
   r.get("/executions", async (req, res) => {
     const status = String(req.query.status || "").trim().toLowerCase();
@@ -1577,6 +1624,11 @@ export function apiRouter({ db, wsHub }) {
 
   /** ===========================
    * Decision + Job + n8n + notify + push
+   *
+   * ✅ NEW FLOW:
+   * - decision=approved => proposal.status becomes "in_progress" (NOT approved),
+   *   job created + n8n proposal.approved
+   * - decision=rejected => proposal.status="rejected" (final)
    * =========================== */
   r.post("/proposals/:id/decision", async (req, res) => {
     const id = String(req.params.id || "").trim();
@@ -1589,41 +1641,52 @@ export function apiRouter({ db, wsHub }) {
       return okJson(res, { ok: false, error: 'decision must be "approved" or "rejected" (or approve/reject)' });
     }
 
+    // approve => in_progress
+    const nextStatus = decision === "approved" ? "in_progress" : "rejected";
+
     try {
       if (!isDbReady(db)) {
         const row = mem.proposals.get(id);
         if (!row) return okJson(res, { ok: false, error: "proposal not found", dbDisabled: true });
-        if (isFinalStatus(row.status)) {
+
+        // Only allow decisions while pending
+        if (row.status !== "pending") {
           return okJson(res, { ok: false, error: "proposal already decided", proposal: row, dbDisabled: true });
         }
 
-        row.status = decision;
+        row.status = nextStatus;
         row.decided_at = nowIso();
         row.decision_by = by;
         row.title = fixText(row.title || "");
         row.payload = deepFix(row.payload && typeof row.payload === "object" ? row.payload : {});
-        row.payload.decision = { by, decision, reason: decision === "rejected" ? reason : "", at: row.decided_at };
+        row.payload.decision = {
+          by,
+          decision: decision, // approved/rejected (logical)
+          status: nextStatus, // in_progress/rejected
+          reason: decision === "rejected" ? reason : "",
+          at: row.decided_at,
+        };
 
         wsHub?.broadcast?.({ type: "proposal.updated", proposal: row });
-        memAudit(by, "proposal.decision", "proposal", id, { decision });
+        memAudit(by, "proposal.decision", "proposal", id, { decision, status: nextStatus });
 
         const notif = memCreateNotification({
           recipient: "ceo",
-          type: decision === "approved" ? "success" : "warning",
-          title: decision === "approved" ? "Proposal Approved" : "Proposal Rejected",
+          type: decision === "approved" ? "info" : "warning",
+          title: decision === "approved" ? "Proposal Approved → Drafting" : "Proposal Rejected",
           body: row.title || "",
-          payload: { proposalId: row.id, threadId: row.thread_id, decision, reason },
+          payload: { proposalId: row.id, threadId: row.thread_id, decision, status: nextStatus, reason },
         });
         wsHub?.broadcast?.({ type: "notification.created", notification: notif });
 
         await pushBroadcastToCeo({
           db,
           title: "AI HQ Proposal",
-          body: `${decision.toUpperCase()} — ${row.title || "Proposal"}`,
-          data: { type: "proposal.updated", proposalId: row.id, decision },
+          body: `${nextStatus.toUpperCase()} — ${row.title || "Proposal"}`,
+          data: { type: "proposal.updated", proposalId: row.id, decision, status: nextStatus },
         });
 
-        await maybeTelegram(`AI HQ: proposal ${decision}\n${row.title || row.id}`);
+        await maybeTelegram(`AI HQ: proposal ${nextStatus}\n${row.title || row.id}`);
 
         let job = null;
         if (decision === "approved") {
@@ -1639,18 +1702,20 @@ export function apiRouter({ db, wsHub }) {
           notifyN8n("proposal.approved", row, {
             by,
             decision: "approved",
+            status: "in_progress",
             jobId: job.id,
             callback: { url: "/api/executions/callback", tokenHeader: "x-webhook-token" },
             dbDisabled: true,
           });
         } else {
-          notifyN8n("proposal.rejected", row, { by, decision: "rejected", reason, dbDisabled: true });
+          notifyN8n("proposal.rejected", row, { by, decision: "rejected", status: "rejected", reason, dbDisabled: true });
         }
 
         return okJson(res, { ok: true, proposal: row, notification: notif, job, dbDisabled: true });
       }
 
       // DB mode
+      // - Allow decision only while status='pending'
       const q = await db.query(
         `update proposals
          set status = $1::text,
@@ -1661,15 +1726,22 @@ export function apiRouter({ db, wsHub }) {
                         'decision',
                         jsonb_build_object(
                           'by', $2::text,
-                          'decision', $1::text,
+                          'decision', $3::text,
+                          'status', $1::text,
                           'reason', $4::text,
                           'at', now()
                         )
                       ))
-         where id::text = $3::text
+         where id::text = $5::text
            and status = 'pending'
          returning id, thread_id, agent, type, status, title, payload, created_at, decided_at, decision_by`,
-        [decision, by, id, decision === "rejected" ? reason : ""]
+        [
+          nextStatus,                     // $1 -> in_progress or rejected
+          by,                             // $2
+          decision,                       // $3 -> approved/rejected (logical)
+          decision === "rejected" ? reason : "", // $4
+          id,                             // $5
+        ]
       );
 
       let row = q.rows?.[0] || null;
@@ -1690,25 +1762,25 @@ export function apiRouter({ db, wsHub }) {
       row = { ...row, title: fixText(row.title), payload: deepFix(row.payload) };
 
       wsHub?.broadcast?.({ type: "proposal.updated", proposal: row });
-      await dbAudit(db, by, "proposal.decision", "proposal", String(row.id), { decision });
+      await dbAudit(db, by, "proposal.decision", "proposal", String(row.id), { decision, status: nextStatus });
 
       const notif = await dbCreateNotification(db, {
         recipient: "ceo",
-        type: decision === "approved" ? "success" : "warning",
-        title: decision === "approved" ? "Proposal Approved" : "Proposal Rejected",
+        type: decision === "approved" ? "info" : "warning",
+        title: decision === "approved" ? "Proposal Approved → Drafting" : "Proposal Rejected",
         body: row.title || "",
-        payload: { proposalId: row.id, threadId: row.thread_id, decision, reason: decision === "rejected" ? reason : "" },
+        payload: { proposalId: row.id, threadId: row.thread_id, decision, status: nextStatus, reason: decision === "rejected" ? reason : "" },
       });
       wsHub?.broadcast?.({ type: "notification.created", notification: notif });
 
       await pushBroadcastToCeo({
         db,
         title: "AI HQ Proposal",
-        body: `${decision.toUpperCase()} — ${row.title || "Proposal"}`,
-        data: { type: "proposal.updated", proposalId: String(row.id), decision },
+        body: `${nextStatus.toUpperCase()} — ${row.title || "Proposal"}`,
+        data: { type: "proposal.updated", proposalId: String(row.id), decision, status: nextStatus },
       });
 
-      await maybeTelegram(`AI HQ: proposal ${decision}\n${row.title || row.id}`);
+      await maybeTelegram(`AI HQ: proposal ${nextStatus}\n${row.title || row.id}`);
 
       let job = null;
       if (decision === "approved") {
@@ -1725,12 +1797,13 @@ export function apiRouter({ db, wsHub }) {
         notifyN8n("proposal.approved", row, {
           by,
           decision: "approved",
+          status: "in_progress",
           jobId: job.id,
           callback: { url: "/api/executions/callback", tokenHeader: "x-webhook-token" },
           dbDisabled: false,
         });
       } else {
-        notifyN8n("proposal.rejected", row, { by, decision: "rejected", reason, dbDisabled: false });
+        notifyN8n("proposal.rejected", row, { by, decision: "rejected", status: "rejected", reason, dbDisabled: false });
       }
 
       return okJson(res, { ok: true, proposal: row, notification: notif, job });

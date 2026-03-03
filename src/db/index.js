@@ -1,4 +1,4 @@
-// src/db/index.js (FINAL v1.3 — smart SSL + safe migrate)
+// src/db/index.js (FINAL v1.4 — smart SSL + safe migrate + clearer errors)
 import pg from "pg";
 import fs from "fs";
 import path from "path";
@@ -84,6 +84,10 @@ export async function migrate() {
 
   try {
     const schemaPath = path.resolve(process.cwd(), "src", "db", "schema.sql");
+    if (!fs.existsSync(schemaPath)) {
+      return { ok: false, error: `schema.sql not found at ${schemaPath}` };
+    }
+
     const sql = fs.readFileSync(schemaPath, "utf8");
 
     // Run schema as ONE migration batch
