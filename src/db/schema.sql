@@ -1,7 +1,10 @@
--- AI HQ schema (upgrade-safe + FULL legacy fixes) — FINAL v7.1
--- ✅ Adds: notifications, jobs, audit_log, push_subscriptions, tenants, content_items
+-- AI HQ schema (upgrade-safe + FULL legacy fixes) — FINAL v7.2
+-- ✅ Adds/ensures: notifications, jobs, audit_log, push_subscriptions, tenants, content_items (DRAFT-compatible)
 -- ✅ Keeps: legacy fixes (messages/proposals conversation_id + agent_key)
--- ✅ NEW: best-effort mojibake repair for UTF-8 text stored as latin1 (gÃ¼nlÃ¼k -> günlük)
+-- ✅ FIX: proposals.status includes in_progress (needed by api.js v2.9.2)
+-- ✅ FIX: content_items supports draft lifecycle columns (proposal_id, job_id, thread_id, version, content_pack, last_feedback)
+-- ✅ FIX: content_items.status allows draft.* + publishing/published/failed and other states
+-- ✅ Mojibake repair (best-effort)
 -- Safe for production: no DROP TABLE.
 
 create extension if not exists pgcrypto;
@@ -125,7 +128,7 @@ create table if not exists proposals (
   thread_id uuid,
   agent text not null,
   type text not null default 'generic',
-  status text not null default 'pending' check (status in ('pending','approved','rejected')),
+  status text not null default 'pending',
   title text,
   payload jsonb not null default '{}'::jsonb,
   created_at timestamptz not null default now(),
@@ -202,6 +205,27 @@ do $$
 begin
   begin
     alter table proposals alter column id set default gen_random_uuid();
+  exception when others then null;
+  end;
+end$$;
+
+-- ✅ IMPORTANT: loosen/replace status constraint to include in_progress
+do $$
+begin
+  -- drop any existing proposals status check if it exists (name can vary)
+  begin
+    if exists (select 1 from pg_constraint where conrelid='proposals'::regclass and contype='c') then
+      -- try common name first; ignore errors
+      begin execute 'alter table proposals drop constraint if exists proposals_status_check'; exception when others then null; end;
+    end if;
+  exception when others then null;
+  end;
+
+  -- ensure allowed statuses for current backend flow
+  begin
+    alter table proposals
+      add constraint proposals_status_check
+      check (status in ('pending','in_progress','approved','rejected'));
   exception when others then null;
   end;
 end$$;
@@ -399,14 +423,29 @@ exception when others then null;
 end$$;
 
 -- ============================================================
--- content_items (daily posts: draft -> approval -> publish)
+-- content_items (DRAFT lifecycle + can keep your existing post fields)
+-- IMPORTANT:
+-- api.js expects these columns:
+--   proposal_id, thread_id, job_id, status, version, content_pack, last_feedback, created_at, updated_at
 -- ============================================================
+
 create table if not exists content_items (
   id uuid primary key default gen_random_uuid(),
+
+  -- ✅ Draft linkage (needed by backend)
+  proposal_id uuid,
+  thread_id uuid,
+  job_id uuid,
+
+  -- ✅ Draft state (needed by backend)
+  status text not null default 'draft.ready',
+  version int not null default 1,
+  content_pack jsonb not null default '{}'::jsonb,
+  last_feedback text not null default '',
+
+  -- Optional: keep your existing posting fields (safe; backend ignores if unused)
   tenant_key text not null default 'neox',
-  type text not null default 'image' check (type in ('image','video','carousel','story')),
-  status text not null default 'pending_approval'
-    check (status in ('pending_approval','approved','rejected','publishing','published','failed')),
+  type text not null default 'image',
   title text not null default '',
   caption text not null default '',
   hashtags text not null default '',
@@ -416,10 +455,120 @@ create table if not exists content_items (
   approved_by text,
   published_at timestamptz,
   publish jsonb not null default '{}'::jsonb,
+
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
 
+-- Ensure columns exist in older deployments (idempotent)
+alter table content_items add column if not exists proposal_id uuid;
+alter table content_items add column if not exists thread_id uuid;
+alter table content_items add column if not exists job_id uuid;
+
+alter table content_items add column if not exists status text;
+alter table content_items add column if not exists version int;
+alter table content_items add column if not exists content_pack jsonb default '{}'::jsonb;
+alter table content_items add column if not exists last_feedback text;
+
+alter table content_items add column if not exists tenant_key text;
+alter table content_items add column if not exists type text;
+alter table content_items add column if not exists title text;
+alter table content_items add column if not exists caption text;
+alter table content_items add column if not exists hashtags text;
+alter table content_items add column if not exists media jsonb default '{}'::jsonb;
+alter table content_items add column if not exists schedule_at timestamptz;
+alter table content_items add column if not exists approved_at timestamptz;
+alter table content_items add column if not exists approved_by text;
+alter table content_items add column if not exists published_at timestamptz;
+alter table content_items add column if not exists publish jsonb default '{}'::jsonb;
+
+alter table content_items add column if not exists created_at timestamptz default now();
+alter table content_items add column if not exists updated_at timestamptz default now();
+
+-- defaults (best-effort)
+do $$
+begin
+  begin
+    alter table content_items alter column id set default gen_random_uuid();
+  exception when others then null;
+  end;
+  begin
+    alter table content_items alter column status set default 'draft.ready';
+  exception when others then null;
+  end;
+  begin
+    alter table content_items alter column version set default 1;
+  exception when others then null;
+  end;
+  begin
+    alter table content_items alter column content_pack set default '{}'::jsonb;
+  exception when others then null;
+  end;
+  begin
+    alter table content_items alter column last_feedback set default '';
+  exception when others then null;
+  end;
+  begin
+    alter table content_items alter column updated_at set default now();
+  exception when others then null;
+  end;
+end$$;
+
+-- ✅ Replace/loosen status constraint to allow backend draft statuses
+do $$
+begin
+  -- drop known check if exists
+  begin execute 'alter table content_items drop constraint if exists content_items_status_check'; exception when others then null; end;
+
+  -- allow a wide set (covers draft lifecycle + publish)
+  begin
+    alter table content_items
+      add constraint content_items_status_check
+      check (
+        status in (
+          'draft.ready',
+          'draft.regenerating',
+          'draft.approved',
+          'pending_approval',
+          'approved',
+          'rejected',
+          'publishing',
+          'published',
+          'failed'
+        )
+      );
+  exception when others then null;
+  end;
+end$$;
+
+-- FK (optional, best-effort)
+do $$
+begin
+  begin
+    alter table content_items
+      add constraint content_items_proposal_id_fkey
+      foreign key (proposal_id) references proposals(id) on delete set null;
+  exception when others then null;
+  end;
+
+  begin
+    alter table content_items
+      add constraint content_items_thread_id_fkey
+      foreign key (thread_id) references threads(id) on delete set null;
+  exception when others then null;
+  end;
+
+  begin
+    alter table content_items
+      add constraint content_items_job_id_fkey
+      foreign key (job_id) references jobs(id) on delete set null;
+  exception when others then null;
+  end;
+end$$;
+
+-- indexes
+create index if not exists idx_content_proposal_updated on content_items(proposal_id, updated_at desc);
+create index if not exists idx_content_status_updated on content_items(status, updated_at desc);
 create index if not exists idx_content_tenant_status on content_items(tenant_key, status, created_at desc);
 create index if not exists idx_content_schedule on content_items(status, schedule_at);
 
@@ -445,32 +594,32 @@ begin
   -- messages.content
   begin
     update messages
-      set content = convert_from(convert_to(content, ''LATIN1''), ''UTF8'')
-    where content is not null and content ~ ''Ã.|Â.|â€|â€™|â€œ|â€�|â€“|â€”|â€¦'';
+      set content = convert_from(convert_to(content, 'LATIN1'), 'UTF8')
+    where content is not null and content ~ 'Ã.|Â.|â€|â€™|â€œ|â€�|â€“|â€”|â€¦';
   exception when others then null;
   end;
 
   -- proposals.title
   begin
     update proposals
-      set title = convert_from(convert_to(title, ''LATIN1''), ''UTF8'')
-    where title is not null and title ~ ''Ã.|Â.|â€|â€™|â€œ|â€�|â€“|â€”|â€¦'';
+      set title = convert_from(convert_to(title, 'LATIN1'), 'UTF8')
+    where title is not null and title ~ 'Ã.|Â.|â€|â€™|â€œ|â€�|â€“|â€”|â€¦';
   exception when others then null;
   end;
 
   -- notifications.title
   begin
     update notifications
-      set title = convert_from(convert_to(title, ''LATIN1''), ''UTF8'')
-    where title is not null and title ~ ''Ã.|Â.|â€|â€™|â€œ|â€�|â€“|â€”|â€¦'';
+      set title = convert_from(convert_to(title, 'LATIN1'), 'UTF8')
+    where title is not null and title ~ 'Ã.|Â.|â€|â€™|â€œ|â€�|â€“|â€”|â€¦';
   exception when others then null;
   end;
 
   -- notifications.body
   begin
     update notifications
-      set body = convert_from(convert_to(body, ''LATIN1''), ''UTF8'')
-    where body is not null and body ~ ''Ã.|Â.|â€|â€™|â€œ|â€�|â€“|â€”|â€¦'';
+      set body = convert_from(convert_to(body, 'LATIN1'), 'UTF8')
+    where body is not null and body ~ 'Ã.|Â.|â€|â€™|â€œ|â€�|â€“|â€”|â€¦';
   exception when others then null;
   end;
 
