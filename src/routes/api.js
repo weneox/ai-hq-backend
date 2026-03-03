@@ -1,4 +1,8 @@
-// src/routes/api.js (FINAL v2.9.0 — Content Draft + Feedback/Revise/Publish + Mojibake auto-fix + Push TEST + Executions list/detail)
+// src/routes/api.js (FINAL v2.9.1 — Content Draft + Feedback/Revise/Approve/Publish + Mojibake auto-fix + Push TEST + Executions list/detail)
+// PATCH vs v2.9.0:
+// ✅ /content/:id/approve now emits n8n event: content.approved
+// ✅ n8n payload callback.url becomes ABSOLUTE if cfg.PUBLIC_BASE_URL is set (fallback to relative)
+
 import express from "express";
 import crypto from "crypto";
 import { cfg } from "../config.js";
@@ -150,6 +154,20 @@ function requireCallbackToken(req) {
       ""
   ).trim();
   return Boolean(got) && got === expected;
+}
+
+function baseUrl() {
+  const b = String(cfg.PUBLIC_BASE_URL || "").trim().replace(/\/+$/, "");
+  return b || "";
+}
+
+function absoluteCallbackUrl(pathname) {
+  const b = baseUrl();
+  const p = String(pathname || "").trim();
+  if (!p) return p;
+  if (/^https?:\/\//i.test(p)) return p;
+  if (!b) return p; // keep relative if base not configured
+  return `${b}${p.startsWith("/") ? "" : "/"}${p}`;
 }
 
 // ✅ Telegram hard toggle: OFF by default
@@ -470,6 +488,9 @@ function notifyN8n(event, proposal, extra = {}) {
   const url = String(cfg.N8N_WEBHOOK_URL || "").trim();
   if (!url) return;
 
+  const callbackRel = extra?.callback?.url || "/api/executions/callback";
+  const callbackAbs = absoluteCallbackUrl(callbackRel);
+
   const payload = deepFix({
     event,
     proposalId: extra.proposalId || proposal?.id || null,
@@ -477,7 +498,10 @@ function notifyN8n(event, proposal, extra = {}) {
     by: extra.by || proposal?.decision_by || "unknown",
     decidedAt: extra.decidedAt || proposal?.decided_at || null,
     jobId: extra.jobId || null,
-    callback: extra.callback || { url: "/api/executions/callback", tokenHeader: "x-webhook-token" },
+    callback: {
+      ...(extra.callback || { url: callbackRel, tokenHeader: "x-webhook-token" }),
+      url: callbackAbs || callbackRel,
+    },
     title: proposal?.title || extra.title || null,
     summary: extra.summary || null,
     tasks: extra.tasks || null,
@@ -500,9 +524,7 @@ function notifyN8n(event, proposal, extra = {}) {
     .then((r) => {
       const info = r?.ok ? `ok ${r.status || ""}` : `fail ${r.status || r.error || ""}`;
       const preview =
-        typeof r?.data === "string"
-          ? r.data.slice(0, 160)
-          : JSON.stringify(r?.data || {}).slice(0, 160);
+        typeof r?.data === "string" ? r.data.slice(0, 160) : JSON.stringify(r?.data || {}).slice(0, 160);
       console.log(`[n8n] ${event} → ${info} ${preview}`);
     })
     .catch((e) => console.log("[n8n] error", String(e?.message || e)));
@@ -556,7 +578,12 @@ async function dbListNotifications(db, { recipient = "ceo", unreadOnly = false, 
     [recipient]
   );
 
-  return (q.rows || []).map((x) => ({ ...x, title: fixText(x.title), body: fixText(x.body), payload: deepFix(x.payload) }));
+  return (q.rows || []).map((x) => ({
+    ...x,
+    title: fixText(x.title),
+    body: fixText(x.body),
+    payload: deepFix(x.payload),
+  }));
 }
 
 async function dbMarkNotificationRead(db, id) {
@@ -665,7 +692,14 @@ async function dbUpdateContentItem(db, id, patch = {}) {
          updated_at = now()
      where id = $1::uuid
      returning id, proposal_id, thread_id, job_id, status, version, content_pack, last_feedback, created_at, updated_at`,
-    [id, status ? fixText(status) : null, version != null ? Number(version) : null, jobId || null, lastFeedback != null ? fixText(String(lastFeedback)) : null, contentPack ? deepFix(contentPack) : null]
+    [
+      id,
+      status ? fixText(status) : null,
+      version != null ? Number(version) : null,
+      jobId || null,
+      lastFeedback != null ? fixText(String(lastFeedback)) : null,
+      contentPack ? deepFix(contentPack) : null,
+    ]
   );
 
   const row = q.rows?.[0] || null;
@@ -924,7 +958,6 @@ export function apiRouter({ db, wsHub }) {
         const row = mem.contentItems.get(id);
         if (!row) return okJson(res, { ok: false, error: "content not found", dbDisabled: true });
 
-        // update status
         memPatchContentItem(id, { status: "draft.regenerating", last_feedback: feedback });
 
         wsHub?.broadcast?.({ type: "content.updated", content: mem.contentItems.get(id) });
@@ -946,7 +979,6 @@ export function apiRouter({ db, wsHub }) {
           data: { type: "content.updated", contentId: id, status: "draft.regenerating" },
         });
 
-        // n8n event
         notifyN8n("content.revise", null, {
           by,
           proposalId: row.proposal_id,
@@ -1016,7 +1048,7 @@ export function apiRouter({ db, wsHub }) {
   });
 
   /** ===========================
-   * Content — approve draft
+   * Content — approve draft (✅ + n8n content.approved)
    * =========================== */
   r.post("/content/:id/approve", async (req, res) => {
     const id = String(req.params.id || "").trim();
@@ -1050,8 +1082,32 @@ export function apiRouter({ db, wsHub }) {
           data: { type: "content.updated", contentId: id, status: "draft.approved" },
         });
 
+        // ✅ n8n event
+        notifyN8n("content.approved", null, {
+          by,
+          proposalId: row.proposal_id,
+          threadId: row.thread_id,
+          contentItemId: id,
+          status: "draft.approved",
+          contentPack: row.content_pack || {},
+          jobId: row.job_id || null,
+          callback: { url: "/api/executions/callback", tokenHeader: "x-webhook-token" },
+          dbDisabled: true,
+        });
+
         return okJson(res, { ok: true, content: updated, notification: n, dbDisabled: true });
       }
+
+      // DB
+      const cur = await db.query(
+        `select id, proposal_id, thread_id, job_id, content_pack
+         from content_items
+         where id = $1::uuid
+         limit 1`,
+        [id]
+      );
+      const row = cur.rows?.[0] || null;
+      if (!row) return okJson(res, { ok: false, error: "content not found" });
 
       const updated = await dbUpdateContentItem(db, id, { status: "draft.approved" });
       if (!updated) return okJson(res, { ok: false, error: "content not found" });
@@ -1073,6 +1129,19 @@ export function apiRouter({ db, wsHub }) {
         title: "Draft approved",
         body: "Ready to publish.",
         data: { type: "content.updated", contentId: id, status: "draft.approved" },
+      });
+
+      // ✅ n8n event
+      notifyN8n("content.approved", null, {
+        by,
+        proposalId: String(row.proposal_id),
+        threadId: row.thread_id ? String(row.thread_id) : null,
+        contentItemId: id,
+        status: "draft.approved",
+        contentPack: deepFix(row.content_pack || {}),
+        jobId: row.job_id ? String(row.job_id) : null,
+        callback: { url: "/api/executions/callback", tokenHeader: "x-webhook-token" },
+        dbDisabled: false,
       });
 
       return okJson(res, { ok: true, content: updated, notification: notif });
@@ -1201,15 +1270,8 @@ export function apiRouter({ db, wsHub }) {
       return okJson(res, { ok: false, error: 'status must be "running"|"completed"|"failed"' });
     }
 
-    // contentPack detection (draft auto-save)
-    const maybeContentPack =
-      result?.contentPack ||
-      result?.content_pack ||
-      result?.draft ||
-      result?.draftPack ||
-      null;
+    const maybeContentPack = result?.contentPack || result?.content_pack || result?.draft || result?.draftPack || null;
 
-    // if n8n sends stringified JSON, try parse
     let contentPackObj = null;
     if (maybeContentPack && typeof maybeContentPack === "object") contentPackObj = maybeContentPack;
     if (typeof maybeContentPack === "string") {
@@ -1239,7 +1301,6 @@ export function apiRouter({ db, wsHub }) {
         });
         if (!row) return okJson(res, { ok: false, error: "job not found", dbDisabled: true });
 
-        // AUTO-DRAFT: if contentPack exists and job has proposal_id
         let content = null;
         if (contentPackObj && row.proposal_id && status === "completed") {
           content = memUpsertContentItem({
@@ -1286,7 +1347,6 @@ export function apiRouter({ db, wsHub }) {
       const row = await dbUpdateJob(db, jobId, dbPatch);
       if (!row) return okJson(res, { ok: false, error: "job not found" });
 
-      // AUTO-DRAFT (DB): save contentPack into content_items for the job's proposal_id
       let content = null;
       if (contentPackObj && row.proposal_id && status === "completed") {
         content = await dbUpsertDraftFromCallback(db, {
@@ -1333,12 +1393,11 @@ export function apiRouter({ db, wsHub }) {
   r.get("/executions", async (req, res) => {
     const status = String(req.query.status || "").trim().toLowerCase();
     const limit = clamp(req.query.limit ?? 50, 1, 200);
-    const executionId = String(req.query.executionId || "").trim(); // numeric id inside output.executionId
+    const executionId = String(req.query.executionId || "").trim();
 
     try {
       await maybeCleanupExpired({ db });
 
-      // MEMORY mode
       if (!isDbReady(db)) {
         let rows = Array.from(mem.jobs.values());
         if (status) rows = rows.filter((j) => String(j.status || "").toLowerCase() === status);
@@ -1350,7 +1409,6 @@ export function apiRouter({ db, wsHub }) {
         return okJson(res, { ok: true, executions: rows, dbDisabled: true });
       }
 
-      // DB mode
       const where = [];
       const params = [];
 
@@ -1388,7 +1446,6 @@ export function apiRouter({ db, wsHub }) {
     }
   });
 
-  // ✅ Detail by uuid OR by numeric "executionId" embedded in output
   r.get("/executions/:id", async (req, res) => {
     const id = String(req.params.id || "").trim();
     if (!id) return okJson(res, { ok: false, error: "execution id required" });
@@ -1396,13 +1453,10 @@ export function apiRouter({ db, wsHub }) {
     try {
       await maybeCleanupExpired({ db });
 
-      // MEMORY mode
       if (!isDbReady(db)) {
-        // try uuid lookup first
         const byId = mem.jobs.get(id);
         if (byId) return okJson(res, { ok: true, execution: byId, dbDisabled: true });
 
-        // else treat as numeric executionId inside output
         if (isDigits(id)) {
           for (const j of mem.jobs.values()) {
             const ex = String(j?.output?.executionId || j?.output?.execution_id || "").trim();
@@ -1413,7 +1467,6 @@ export function apiRouter({ db, wsHub }) {
         return okJson(res, { ok: false, error: "not found", dbDisabled: true });
       }
 
-      // DB mode
       if (isUuid(id)) {
         const q = await db.query(
           `select id, proposal_id, type, status, input, output, error, created_at, started_at, finished_at
@@ -1433,7 +1486,6 @@ export function apiRouter({ db, wsHub }) {
         return okJson(res, { ok: true, execution: row });
       }
 
-      // Allow numeric id (executionId inside output)
       if (isDigits(id)) {
         const q = await db.query(
           `select id, proposal_id, type, status, input, output, error, created_at, started_at, finished_at
@@ -1538,7 +1590,6 @@ export function apiRouter({ db, wsHub }) {
     }
 
     try {
-      // MEMORY mode
       if (!isDbReady(db)) {
         const row = mem.proposals.get(id);
         if (!row) return okJson(res, { ok: false, error: "proposal not found", dbDisabled: true });
