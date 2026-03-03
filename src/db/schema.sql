@@ -1,10 +1,27 @@
--- AI HQ schema (upgrade-safe + FULL legacy fixes) — FINAL v7
+-- AI HQ schema (upgrade-safe + FULL legacy fixes) — FINAL v7.1
 -- ✅ Adds: notifications, jobs, audit_log, push_subscriptions, tenants, content_items
 -- ✅ Keeps: legacy fixes (messages/proposals conversation_id + agent_key)
 -- ✅ NEW: best-effort mojibake repair for UTF-8 text stored as latin1 (gÃ¼nlÃ¼k -> günlük)
 -- Safe for production: no DROP TABLE.
 
 create extension if not exists pgcrypto;
+
+-- ============================================================
+-- shared helper: updated_at trigger fn (created once)
+-- ============================================================
+do $$
+begin
+  if not exists (select 1 from pg_proc where proname = 'set_updated_at') then
+    execute $fn$
+      create or replace function set_updated_at() returns trigger as $f$
+      begin
+        new.updated_at = now();
+        return new;
+      end; $f$ language plpgsql;
+    $fn$;
+  end if;
+exception when others then null;
+end$$;
 
 -- ============================================================
 -- threads
@@ -44,6 +61,7 @@ alter table messages add column if not exists content text;
 alter table messages add column if not exists meta jsonb default '{}'::jsonb;
 alter table messages add column if not exists created_at timestamptz default now();
 
+-- drop legacy FK to conversation_id if exists
 do $$
 begin
   if exists (select 1 from pg_constraint where conname = 'messages_conversation_id_fkey') then
@@ -54,6 +72,7 @@ begin
   end if;
 end$$;
 
+-- drop NOT NULL on legacy conversation_id if exists
 do $$
 begin
   if exists (
@@ -83,6 +102,7 @@ begin
   end;
 end$$;
 
+-- ensure FK exists (idempotent)
 do $$
 begin
   if not exists (select 1 from pg_constraint where conname = 'messages_thread_id_fkey') then
@@ -124,6 +144,7 @@ alter table proposals add column if not exists created_at timestamptz default no
 alter table proposals add column if not exists decided_at timestamptz;
 alter table proposals add column if not exists decision_by text;
 
+-- drop legacy FK to conversation_id if exists
 do $$
 begin
   if exists (select 1 from pg_constraint where conname = 'proposals_conversation_id_fkey') then
@@ -134,6 +155,7 @@ begin
   end if;
 end$$;
 
+-- drop NOT NULL on legacy conversation_id if exists
 do $$
 begin
   if exists (
@@ -147,6 +169,7 @@ begin
   end if;
 end$$;
 
+-- legacy agent_key not-null fix
 do $$
 begin
   if exists (
@@ -160,6 +183,7 @@ begin
   end if;
 end$$;
 
+-- if both exist, backfill agent_key from agent
 do $$
 begin
   if exists (
@@ -399,17 +423,11 @@ create table if not exists content_items (
 create index if not exists idx_content_tenant_status on content_items(tenant_key, status, created_at desc);
 create index if not exists idx_content_schedule on content_items(status, schedule_at);
 
--- auto updated_at (best-effort)
+-- auto updated_at trigger (best-effort)
 do $$
 begin
   if not exists (select 1 from pg_trigger where tgname = 'trg_content_items_updated_at') then
     execute '
-      create or replace function set_updated_at() returns trigger as $f$
-      begin
-        new.updated_at = now();
-        return new;
-      end; $f$ language plpgsql;
-
       create trigger trg_content_items_updated_at
       before update on content_items
       for each row execute function set_updated_at();
@@ -421,38 +439,38 @@ end$$;
 -- ============================================================
 -- ✅ Mojibake repair (best-effort)
 -- If text contains common broken markers, try latin1->utf8 recovery.
--- This can fix: gÃ¼nlÃ¼k -> günlük, Åž -> Ş, Ä± -> ı, etc.
 -- ============================================================
 do $$
 begin
   -- messages.content
   begin
     update messages
-      set content = convert_from(convert_to(content, 'LATIN1'), 'UTF8')
-    where content ~ 'Ã.|Â.|â€|â€™|â€œ|â€�|â€“|â€”|â€¦';
+      set content = convert_from(convert_to(content, ''LATIN1''), ''UTF8'')
+    where content is not null and content ~ ''Ã.|Â.|â€|â€™|â€œ|â€�|â€“|â€”|â€¦'';
   exception when others then null;
   end;
 
   -- proposals.title
   begin
     update proposals
-      set title = convert_from(convert_to(title, 'LATIN1'), 'UTF8')
-    where title is not null and title ~ 'Ã.|Â.|â€|â€™|â€œ|â€�|â€“|â€”|â€¦';
+      set title = convert_from(convert_to(title, ''LATIN1''), ''UTF8'')
+    where title is not null and title ~ ''Ã.|Â.|â€|â€™|â€œ|â€�|â€“|â€”|â€¦'';
   exception when others then null;
   end;
 
-  -- notifications.title/body
+  -- notifications.title
   begin
     update notifications
-      set title = convert_from(convert_to(title, 'LATIN1'), 'UTF8')
-    where title is not null and title ~ 'Ã.|Â.|â€|â€™|â€œ|â€�|â€“|â€”|â€¦';
+      set title = convert_from(convert_to(title, ''LATIN1''), ''UTF8'')
+    where title is not null and title ~ ''Ã.|Â.|â€|â€™|â€œ|â€�|â€“|â€”|â€¦'';
   exception when others then null;
   end;
 
+  -- notifications.body
   begin
     update notifications
-      set body = convert_from(convert_to(body, 'LATIN1'), 'UTF8')
-    where body is not null and body ~ 'Ã.|Â.|â€|â€™|â€œ|â€�|â€“|â€”|â€¦';
+      set body = convert_from(convert_to(body, ''LATIN1''), ''UTF8'')
+    where body is not null and body ~ ''Ã.|Â.|â€|â€™|â€œ|â€�|â€“|â€”|â€¦'';
   exception when others then null;
   end;
 

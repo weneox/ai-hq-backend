@@ -1,4 +1,4 @@
-// src/routes/api.js (FINAL v2.7.6 — Mojibake auto-fix + Push TEST endpoint + Executions list/detail + expired cleanup)
+// src/routes/api.js (FINAL v2.8.0 — Mojibake auto-fix + Push TEST + Executions list/detail (+by executionId) + best-effort cleanup)
 import express from "express";
 import crypto from "crypto";
 import { cfg } from "../config.js";
@@ -19,31 +19,20 @@ function scoreTextQuality(s) {
   if (typeof s !== "string") return 0;
   const str = s;
 
-  // penalize lots of mojibake markers
   const moj = (str.match(MOJIBAKE_RE) || []).length;
-
-  // penalize replacement chars
   const repl = (str.match(/\uFFFD/g) || []).length;
-
-  // reward presence of expected AZ/TR characters (optional)
   const good = (str.match(/[əğıöüşçƏĞİÖÜŞÇ]/g) || []).length;
-
-  // reward letters/spaces vs symbols
   const letters = (str.match(/[A-Za-z0-9\u00C0-\u024F\u0400-\u04FFəğıöüşçƏĞİÖÜŞÇ]/g) || []).length;
   const total = Math.max(1, str.length);
 
-  // Higher is better
   return good * 3 + (letters / total) * 10 - moj * 4 - repl * 20;
 }
 
 function tryFixMojibake(s) {
   if (typeof s !== "string") return s;
   const str = s;
-
-  // Quick check: if no mojibake markers, keep as-is
   if (!MOJIBAKE_RE.test(str)) return str;
 
-  // Attempt latin1 -> utf8 recovery
   let candidate = str;
   try {
     candidate = Buffer.from(str, "latin1").toString("utf8");
@@ -51,10 +40,8 @@ function tryFixMojibake(s) {
     return str;
   }
 
-  // Choose the better one by score (avoid making it worse)
   const a = scoreTextQuality(str);
   const b = scoreTextQuality(candidate);
-
   return b > a ? candidate : str;
 }
 
@@ -144,6 +131,11 @@ function isUuid(v) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(s);
 }
 
+function isDigits(v) {
+  const s = String(v || "").trim();
+  return /^[0-9]{1,12}$/.test(s);
+}
+
 function callbackTokenExpected() {
   return String(cfg.N8N_CALLBACK_TOKEN || cfg.N8N_WEBHOOK_TOKEN || "").trim();
 }
@@ -151,7 +143,12 @@ function callbackTokenExpected() {
 function requireCallbackToken(req) {
   const expected = callbackTokenExpected();
   if (!expected) return true; // dev allow
-  const got = String(req.headers["x-webhook-token"] || req.headers["x-callback-token"] || "").trim();
+  const got = String(
+    req.headers["x-webhook-token"] ||
+      req.headers["x-callback-token"] ||
+      req.body?.token || // allow body token for easy n8n testing
+      ""
+  ).trim();
   return Boolean(got) && got === expected;
 }
 
@@ -227,7 +224,16 @@ function memListProposals(status = "pending") {
 
 function memCreateNotification({ recipient = "ceo", type = "info", title = "", body = "", payload = {} }) {
   const id = crypto.randomUUID();
-  const row = { id, recipient, type, title: fixText(title), body: fixText(body), payload: deepFix(payload), read_at: null, created_at: nowIso() };
+  const row = {
+    id,
+    recipient,
+    type,
+    title: fixText(title),
+    body: fixText(body),
+    payload: deepFix(payload),
+    read_at: null,
+    created_at: nowIso(),
+  };
   mem.notifications.set(id, row);
   return row;
 }
@@ -291,6 +297,54 @@ function memAudit(actor, action, objectType, objectId, meta = {}) {
 }
 
 /** ===========================
+ * Best-effort cleanup (expired rows)
+ * =========================== */
+let lastCleanupMs = 0;
+
+async function maybeCleanupExpired({ db }) {
+  const now = Date.now();
+  if (now - lastCleanupMs < 10 * 60 * 1000) return; // at most every 10 minutes
+  lastCleanupMs = now;
+
+  const JOB_TTL_DAYS = clamp(cfg.JOB_TTL_DAYS ?? 30, 7, 180);
+  const NOTIF_TTL_DAYS = clamp(cfg.NOTIF_TTL_DAYS ?? 90, 14, 365);
+
+  // Memory cleanup
+  if (!isDbReady(db)) {
+    const cutoffJobs = Date.now() - JOB_TTL_DAYS * 24 * 60 * 60 * 1000;
+    for (const [id, j] of mem.jobs.entries()) {
+      const t = Date.parse(String(j.created_at || "")) || 0;
+      const final = ["completed", "failed"].includes(String(j.status || "").toLowerCase());
+      if (final && t && t < cutoffJobs) mem.jobs.delete(id);
+    }
+    const cutoffNotif = Date.now() - NOTIF_TTL_DAYS * 24 * 60 * 60 * 1000;
+    for (const [id, n] of mem.notifications.entries()) {
+      const t = Date.parse(String(n.created_at || "")) || 0;
+      if (t && t < cutoffNotif) mem.notifications.delete(id);
+    }
+    return;
+  }
+
+  // DB cleanup (safe; no drops)
+  try {
+    await db.query(
+      `delete from jobs
+       where status in ('completed','failed')
+         and created_at < now() - ($1::int * interval '1 day')`,
+      [JOB_TTL_DAYS]
+    );
+  } catch {}
+
+  try {
+    await db.query(
+      `delete from notifications
+       where created_at < now() - ($1::int * interval '1 day')`,
+      [NOTIF_TTL_DAYS]
+    );
+  } catch {}
+}
+
+/** ===========================
  * Push helpers (DB)
  * =========================== */
 async function dbUpsertPushSub(db, { recipient = "ceo", endpoint, p256dh, auth, userAgent }) {
@@ -321,7 +375,6 @@ async function dbListPushSubs(db, recipient = "ceo") {
   return q.rows || [];
 }
 
-// ✅ expired subs cleanup
 async function dbDeletePushSub(db, endpoint) {
   if (!isDbReady(db)) return;
   try {
@@ -387,8 +440,19 @@ function notifyN8n(event, proposal, extra = {}) {
     token: String(cfg.N8N_WEBHOOK_TOKEN || "").trim(),
     timeoutMs: Number(cfg.N8N_TIMEOUT_MS || 10_000),
     payload,
+    retries: Number(cfg.N8N_RETRIES ?? 2),
+    baseBackoffMs: Number(cfg.N8N_BACKOFF_MS ?? 500),
+    requestId: extra.requestId,
+    executionId: extra.executionId,
   })
-    .then((r) => console.log(`[n8n] ${event} →`, r.ok, r.status || r.error, (r.text || "").slice(0, 160)))
+    .then((r) => {
+      const info = r?.ok ? `ok ${r.status || ""}` : `fail ${r.status || r.error || ""}`;
+      const preview =
+        typeof r?.data === "string"
+          ? r.data.slice(0, 160)
+          : JSON.stringify(r?.data || {}).slice(0, 160);
+      console.log(`[n8n] ${event} → ${info} ${preview}`);
+    })
     .catch((e) => console.log("[n8n] error", String(e?.message || e)));
 }
 
@@ -430,26 +494,16 @@ async function dbCreateNotification(db, { recipient = "ceo", type = "info", titl
 async function dbListNotifications(db, { recipient = "ceo", unreadOnly = false, limit = 50 }) {
   const lim = Math.max(1, Math.min(200, Number(limit) || 50));
 
-  if (unreadOnly) {
-    const q = await db.query(
-      `select id, recipient, type, title, body, payload, read_at, created_at
-       from notifications
-       where recipient = $1::text and read_at is null
-       order by created_at desc
-       limit ${lim}`,
-      [recipient]
-    );
-    return (q.rows || []).map((x) => ({ ...x, title: fixText(x.title), body: fixText(x.body), payload: deepFix(x.payload) }));
-  }
-
+  const where = unreadOnly ? `and read_at is null` : ``;
   const q = await db.query(
     `select id, recipient, type, title, body, payload, read_at, created_at
      from notifications
-     where recipient = $1::text
+     where recipient = $1::text ${where}
      order by created_at desc
      limit ${lim}`,
     [recipient]
   );
+
   return (q.rows || []).map((x) => ({ ...x, title: fixText(x.title), body: fixText(x.body), payload: deepFix(x.payload) }));
 }
 
@@ -513,8 +567,9 @@ async function dbUpdateJob(db, id, patch) {
 export function apiRouter({ db, wsHub }) {
   const r = express.Router();
 
-  r.get("/", (_req, res) =>
-    okJson(res, {
+  r.get("/", async (_req, res) => {
+    await maybeCleanupExpired({ db });
+    return okJson(res, {
       ok: true,
       service: "ai-hq-backend",
       db: { enabled: isDbReady(db) },
@@ -532,15 +587,15 @@ export function apiRouter({ db, wsHub }) {
         "GET /api/push/vapid",
         "POST /api/push/subscribe",
         "POST /api/push/test (token if DEBUG_API_TOKEN set)",
-        "GET /api/executions?status=&limit=",
-        "GET /api/executions/:id",
+        "GET /api/executions?status=&limit=&executionId=",
+        "GET /api/executions/:id (uuid) OR /api/executions/:executionId (digits)",
         "POST /api/executions/callback (token)",
         "POST /api/debug/openai (token if DEBUG_API_TOKEN set)",
       ],
       telegram: { enabled: Boolean(cfg.TELEGRAM_ENABLED) },
       push: { enabled: Boolean(cfg.PUSH_ENABLED), vapidPublicKey: cfg.VAPID_PUBLIC_KEY ? "set" : "missing" },
-    })
-  );
+    });
+  });
 
   r.get("/agents", (_req, res) => okJson(res, { ok: true, agents: listAgents() }));
 
@@ -648,6 +703,8 @@ export function apiRouter({ db, wsHub }) {
     const limit = clamp(req.query.limit ?? 50, 1, 200);
 
     try {
+      await maybeCleanupExpired({ db });
+
       if (!isDbReady(db)) {
         const rows = memListNotifications({ recipient, unreadOnly, limit });
         return okJson(res, { ok: true, recipient, unreadOnly, notifications: rows, dbDisabled: true });
@@ -780,30 +837,48 @@ export function apiRouter({ db, wsHub }) {
   });
 
   /** ===========================
-   * Executions (Jobs) list + detail ✅ (NEW)
+   * Executions (Jobs) list + detail ✅
+   * + Supports query: executionId=54 (matches jobs.output.executionId)
    * =========================== */
   r.get("/executions", async (req, res) => {
     const status = String(req.query.status || "").trim().toLowerCase();
     const limit = clamp(req.query.limit ?? 50, 1, 200);
+    const executionId = String(req.query.executionId || "").trim(); // numeric id inside output.executionId
 
     try {
+      await maybeCleanupExpired({ db });
+
       // MEMORY mode
       if (!isDbReady(db)) {
         let rows = Array.from(mem.jobs.values());
         if (status) rows = rows.filter((j) => String(j.status || "").toLowerCase() === status);
+        if (executionId) {
+          rows = rows.filter((j) => String(j?.output?.executionId || j?.output?.execution_id || "").trim() === executionId);
+        }
         rows.sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
         rows = rows.slice(0, limit);
         return okJson(res, { ok: true, executions: rows, dbDisabled: true });
       }
 
       // DB mode
-      const where = status ? `where status = $1::text` : ``;
-      const params = status ? [status] : [];
+      const where = [];
+      const params = [];
+
+      if (status) {
+        params.push(status);
+        where.push(`status = $${params.length}::text`);
+      }
+      if (executionId) {
+        params.push(executionId);
+        where.push(`(output->>'executionId' = $${params.length}::text or output->>'execution_id' = $${params.length}::text)`);
+      }
+
+      const whereSql = where.length ? `where ${where.join(" and ")}` : ``;
 
       const q = await db.query(
         `select id, proposal_id, type, status, input, output, error, created_at, started_at, finished_at
          from jobs
-         ${where}
+         ${whereSql}
          order by created_at desc
          limit ${limit}`,
         params
@@ -823,37 +898,73 @@ export function apiRouter({ db, wsHub }) {
     }
   });
 
+  // ✅ Detail by uuid OR by numeric "executionId" embedded in output
   r.get("/executions/:id", async (req, res) => {
     const id = String(req.params.id || "").trim();
     if (!id) return okJson(res, { ok: false, error: "execution id required" });
 
     try {
+      await maybeCleanupExpired({ db });
+
       // MEMORY mode
       if (!isDbReady(db)) {
-        const row = mem.jobs.get(id);
-        if (!row) return okJson(res, { ok: false, error: "not found", dbDisabled: true });
-        return okJson(res, { ok: true, execution: row, dbDisabled: true });
+        // try uuid lookup first
+        const byId = mem.jobs.get(id);
+        if (byId) return okJson(res, { ok: true, execution: byId, dbDisabled: true });
+
+        // else treat as numeric executionId inside output
+        if (isDigits(id)) {
+          for (const j of mem.jobs.values()) {
+            const ex = String(j?.output?.executionId || j?.output?.execution_id || "").trim();
+            if (ex === id) return okJson(res, { ok: true, execution: j, dbDisabled: true });
+          }
+        }
+
+        return okJson(res, { ok: false, error: "not found", dbDisabled: true });
       }
 
       // DB mode
-      if (!isUuid(id)) return okJson(res, { ok: false, error: "id must be uuid" });
+      if (isUuid(id)) {
+        const q = await db.query(
+          `select id, proposal_id, type, status, input, output, error, created_at, started_at, finished_at
+           from jobs
+           where id = $1::uuid
+           limit 1`,
+          [id]
+        );
 
-      const q = await db.query(
-        `select id, proposal_id, type, status, input, output, error, created_at, started_at, finished_at
-         from jobs
-         where id = $1::uuid
-         limit 1`,
-        [id]
-      );
+        const row = q.rows?.[0] || null;
+        if (!row) return okJson(res, { ok: false, error: "not found" });
 
-      const row = q.rows?.[0] || null;
-      if (!row) return okJson(res, { ok: false, error: "not found" });
+        row.input = deepFix(row.input);
+        row.output = deepFix(row.output);
+        row.error = row.error ? fixText(String(row.error)) : null;
 
-      row.input = deepFix(row.input);
-      row.output = deepFix(row.output);
-      row.error = row.error ? fixText(String(row.error)) : null;
+        return okJson(res, { ok: true, execution: row });
+      }
 
-      return okJson(res, { ok: true, execution: row });
+      // Allow numeric id (executionId inside output)
+      if (isDigits(id)) {
+        const q = await db.query(
+          `select id, proposal_id, type, status, input, output, error, created_at, started_at, finished_at
+           from jobs
+           where (output->>'executionId' = $1::text or output->>'execution_id' = $1::text)
+           order by created_at desc
+           limit 1`,
+          [id]
+        );
+
+        const row = q.rows?.[0] || null;
+        if (!row) return okJson(res, { ok: false, error: "not found" });
+
+        row.input = deepFix(row.input);
+        row.output = deepFix(row.output);
+        row.error = row.error ? fixText(String(row.error)) : null;
+
+        return okJson(res, { ok: true, execution: row, resolvedBy: "output.executionId" });
+      }
+
+      return okJson(res, { ok: false, error: "id must be uuid (or digits executionId)" });
     } catch (e) {
       const details = serializeError(e);
       return okJson(res, { ok: false, error: details.name, details });
@@ -869,7 +980,11 @@ export function apiRouter({ db, wsHub }) {
 
     try {
       if (!isDbReady(db)) {
-        const messages = (mem.messages.get(threadId) || []).map((m) => ({ ...m, content: fixText(m.content), meta: deepFix(m.meta) }));
+        const messages = (mem.messages.get(threadId) || []).map((m) => ({
+          ...m,
+          content: fixText(m.content),
+          meta: deepFix(m.meta),
+        }));
         return okJson(res, { ok: true, threadId, messages, dbDisabled: true });
       }
 
