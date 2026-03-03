@@ -1,4 +1,4 @@
-// src/routes/api.js (FINAL v2.8.0 — Mojibake auto-fix + Push TEST + Executions list/detail (+by executionId) + best-effort cleanup)
+// src/routes/api.js (FINAL v2.9.0 — Content Draft + Feedback/Revise/Publish + Mojibake auto-fix + Push TEST + Executions list/detail)
 import express from "express";
 import crypto from "crypto";
 import { cfg } from "../config.js";
@@ -170,6 +170,8 @@ const mem = {
   notifications: new Map(),
   jobs: new Map(),
   pushSubs: new Map(), // endpoint -> {recipient, endpoint, p256dh, auth, user_agent}
+  contentItems: new Map(), // id -> content_item
+  contentByProposal: new Map(), // proposalId -> contentItemId (latest)
   audit: [],
 };
 
@@ -294,6 +296,56 @@ function memAudit(actor, action, objectType, objectId, meta = {}) {
     meta: deepFix(meta),
     created_at: nowIso(),
   });
+}
+
+/** ===========================
+ * Content draft helpers (MEM)
+ * =========================== */
+function memGetLatestContentByProposal(proposalId) {
+  const id = mem.contentByProposal.get(String(proposalId));
+  if (!id) return null;
+  return mem.contentItems.get(id) || null;
+}
+
+function memUpsertContentItem({
+  proposalId,
+  threadId = null,
+  jobId = null,
+  status = "draft.ready",
+  contentPack = null,
+  feedbackText = "",
+}) {
+  const existing = memGetLatestContentByProposal(proposalId);
+  const nextVersion = (existing?.version || 0) + 1;
+
+  const id = existing?.id || crypto.randomUUID();
+
+  const row = {
+    id,
+    proposal_id: String(proposalId),
+    thread_id: threadId ? String(threadId) : existing?.thread_id || null,
+    job_id: jobId ? String(jobId) : existing?.job_id || null,
+    status: fixText(status || "draft.ready"),
+    version: nextVersion,
+    content_pack: deepFix(contentPack || existing?.content_pack || {}),
+    last_feedback: fixText(String(feedbackText || existing?.last_feedback || "")),
+    created_at: existing?.created_at || nowIso(),
+    updated_at: nowIso(),
+  };
+
+  mem.contentItems.set(id, row);
+  mem.contentByProposal.set(String(proposalId), id);
+  return row;
+}
+
+function memPatchContentItem(id, patch = {}) {
+  const row = mem.contentItems.get(String(id));
+  if (!row) return null;
+  Object.assign(row, deepFix(patch));
+  row.updated_at = nowIso();
+  row.last_feedback = fixText(row.last_feedback || "");
+  row.status = fixText(row.status || "");
+  return row;
 }
 
 /** ===========================
@@ -562,6 +614,94 @@ async function dbUpdateJob(db, id, patch) {
 }
 
 /** ===========================
+ * DB helpers: content_items (Draft)
+ * =========================== */
+async function dbGetLatestContentByProposal(db, proposalId) {
+  const q = await db.query(
+    `select id, proposal_id, thread_id, job_id, status, version, content_pack, last_feedback, created_at, updated_at
+     from content_items
+     where proposal_id = $1::uuid
+     order by updated_at desc
+     limit 1`,
+    [proposalId]
+  );
+  const row = q.rows?.[0] || null;
+  if (!row) return null;
+  row.content_pack = deepFix(row.content_pack);
+  row.last_feedback = fixText(row.last_feedback || "");
+  row.status = fixText(row.status || "");
+  return row;
+}
+
+async function dbCreateContentItem(db, { proposalId, threadId = null, jobId = null, status = "draft.ready", version = 1, contentPack = {}, lastFeedback = "" }) {
+  const q = await db.query(
+    `insert into content_items (proposal_id, thread_id, job_id, status, version, content_pack, last_feedback)
+     values ($1::uuid, $2::uuid, $3::uuid, $4::text, $5::int, $6::jsonb, $7::text)
+     returning id, proposal_id, thread_id, job_id, status, version, content_pack, last_feedback, created_at, updated_at`,
+    [proposalId, threadId, jobId, fixText(status), Number(version) || 1, deepFix(contentPack || {}), fixText(lastFeedback || "")]
+  );
+  const row = q.rows?.[0] || null;
+  if (!row) return null;
+  row.content_pack = deepFix(row.content_pack);
+  row.last_feedback = fixText(row.last_feedback || "");
+  row.status = fixText(row.status || "");
+  return row;
+}
+
+async function dbUpdateContentItem(db, id, patch = {}) {
+  const status = patch.status ?? null;
+  const lastFeedback = patch.last_feedback ?? patch.lastFeedback ?? null;
+  const contentPack = patch.content_pack ?? patch.contentPack ?? null;
+  const version = patch.version ?? null;
+  const jobId = patch.job_id ?? patch.jobId ?? null;
+
+  const q = await db.query(
+    `update content_items
+     set status = coalesce($2::text, status),
+         version = coalesce($3::int, version),
+         job_id = coalesce($4::uuid, job_id),
+         last_feedback = coalesce($5::text, last_feedback),
+         content_pack = case when $6::jsonb is null then content_pack else $6::jsonb end,
+         updated_at = now()
+     where id = $1::uuid
+     returning id, proposal_id, thread_id, job_id, status, version, content_pack, last_feedback, created_at, updated_at`,
+    [id, status ? fixText(status) : null, version != null ? Number(version) : null, jobId || null, lastFeedback != null ? fixText(String(lastFeedback)) : null, contentPack ? deepFix(contentPack) : null]
+  );
+
+  const row = q.rows?.[0] || null;
+  if (!row) return null;
+  row.content_pack = deepFix(row.content_pack);
+  row.last_feedback = fixText(row.last_feedback || "");
+  row.status = fixText(row.status || "");
+  return row;
+}
+
+async function dbUpsertDraftFromCallback(db, { proposalId, threadId = null, jobId = null, status = "draft.ready", contentPack = {} }) {
+  // Strategy:
+  // - if exists: update same row; bump version +1
+  // - else: create v1
+  const existing = await dbGetLatestContentByProposal(db, proposalId);
+  if (!existing) {
+    return await dbCreateContentItem(db, {
+      proposalId,
+      threadId,
+      jobId,
+      status,
+      version: 1,
+      contentPack,
+      lastFeedback: "",
+    });
+  }
+  const nextVersion = (Number(existing.version) || 1) + 1;
+  return await dbUpdateContentItem(db, existing.id, {
+    status,
+    version: nextVersion,
+    job_id: jobId || existing.job_id,
+    content_pack: contentPack,
+  });
+}
+
+/** ===========================
  * Router
  * =========================== */
 export function apiRouter({ db, wsHub }) {
@@ -590,6 +730,10 @@ export function apiRouter({ db, wsHub }) {
         "GET /api/executions?status=&limit=&executionId=",
         "GET /api/executions/:id (uuid) OR /api/executions/:executionId (digits)",
         "POST /api/executions/callback (token)",
+        "GET /api/content?proposalId=",
+        "POST /api/content/:id/feedback",
+        "POST /api/content/:id/approve",
+        "POST /api/content/:id/publish",
         "POST /api/debug/openai (token if DEBUG_API_TOKEN set)",
       ],
       telegram: { enabled: Boolean(cfg.TELEGRAM_ENABLED) },
@@ -742,7 +886,306 @@ export function apiRouter({ db, wsHub }) {
   });
 
   /** ===========================
-   * n8n -> HQ callback (job updates)
+   * Content (Draft) — GET by proposalId
+   * =========================== */
+  r.get("/content", async (req, res) => {
+    const proposalId = String(req.query.proposalId || "").trim();
+    if (!proposalId) return okJson(res, { ok: false, error: "proposalId required" });
+    if (!isUuid(proposalId)) return okJson(res, { ok: false, error: "proposalId must be uuid" });
+
+    try {
+      if (!isDbReady(db)) {
+        const row = memGetLatestContentByProposal(proposalId);
+        return okJson(res, { ok: true, content: row || null, dbDisabled: true });
+      }
+      const row = await dbGetLatestContentByProposal(db, proposalId);
+      return okJson(res, { ok: true, content: row || null });
+    } catch (e) {
+      const details = serializeError(e);
+      return okJson(res, { ok: false, error: details.name, details });
+    }
+  });
+
+  /** ===========================
+   * Content — feedback (Request changes) => n8n content.revise
+   * =========================== */
+  r.post("/content/:id/feedback", async (req, res) => {
+    const id = String(req.params.id || "").trim();
+    const feedback = fixText(String(req.body?.feedback || req.body?.text || "").trim());
+    const by = fixText(String(req.body?.by || "ceo").trim());
+
+    if (!id) return okJson(res, { ok: false, error: "content id required" });
+    if (!isUuid(id)) return okJson(res, { ok: false, error: "content id must be uuid" });
+    if (!feedback) return okJson(res, { ok: false, error: "feedback required" });
+
+    try {
+      // MEMORY mode
+      if (!isDbReady(db)) {
+        const row = mem.contentItems.get(id);
+        if (!row) return okJson(res, { ok: false, error: "content not found", dbDisabled: true });
+
+        // update status
+        memPatchContentItem(id, { status: "draft.regenerating", last_feedback: feedback });
+
+        wsHub?.broadcast?.({ type: "content.updated", content: mem.contentItems.get(id) });
+        memAudit(by, "content.feedback", "content", id, {});
+
+        const n = memCreateNotification({
+          recipient: "ceo",
+          type: "info",
+          title: "Draft: changes requested",
+          body: `Draft regenerating…`,
+          payload: { contentId: id, proposalId: row.proposal_id },
+        });
+        wsHub?.broadcast?.({ type: "notification.created", notification: n });
+
+        await pushBroadcastToCeo({
+          db,
+          title: "Draft update",
+          body: "Changes requested — regenerating…",
+          data: { type: "content.updated", contentId: id, status: "draft.regenerating" },
+        });
+
+        // n8n event
+        notifyN8n("content.revise", null, {
+          by,
+          proposalId: row.proposal_id,
+          threadId: row.thread_id,
+          contentItemId: id,
+          status: "draft.regenerating",
+          feedback,
+          contentPack: row.content_pack || {},
+          jobId: row.job_id || null,
+          callback: { url: "/api/executions/callback", tokenHeader: "x-webhook-token" },
+          dbDisabled: true,
+        });
+
+        return okJson(res, { ok: true, content: mem.contentItems.get(id), notification: n, dbDisabled: true });
+      }
+
+      // DB mode
+      const cur = await db.query(
+        `select id, proposal_id, thread_id, job_id, status, version, content_pack, last_feedback
+         from content_items
+         where id = $1::uuid
+         limit 1`,
+        [id]
+      );
+      const row = cur.rows?.[0] || null;
+      if (!row) return okJson(res, { ok: false, error: "content not found" });
+
+      const updated = await dbUpdateContentItem(db, id, { status: "draft.regenerating", last_feedback: feedback });
+
+      wsHub?.broadcast?.({ type: "content.updated", content: updated });
+      await dbAudit(db, by, "content.feedback", "content", String(id), {});
+
+      const notif = await dbCreateNotification(db, {
+        recipient: "ceo",
+        type: "info",
+        title: "Draft: changes requested",
+        body: "Draft regenerating…",
+        payload: { contentId: id, proposalId: String(row.proposal_id) },
+      });
+      wsHub?.broadcast?.({ type: "notification.created", notification: notif });
+
+      await pushBroadcastToCeo({
+        db,
+        title: "Draft update",
+        body: "Changes requested — regenerating…",
+        data: { type: "content.updated", contentId: id, status: "draft.regenerating" },
+      });
+
+      notifyN8n("content.revise", null, {
+        by,
+        proposalId: String(row.proposal_id),
+        threadId: row.thread_id ? String(row.thread_id) : null,
+        contentItemId: id,
+        status: "draft.regenerating",
+        feedback,
+        contentPack: deepFix(row.content_pack || {}),
+        jobId: row.job_id ? String(row.job_id) : null,
+        callback: { url: "/api/executions/callback", tokenHeader: "x-webhook-token" },
+        dbDisabled: false,
+      });
+
+      return okJson(res, { ok: true, content: updated, notification: notif });
+    } catch (e) {
+      const details = serializeError(e);
+      return okJson(res, { ok: false, error: details.name, details });
+    }
+  });
+
+  /** ===========================
+   * Content — approve draft
+   * =========================== */
+  r.post("/content/:id/approve", async (req, res) => {
+    const id = String(req.params.id || "").trim();
+    const by = fixText(String(req.body?.by || "ceo").trim());
+
+    if (!id) return okJson(res, { ok: false, error: "content id required" });
+    if (!isUuid(id)) return okJson(res, { ok: false, error: "content id must be uuid" });
+
+    try {
+      if (!isDbReady(db)) {
+        const row = mem.contentItems.get(id);
+        if (!row) return okJson(res, { ok: false, error: "content not found", dbDisabled: true });
+
+        const updated = memPatchContentItem(id, { status: "draft.approved" });
+        wsHub?.broadcast?.({ type: "content.updated", content: updated });
+        memAudit(by, "content.approve", "content", id, {});
+
+        const n = memCreateNotification({
+          recipient: "ceo",
+          type: "success",
+          title: "Draft approved",
+          body: "Draft is approved and ready to publish.",
+          payload: { contentId: id, proposalId: row.proposal_id },
+        });
+        wsHub?.broadcast?.({ type: "notification.created", notification: n });
+
+        await pushBroadcastToCeo({
+          db,
+          title: "Draft approved",
+          body: "Ready to publish.",
+          data: { type: "content.updated", contentId: id, status: "draft.approved" },
+        });
+
+        return okJson(res, { ok: true, content: updated, notification: n, dbDisabled: true });
+      }
+
+      const updated = await dbUpdateContentItem(db, id, { status: "draft.approved" });
+      if (!updated) return okJson(res, { ok: false, error: "content not found" });
+
+      wsHub?.broadcast?.({ type: "content.updated", content: updated });
+      await dbAudit(db, by, "content.approve", "content", String(id), {});
+
+      const notif = await dbCreateNotification(db, {
+        recipient: "ceo",
+        type: "success",
+        title: "Draft approved",
+        body: "Draft is approved and ready to publish.",
+        payload: { contentId: id, proposalId: String(updated.proposal_id) },
+      });
+      wsHub?.broadcast?.({ type: "notification.created", notification: notif });
+
+      await pushBroadcastToCeo({
+        db,
+        title: "Draft approved",
+        body: "Ready to publish.",
+        data: { type: "content.updated", contentId: id, status: "draft.approved" },
+      });
+
+      return okJson(res, { ok: true, content: updated, notification: notif });
+    } catch (e) {
+      const details = serializeError(e);
+      return okJson(res, { ok: false, error: details.name, details });
+    }
+  });
+
+  /** ===========================
+   * Content — publish trigger => n8n content.publish
+   * =========================== */
+  r.post("/content/:id/publish", async (req, res) => {
+    const id = String(req.params.id || "").trim();
+    const by = fixText(String(req.body?.by || "ceo").trim());
+
+    if (!id) return okJson(res, { ok: false, error: "content id required" });
+    if (!isUuid(id)) return okJson(res, { ok: false, error: "content id must be uuid" });
+
+    try {
+      // MEMORY
+      if (!isDbReady(db)) {
+        const row = mem.contentItems.get(id);
+        if (!row) return okJson(res, { ok: false, error: "content not found", dbDisabled: true });
+
+        const updated = memPatchContentItem(id, { status: "publishing" });
+        wsHub?.broadcast?.({ type: "content.updated", content: updated });
+        memAudit(by, "content.publish", "content", id, {});
+
+        const n = memCreateNotification({
+          recipient: "ceo",
+          type: "info",
+          title: "Publishing started",
+          body: "Draft publishing via n8n…",
+          payload: { contentId: id, proposalId: row.proposal_id },
+        });
+        wsHub?.broadcast?.({ type: "notification.created", notification: n });
+
+        await pushBroadcastToCeo({
+          db,
+          title: "Publishing",
+          body: "Draft is being published…",
+          data: { type: "content.updated", contentId: id, status: "publishing" },
+        });
+
+        notifyN8n("content.publish", null, {
+          by,
+          proposalId: row.proposal_id,
+          threadId: row.thread_id,
+          contentItemId: id,
+          status: "publishing",
+          contentPack: row.content_pack || {},
+          jobId: row.job_id || null,
+          callback: { url: "/api/executions/callback", tokenHeader: "x-webhook-token" },
+          dbDisabled: true,
+        });
+
+        return okJson(res, { ok: true, content: updated, notification: n, dbDisabled: true });
+      }
+
+      // DB
+      const cur = await db.query(
+        `select id, proposal_id, thread_id, job_id, status, version, content_pack
+         from content_items
+         where id = $1::uuid
+         limit 1`,
+        [id]
+      );
+      const row = cur.rows?.[0] || null;
+      if (!row) return okJson(res, { ok: false, error: "content not found" });
+
+      const updated = await dbUpdateContentItem(db, id, { status: "publishing" });
+
+      wsHub?.broadcast?.({ type: "content.updated", content: updated });
+      await dbAudit(db, by, "content.publish", "content", String(id), {});
+
+      const notif = await dbCreateNotification(db, {
+        recipient: "ceo",
+        type: "info",
+        title: "Publishing started",
+        body: "Draft publishing via n8n…",
+        payload: { contentId: id, proposalId: String(row.proposal_id) },
+      });
+      wsHub?.broadcast?.({ type: "notification.created", notification: notif });
+
+      await pushBroadcastToCeo({
+        db,
+        title: "Publishing",
+        body: "Draft is being published…",
+        data: { type: "content.updated", contentId: id, status: "publishing" },
+      });
+
+      notifyN8n("content.publish", null, {
+        by,
+        proposalId: String(row.proposal_id),
+        threadId: row.thread_id ? String(row.thread_id) : null,
+        contentItemId: id,
+        status: "publishing",
+        contentPack: deepFix(row.content_pack || {}),
+        jobId: row.job_id ? String(row.job_id) : null,
+        callback: { url: "/api/executions/callback", tokenHeader: "x-webhook-token" },
+        dbDisabled: false,
+      });
+
+      return okJson(res, { ok: true, content: updated, notification: notif });
+    } catch (e) {
+      const details = serializeError(e);
+      return okJson(res, { ok: false, error: details.name, details });
+    }
+  });
+
+  /** ===========================
+   * n8n -> HQ callback (job updates) + AUTO DRAFT save
    * =========================== */
   r.post("/executions/callback", async (req, res) => {
     if (!requireCallbackToken(req)) return okJson(res, { ok: false, error: "forbidden (missing/invalid token)" });
@@ -756,6 +1199,25 @@ export function apiRouter({ db, wsHub }) {
     if (!isUuid(jobId)) return okJson(res, { ok: false, error: "jobId must be uuid" });
     if (!["running", "completed", "failed"].includes(status)) {
       return okJson(res, { ok: false, error: 'status must be "running"|"completed"|"failed"' });
+    }
+
+    // contentPack detection (draft auto-save)
+    const maybeContentPack =
+      result?.contentPack ||
+      result?.content_pack ||
+      result?.draft ||
+      result?.draftPack ||
+      null;
+
+    // if n8n sends stringified JSON, try parse
+    let contentPackObj = null;
+    if (maybeContentPack && typeof maybeContentPack === "object") contentPackObj = maybeContentPack;
+    if (typeof maybeContentPack === "string") {
+      try {
+        contentPackObj = JSON.parse(maybeContentPack);
+      } catch {
+        contentPackObj = { text: String(maybeContentPack) };
+      }
     }
 
     try {
@@ -777,6 +1239,20 @@ export function apiRouter({ db, wsHub }) {
         });
         if (!row) return okJson(res, { ok: false, error: "job not found", dbDisabled: true });
 
+        // AUTO-DRAFT: if contentPack exists and job has proposal_id
+        let content = null;
+        if (contentPackObj && row.proposal_id && status === "completed") {
+          content = memUpsertContentItem({
+            proposalId: row.proposal_id,
+            threadId: null,
+            jobId: jobId,
+            status: "draft.ready",
+            contentPack: contentPackObj,
+            feedbackText: "",
+          });
+          wsHub?.broadcast?.({ type: "content.updated", content });
+        }
+
         wsHub?.broadcast?.({ type: "job.updated", job: row });
         memAudit("n8n", "job.update", "job", jobId, { status });
 
@@ -796,7 +1272,7 @@ export function apiRouter({ db, wsHub }) {
           data: { type: "job.updated", jobId, status },
         });
 
-        return okJson(res, { ok: true, job: row, notification: n, dbDisabled: true });
+        return okJson(res, { ok: true, job: row, notification: n, content, dbDisabled: true });
       }
 
       const dbPatch = {
@@ -809,6 +1285,20 @@ export function apiRouter({ db, wsHub }) {
 
       const row = await dbUpdateJob(db, jobId, dbPatch);
       if (!row) return okJson(res, { ok: false, error: "job not found" });
+
+      // AUTO-DRAFT (DB): save contentPack into content_items for the job's proposal_id
+      let content = null;
+      if (contentPackObj && row.proposal_id && status === "completed") {
+        content = await dbUpsertDraftFromCallback(db, {
+          proposalId: String(row.proposal_id),
+          threadId: null,
+          jobId: String(row.id),
+          status: "draft.ready",
+          contentPack: contentPackObj,
+        });
+        wsHub?.broadcast?.({ type: "content.updated", content });
+        await dbAudit(db, "n8n", "content.upsert", "content", String(content?.id || ""), { proposalId: String(row.proposal_id) });
+      }
 
       wsHub?.broadcast?.({ type: "job.updated", job: row });
       await dbAudit(db, "n8n", "job.update", "job", String(jobId), { status });
@@ -829,7 +1319,7 @@ export function apiRouter({ db, wsHub }) {
         data: { type: "job.updated", jobId, status },
       });
 
-      return okJson(res, { ok: true, job: row, notification: notif });
+      return okJson(res, { ok: true, job: row, notification: notif, content });
     } catch (e) {
       const details = serializeError(e);
       return okJson(res, { ok: false, error: details.name, details });
