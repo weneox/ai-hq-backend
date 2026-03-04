@@ -1,9 +1,11 @@
+import express from "express";
+
 import { cfg } from "../../config.js";
 import { DEBATE_ENGINE_VERSION } from "../../kernel/debateEngine.js";
 import { okJson, isDbReady } from "../../utils/http.js";
 
 export function healthRoutes({ db }) {
-  const r = (await import("express")).default.Router();
+  const r = express.Router();
 
   r.get("/", async (_req, res) => {
     return okJson(res, {
@@ -37,9 +39,12 @@ export function healthRoutes({ db }) {
         "POST /api/content/:id/publish",
         "POST /api/render/slides",
         "POST /api/media/image",
-        "POST /api/debug/openai",
+        "POST /api/debug/openai"
       ],
-      defaults: { tenant: cfg.DEFAULT_TENANT_KEY, mode: cfg.DEFAULT_MODE },
+      defaults: {
+        tenant: cfg.DEFAULT_TENANT_KEY,
+        mode: cfg.DEFAULT_MODE
+      }
     });
   });
 
