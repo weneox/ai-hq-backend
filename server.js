@@ -4,6 +4,7 @@ import http from "http";
 import express from "express";
 import cors from "cors";
 import helmet from "helmet";
+import path from "path";
 
 import { cfg } from "./src/config.js";
 import { initDb, getDb, migrate } from "./src/db/index.js";
@@ -22,7 +23,8 @@ async function main() {
   app.use(
     cors({
       origin: (origin, cb) => {
-        if (!origin) return cb(null, true); // ✅ server-to-server / curl / powershell
+        if (!origin) return cb(null, true); // server-to-server / curl / powershell
+
         const allowed =
           cfg.CORS_ORIGIN === "*" ||
           String(cfg.CORS_ORIGIN || "")
@@ -39,9 +41,16 @@ async function main() {
 
   // Body parsers
   app.use(express.json({ limit: "1mb" }));
-  app.use(express.urlencoded({ extended: false })); // ✅ safe fallback
+  app.use(express.urlencoded({ extended: false }));
 
-  // Root info (so browser doesn't show Not found)
+  // ================================
+  // Static uploads (ASSETS)
+  // ================================
+  const UPLOADS_DIR = path.resolve(process.cwd(), "uploads");
+  app.use("/assets", express.static(UPLOADS_DIR, { maxAge: "1h" }));
+  // ================================
+
+  // Root info
   app.get("/", (_req, res) => {
     res.setHeader("Content-Type", "application/json; charset=utf-8");
     res.status(200).json({
@@ -92,11 +101,14 @@ async function main() {
     return res.status(200).json(out);
   });
 
-  // ✅ init DB BEFORE mounting routes so getDb() is real
+  // init DB BEFORE routes
   try {
     await initDb();
     const m = await migrate();
-    console.log("[ai-hq] migrate:", m.ok ? "ok" : `skip/fail (${m.reason || m.error || "unknown"})`);
+    console.log(
+      "[ai-hq] migrate:",
+      m.ok ? "ok" : `skip/fail (${m.reason || m.error || "unknown"})`
+    );
   } catch (e) {
     console.log("[ai-hq] migrate error:", String(e?.message || e));
   }
@@ -104,17 +116,16 @@ async function main() {
   const server = http.createServer(app);
   const wsHub = createWsHub({ server, token: cfg.WS_AUTH_TOKEN });
 
-  // ✅ mount AFTER DB init
+  // mount routes
   app.use("/api", apiRouter({ db: getDb(), wsHub }));
 
-  // Fallback 404 (JSON)
+  // Fallback 404
   app.use((req, res) => {
     res.setHeader("Content-Type", "application/json; charset=utf-8");
     res.status(404).json({ ok: false, error: "Not found", path: req.path });
   });
 
-  // Global error handler (JSON)
-  // eslint-disable-next-line no-unused-vars
+  // Global error handler
   app.use((err, _req, res, _next) => {
     console.error("[api] error:", err?.message || err);
     res.setHeader("Content-Type", "application/json; charset=utf-8");
@@ -126,11 +137,14 @@ async function main() {
     console.log(`[ai-hq] listening on :${cfg.PORT} env=${cfg.APP_ENV}`);
     console.log(`[ai-hq] CORS_ORIGIN=${cfg.CORS_ORIGIN}`);
     console.log(`[ai-hq] DB=${hasDb ? "ON" : "OFF"}`);
-    console.log(`[ai-hq] OpenAI=${cfg.OPENAI_API_KEY ? "ON" : "OFF"} model=${cfg.OPENAI_MODEL}`);
-    console.log(`[ai-hq] WS_AUTH_TOKEN=${cfg.WS_AUTH_TOKEN ? "ON" : "OFF"}`);
+    console.log(
+      `[ai-hq] OpenAI=${cfg.OPENAI_API_KEY ? "ON" : "OFF"} model=${cfg.OPENAI_MODEL}`
+    );
+    console.log(
+      `[ai-hq] WS_AUTH_TOKEN=${cfg.WS_AUTH_TOKEN ? "ON" : "OFF"}`
+    );
   });
 
-  // graceful shutdown
   async function shutdown() {
     try {
       const db = getDb();

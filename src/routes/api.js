@@ -9,15 +9,23 @@
 //   - When draft is READY from callback and mode=auto => auto approve draft -> auto publish (n8n)
 //
 // ✅ Manual behavior unchanged.
+//
+// ✅ Adds render slides endpoint:
+//   POST /api/render/slides  { slides:[...], tenantId? }  => { renderId, assets:[...] }
 
 import express from "express";
 import crypto from "crypto";
+import fs from "fs";
+import path from "path";
+
 import { cfg } from "../config.js";
 import { runDebate, DEBATE_ENGINE_VERSION } from "../kernel/debateEngine.js";
 import { kernelHandle, listAgents, debugOpenAI } from "../kernel/agentKernel.js";
 import { postToN8n } from "../utils/n8n.js";
 import { sendTelegram } from "../utils/telegram.js";
 import { pushSendOne } from "../utils/push.js";
+
+import { renderSlidesToPng } from "../render/renderSlides.js";
 
 /** ===========================
  * UTF-8 / Mojibake fix helpers
@@ -32,7 +40,9 @@ function scoreTextQuality(s) {
   const moj = (str.match(MOJIBAKE_RE) || []).length;
   const repl = (str.match(/\uFFFD/g) || []).length;
   const good = (str.match(/[əğıöüşçƏĞİÖÜŞÇ]/g) || []).length;
-  const letters = (str.match(/[A-Za-z0-9\u00C0-\u024F\u0400-\u04FFəğıöüşçƏĞİÖÜŞÇ]/g) || []).length;
+  const letters =
+    (str.match(/[A-Za-z0-9\u00C0-\u024F\u0400-\u04FFəğıöüşçƏĞİÖÜŞÇ]/g) || [])
+      .length;
   const total = Math.max(1, str.length);
 
   return good * 3 + (letters / total) * 10 - moj * 4 - repl * 20;
@@ -90,7 +100,9 @@ function clamp(nv, a, b) {
 function requireDebugToken(req) {
   const expected = String(cfg.DEBUG_API_TOKEN || "").trim();
   if (!expected) return true;
-  const token = String(req.headers["x-debug-token"] || req.query.token || req.body?.token || "").trim();
+  const token = String(
+    req.headers["x-debug-token"] || req.query.token || req.body?.token || ""
+  ).trim();
   return Boolean(token) && token === expected;
 }
 
@@ -101,7 +113,11 @@ function isDbReady(db) {
 function serializeError(err) {
   const e = err || {};
   const isAgg = e && (e.name === "AggregateError" || Array.isArray(e.errors));
-  const base = { name: e.name || "Error", message: e.message || String(e), stack: e.stack || null };
+  const base = {
+    name: e.name || "Error",
+    message: e.message || String(e),
+    stack: e.stack || null,
+  };
   if (isAgg) {
     base.errors = (e.errors || []).map((x) => ({
       name: x?.name || "Error",
@@ -137,7 +153,9 @@ function nowIso() {
 
 function isUuid(v) {
   const s = String(v || "").trim();
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(s);
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+    s
+  );
 }
 
 function isDigits(v) {
@@ -182,6 +200,11 @@ async function maybeTelegram(text) {
   } catch {}
 }
 
+// optional hook (kept so routes using it never crash)
+async function maybeCleanupExpired() {
+  return;
+}
+
 /** ===========================
  * In-memory fallback (DB off)
  * =========================== */
@@ -200,7 +223,11 @@ const mem = {
 
 function memEnsureThread(threadId, title) {
   if (!mem.threads.has(threadId)) {
-    mem.threads.set(threadId, { id: threadId, title: fixText(title || `Thread ${nowIso()}`), created_at: nowIso() });
+    mem.threads.set(threadId, {
+      id: threadId,
+      title: fixText(title || `Thread ${nowIso()}`),
+      created_at: nowIso(),
+    });
   }
   if (!mem.messages.has(threadId)) mem.messages.set(threadId, []);
   return mem.threads.get(threadId);
@@ -242,12 +269,20 @@ function memCreateProposal(threadId, { agent, type, title, payload }) {
 
 function memListProposals(status = "pending") {
   const out = [];
-  for (const p of mem.proposals.values()) if (String(p.status) === String(status)) out.push(p);
+  for (const p of mem.proposals.values()) {
+    if (String(p.status) === String(status)) out.push(p);
+  }
   out.sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
   return out.slice(0, 100);
 }
 
-function memCreateNotification({ recipient = "ceo", type = "info", title = "", body = "", payload = {} }) {
+function memCreateNotification({
+  recipient = "ceo",
+  type = "info",
+  title = "",
+  body = "",
+  payload = {},
+}) {
   const id = crypto.randomUUID();
   const row = {
     id,
@@ -340,7 +375,6 @@ function memUpsertContentItem({
 }) {
   const existing = memGetLatestContentByProposal(proposalId);
   const nextVersion = (existing?.version || 0) + 1;
-
   const id = existing?.id || crypto.randomUUID();
 
   const row = {
@@ -416,7 +450,8 @@ async function dbSetTenantMode(db, tenantId, mode) {
 }
 
 async function getTenantMode({ db, tenantId }) {
-  const tid = String(tenantId || cfg.DEFAULT_TENANT_KEY || "default").trim() || "default";
+  const tid =
+    String(tenantId || cfg.DEFAULT_TENANT_KEY || "default").trim() || "default";
   if (!isDbReady(db)) {
     const v = mem.tenantMode.get(tid);
     return normalizeMode(v || cfg.DEFAULT_MODE || "manual");
@@ -426,17 +461,25 @@ async function getTenantMode({ db, tenantId }) {
 }
 
 async function setTenantMode({ db, tenantId, mode }) {
-  const tid = String(tenantId || cfg.DEFAULT_TENANT_KEY || "default").trim() || "default";
+  const tid =
+    String(tenantId || cfg.DEFAULT_TENANT_KEY || "default").trim() || "default";
   const m = normalizeMode(mode);
+
   if (!isDbReady(db)) {
     mem.tenantMode.set(tid, m);
     return { key: tid, mode: m, dbDisabled: true };
   }
+
   const row = await dbSetTenantMode(db, tid, m);
   if (row) return { key: row.key, mode: normalizeMode(row.mode), dbDisabled: false };
-  // if tenant row missing, still fall back to in-memory for now (safe)
+
   mem.tenantMode.set(tid, m);
-  return { key: tid, mode: m, dbDisabled: false, warning: "tenant row not updated; using memory fallback" };
+  return {
+    key: tid,
+    mode: m,
+    dbDisabled: false,
+    warning: "tenant row not updated; using memory fallback",
+  };
 }
 
 /** ===========================
@@ -473,7 +516,9 @@ async function dbListPushSubs(db, recipient = "ceo") {
 async function dbDeletePushSub(db, endpoint) {
   if (!isDbReady(db)) return;
   try {
-    await db.query(`delete from push_subscriptions where endpoint = $1::text`, [endpoint]);
+    await db.query(`delete from push_subscriptions where endpoint = $1::text`, [
+      endpoint,
+    ]);
   } catch {}
 }
 
@@ -490,7 +535,10 @@ async function pushBroadcastToCeo({ db, title, body, data }) {
     const subs = await dbListPushSubs(db, "ceo");
     for (const s of subs) {
       try {
-        const r = await pushSendOne({ endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } }, payload);
+        const r = await pushSendOne(
+          { endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } },
+          payload
+        );
         if (!r.ok && r.expired) await dbDeletePushSub(db, s.endpoint);
       } catch {}
     }
@@ -500,7 +548,10 @@ async function pushBroadcastToCeo({ db, title, body, data }) {
   for (const s of mem.pushSubs.values()) {
     if (s.recipient !== "ceo") continue;
     try {
-      const r = await pushSendOne({ endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } }, payload);
+      const r = await pushSendOne(
+        { endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } },
+        payload
+      );
       if (!r.ok && r.expired) mem.pushSubs.delete(s.endpoint);
     } catch {}
   }
@@ -550,7 +601,9 @@ function notifyN8n(event, proposal, extra = {}) {
     .then((r) => {
       const info = r?.ok ? `ok ${r.status || ""}` : `fail ${r.status || r.error || ""}`;
       const preview =
-        typeof r?.data === "string" ? r.data.slice(0, 160) : JSON.stringify(r?.data || {}).slice(0, 160);
+        typeof r?.data === "string"
+          ? r.data.slice(0, 160)
+          : JSON.stringify(r?.data || {}).slice(0, 160);
       console.log(`[n8n] ${event} → ${info} ${preview}`);
     })
     .catch((e) => console.log("[n8n] error", String(e?.message || e)));
@@ -667,7 +720,7 @@ async function dbUpdateJob(db, id, patch) {
 }
 
 /** ===========================
- * DB helpers: proposals (status transitions)
+ * DB helpers: proposals
  * =========================== */
 async function dbGetProposalById(db, idText) {
   const q = await db.query(
@@ -833,7 +886,7 @@ async function autoAdvanceOnDraftReady({ db, wsHub, tenantId, proposalId, conten
 
   const by = "auto";
 
-  // 1) approve draft + proposal => approved
+  // MEM mode
   if (!isDbReady(db)) {
     const c = mem.contentItems.get(String(contentItemId));
     if (c) {
@@ -850,7 +903,6 @@ async function autoAdvanceOnDraftReady({ db, wsHub, tenantId, proposalId, conten
       wsHub?.broadcast?.({ type: "proposal.updated", proposal: p });
     }
 
-    // 2) publish
     const latest = memGetLatestContentByProposal(proposalId);
     if (latest) {
       memPatchContentItem(latest.id, { status: "publishing" });
@@ -889,8 +941,8 @@ async function autoAdvanceOnDraftReady({ db, wsHub, tenantId, proposalId, conten
       [String(proposalId), by]
     );
 
-    const approved = await dbUpdateContentItem(db, String(contentItemId), { status: "publishing" });
-    wsHub?.broadcast?.({ type: "content.updated", content: approved });
+    const publishing = await dbUpdateContentItem(db, String(contentItemId), { status: "publishing" });
+    wsHub?.broadcast?.({ type: "content.updated", content: publishing });
 
     notifyN8n("content.publish", null, {
       tenantId,
@@ -905,7 +957,10 @@ async function autoAdvanceOnDraftReady({ db, wsHub, tenantId, proposalId, conten
       dbDisabled: false,
     });
 
-    wsHub?.broadcast?.({ type: "proposal.updated", proposal: await dbGetProposalById(db, String(proposalId)) });
+    wsHub?.broadcast?.({
+      type: "proposal.updated",
+      proposal: await dbGetProposalById(db, String(proposalId)),
+    });
 
     return { ok: true, mode, dbDisabled: false };
   } catch (e) {
@@ -949,6 +1004,7 @@ export function apiRouter({ db, wsHub }) {
         "POST /api/content/:id/feedback",
         "POST /api/content/:id/approve",
         "POST /api/content/:id/publish",
+        "POST /api/render/slides",
         "POST /api/debug/openai",
       ],
       defaults: { tenant: cfg.DEFAULT_TENANT_KEY, mode: cfg.DEFAULT_MODE },
@@ -959,7 +1015,9 @@ export function apiRouter({ db, wsHub }) {
    * ✅ MODE ENDPOINTS (Switcher)
    * =========================== */
   r.get("/mode", async (req, res) => {
-    const tenantId = fixText(String(req.query.tenantId || cfg.DEFAULT_TENANT_KEY || "default").trim()) || "default";
+    const tenantId =
+      fixText(String(req.query.tenantId || cfg.DEFAULT_TENANT_KEY || "default").trim()) ||
+      "default";
     try {
       const mode = await getTenantMode({ db, tenantId });
       return okJson(res, { ok: true, tenantId, mode });
@@ -970,12 +1028,21 @@ export function apiRouter({ db, wsHub }) {
   });
 
   r.post("/mode", async (req, res) => {
-    const tenantId = fixText(String(req.body?.tenantId || cfg.DEFAULT_TENANT_KEY || "default").trim()) || "default";
+    const tenantId =
+      fixText(String(req.body?.tenantId || cfg.DEFAULT_TENANT_KEY || "default").trim()) ||
+      "default";
     const mode = normalizeMode(req.body?.mode);
+
     try {
       const out = await setTenantMode({ db, tenantId, mode });
       wsHub?.broadcast?.({ type: "tenant.mode", tenantId: out.key, mode: out.mode });
-      return okJson(res, { ok: true, tenantId: out.key, mode: out.mode, ...("warning" in out ? { warning: out.warning } : {}), dbDisabled: out.dbDisabled });
+      return okJson(res, {
+        ok: true,
+        tenantId: out.key,
+        mode: out.mode,
+        ...("warning" in out ? { warning: out.warning } : {}),
+        dbDisabled: out.dbDisabled,
+      });
     } catch (e) {
       const details = serializeError(e);
       return okJson(res, { ok: false, error: details.name, details });
@@ -983,6 +1050,42 @@ export function apiRouter({ db, wsHub }) {
   });
 
   r.get("/agents", (_req, res) => okJson(res, { ok: true, agents: listAgents() }));
+
+  /** ===========================
+   * ✅ Slides render => PNG assets
+   * =========================== */
+  r.post("/render/slides", async (req, res) => {
+    const slides = req.body?.slides || req.body?.contentPack?.slides || null;
+    const tenantId = fixText(
+      String(req.body?.tenantId || cfg.DEFAULT_TENANT_KEY || "default").trim()
+    );
+
+    if (!Array.isArray(slides) || slides.length === 0) {
+      return okJson(res, { ok: false, error: "slides[] required" });
+    }
+
+    try {
+      const base = baseUrl();
+      if (!base) {
+        return okJson(res, { ok: false, error: "PUBLIC_BASE_URL required for assets URLs" });
+      }
+
+      const renderId = crypto.randomUUID();
+      const outDir = path.resolve(process.cwd(), "uploads", "renders", tenantId, renderId);
+      fs.mkdirSync(outDir, { recursive: true });
+
+      const assets = await renderSlidesToPng({
+        slides,
+        outDir,
+        publicBaseUrl: base,
+      });
+
+      return okJson(res, { ok: true, renderId, assets });
+    } catch (e) {
+      const details = serializeError(e);
+      return okJson(res, { ok: false, error: details.name, details });
+    }
+  });
 
   /** ===========================
    * Push: VAPID public key
@@ -1001,7 +1104,9 @@ export function apiRouter({ db, wsHub }) {
    * =========================== */
   r.get("/push/subscribe", (_req, res) => {
     res.setHeader("Content-Type", "application/json; charset=utf-8");
-    return res.status(405).json({ ok: false, error: "Method Not Allowed. Use POST /api/push/subscribe" });
+    return res
+      .status(405)
+      .json({ ok: false, error: "Method Not Allowed. Use POST /api/push/subscribe" });
   });
 
   r.post("/push/subscribe", async (req, res) => {
@@ -1013,12 +1118,22 @@ export function apiRouter({ db, wsHub }) {
     const ua = String(req.headers["user-agent"] || "").trim();
 
     if (!endpoint || !p256dh || !auth) {
-      return okJson(res, { ok: false, error: "subscription {endpoint, keys.p256dh, keys.auth} required" });
+      return okJson(res, {
+        ok: false,
+        error: "subscription {endpoint, keys.p256dh, keys.auth} required",
+      });
     }
 
     try {
       if (!isDbReady(db)) {
-        mem.pushSubs.set(endpoint, { recipient, endpoint, p256dh, auth, user_agent: ua, created_at: nowIso() });
+        mem.pushSubs.set(endpoint, {
+          recipient,
+          endpoint,
+          p256dh,
+          auth,
+          user_agent: ua,
+          created_at: nowIso(),
+        });
         return okJson(res, { ok: true, dbDisabled: true });
       }
 
@@ -1037,18 +1152,19 @@ export function apiRouter({ db, wsHub }) {
     if (!requireDebugToken(req)) {
       return okJson(res, { ok: false, error: "forbidden (missing/invalid debug token)" });
     }
-
     if (!cfg.PUSH_ENABLED) return okJson(res, { ok: false, error: "push disabled" });
 
     const title = fixText(String(req.body?.title || "AI HQ Test").trim());
     const body = fixText(String(req.body?.body || "Push is working ✅").trim());
-    const data = req.body?.data && typeof req.body.data === "object" ? deepFix(req.body.data) : { type: "push.test" };
+    const data =
+      req.body?.data && typeof req.body.data === "object"
+        ? deepFix(req.body.data)
+        : { type: "push.test" };
 
     try {
       await pushBroadcastToCeo({ db, title, body, data });
 
       let notif = null;
-
       if (!isDbReady(db)) {
         notif = memCreateNotification({
           recipient: "ceo",
@@ -1088,12 +1204,13 @@ export function apiRouter({ db, wsHub }) {
     const limit = clamp(req.query.limit ?? 50, 1, 200);
 
     try {
-      await maybeCleanupExpired({ db });
+      await maybeCleanupExpired();
 
       if (!isDbReady(db)) {
         const rows = memListNotifications({ recipient, unreadOnly, limit });
         return okJson(res, { ok: true, recipient, unreadOnly, notifications: rows, dbDisabled: true });
       }
+
       const rows = await dbListNotifications(db, { recipient, unreadOnly, limit });
       return okJson(res, { ok: true, recipient, unreadOnly, notifications: rows });
     } catch (e) {
@@ -1149,8 +1266,6 @@ export function apiRouter({ db, wsHub }) {
 
   /** ===========================
    * Content — feedback (Request changes) => loop => n8n content.revise
-   * - Works in Drafting
-   * - Also works after Approved (we push proposal back to in_progress)
    * =========================== */
   r.post("/content/:id/feedback", async (req, res) => {
     const id = String(req.params.id || "").trim();
@@ -1168,18 +1283,19 @@ export function apiRouter({ db, wsHub }) {
         const row = mem.contentItems.get(id);
         if (!row) return okJson(res, { ok: false, error: "content not found", dbDisabled: true });
 
-        // If proposal already approved/published -> move back to in_progress (loop)
         const p = row.proposal_id ? mem.proposals.get(String(row.proposal_id)) : null;
         if (p && (p.status === "approved" || p.status === "published")) {
           p.status = "in_progress";
           p.payload = deepFix(p.payload && typeof p.payload === "object" ? p.payload : {});
           p.payload.loop = { by, at: nowIso(), reason: "request_changes", feedback };
           wsHub?.broadcast?.({ type: "proposal.updated", proposal: p });
-          memAudit(by, "proposal.loop", "proposal", String(p.id), { from: "approved/published", to: "in_progress" });
+          memAudit(by, "proposal.loop", "proposal", String(p.id), {
+            from: "approved/published",
+            to: "in_progress",
+          });
         }
 
         memPatchContentItem(id, { status: "draft.regenerating", last_feedback: feedback });
-
         wsHub?.broadcast?.({ type: "content.updated", content: mem.contentItems.get(id) });
         memAudit(by, "content.feedback", "content", id, {});
 
@@ -1213,7 +1329,13 @@ export function apiRouter({ db, wsHub }) {
           dbDisabled: true,
         });
 
-        return okJson(res, { ok: true, content: mem.contentItems.get(id), notification: n, proposal: p || null, dbDisabled: true });
+        return okJson(res, {
+          ok: true,
+          content: mem.contentItems.get(id),
+          notification: n,
+          proposal: p || null,
+          dbDisabled: true,
+        });
       }
 
       // DB mode
@@ -1240,7 +1362,10 @@ export function apiRouter({ db, wsHub }) {
         );
       } catch {}
 
-      const updated = await dbUpdateContentItem(db, id, { status: "draft.regenerating", last_feedback: feedback });
+      const updated = await dbUpdateContentItem(db, id, {
+        status: "draft.regenerating",
+        last_feedback: feedback,
+      });
 
       wsHub?.broadcast?.({ type: "content.updated", content: updated });
       await dbAudit(db, by, "content.feedback", "content", String(id), {});
@@ -1276,7 +1401,6 @@ export function apiRouter({ db, wsHub }) {
       });
 
       const proposalAfter = await dbGetProposalById(db, String(row.proposal_id));
-
       return okJson(res, { ok: true, content: updated, notification: notif, proposal: proposalAfter || null });
     } catch (e) {
       const details = serializeError(e);
@@ -1286,9 +1410,6 @@ export function apiRouter({ db, wsHub }) {
 
   /** ===========================
    * Content — approve draft (FINAL approve) ✅
-   * - content status => draft.approved
-   * - proposal status => approved (final)
-   * - n8n event => content.approved
    * =========================== */
   r.post("/content/:id/approve", async (req, res) => {
     const id = String(req.params.id || "").trim();
@@ -1299,6 +1420,7 @@ export function apiRouter({ db, wsHub }) {
     if (!isUuid(id)) return okJson(res, { ok: false, error: "content id must be uuid" });
 
     try {
+      // MEM
       if (!isDbReady(db)) {
         const row = mem.contentItems.get(id);
         if (!row) return okJson(res, { ok: false, error: "content not found", dbDisabled: true });
@@ -1307,7 +1429,6 @@ export function apiRouter({ db, wsHub }) {
         wsHub?.broadcast?.({ type: "content.updated", content: updated });
         memAudit(by, "content.approve", "content", id, {});
 
-        // ✅ FINAL: proposal becomes approved here
         const p = row.proposal_id ? mem.proposals.get(String(row.proposal_id)) : null;
         if (p && !isFinalStatus(p.status)) {
           p.status = "approved";
@@ -1368,7 +1489,6 @@ export function apiRouter({ db, wsHub }) {
       wsHub?.broadcast?.({ type: "content.updated", content: updated });
       await dbAudit(db, by, "content.approve", "content", String(id), {});
 
-      // ✅ FINAL: proposal becomes approved here
       let proposalRow = null;
       if (row.proposal_id) {
         const uq = await db.query(
@@ -1441,7 +1561,6 @@ export function apiRouter({ db, wsHub }) {
 
   /** ===========================
    * Content — publish trigger => n8n content.publish
-   * - requires draft.approved (manual gate)
    * =========================== */
   r.post("/content/:id/publish", async (req, res) => {
     const id = String(req.params.id || "").trim();
@@ -1452,13 +1571,18 @@ export function apiRouter({ db, wsHub }) {
     if (!isUuid(id)) return okJson(res, { ok: false, error: "content id must be uuid" });
 
     try {
-      // MEMORY
+      // MEM
       if (!isDbReady(db)) {
         const row = mem.contentItems.get(id);
         if (!row) return okJson(res, { ok: false, error: "content not found", dbDisabled: true });
 
         if (String(row.status) !== "draft.approved") {
-          return okJson(res, { ok: false, error: "draft must be approved before publish", status: row.status, dbDisabled: true });
+          return okJson(res, {
+            ok: false,
+            error: "draft must be approved before publish",
+            status: row.status,
+            dbDisabled: true,
+          });
         }
 
         const updated = memPatchContentItem(id, { status: "publishing" });
@@ -1513,7 +1637,6 @@ export function apiRouter({ db, wsHub }) {
       }
 
       const updated = await dbUpdateContentItem(db, id, { status: "publishing" });
-
       wsHub?.broadcast?.({ type: "content.updated", content: updated });
       await dbAudit(db, by, "content.publish", "content", String(id), {});
 
@@ -1555,8 +1678,6 @@ export function apiRouter({ db, wsHub }) {
 
   /** ===========================
    * Proposal: Request changes (loop helper)
-   * - Finds latest draft-like content and triggers feedback flow
-   * - Works even when proposal is approved (will push back to in_progress)
    * =========================== */
   r.post("/proposals/:id/request-changes", async (req, res) => {
     const proposalId = String(req.params.id || "").trim();
@@ -1576,8 +1697,6 @@ export function apiRouter({ db, wsHub }) {
         const c = memGetLatestContentByProposal(proposalId);
         if (!c) return okJson(res, { ok: false, error: "no draft found for proposal", dbDisabled: true });
 
-        // reuse content feedback route logic by calling the same logic here:
-        c.last_feedback = feedback;
         memPatchContentItem(c.id, { status: "draft.regenerating", last_feedback: feedback });
 
         if (p.status === "approved" || p.status === "published") {
@@ -1612,7 +1731,6 @@ export function apiRouter({ db, wsHub }) {
       const c = await dbGetLatestDraftLikeByProposal(db, proposalId);
       if (!c) return okJson(res, { ok: false, error: "no draft found for proposal" });
 
-      // move proposal back to in_progress if needed
       if (p.status === "approved" || p.status === "published") {
         await dbSetProposalStatus(db, proposalId, "in_progress", {
           loop: { by, at: nowIso(), reason: "request_changes", feedback },
@@ -1647,7 +1765,6 @@ export function apiRouter({ db, wsHub }) {
 
   /** ===========================
    * Proposal: Publish latest approved draft
-   * - Finds latest content_item with status=draft.approved and triggers publish
    * =========================== */
   r.post("/proposals/:id/publish", async (req, res) => {
     const proposalId = String(req.params.id || "").trim();
@@ -1717,15 +1834,17 @@ export function apiRouter({ db, wsHub }) {
   });
 
   /** ===========================
-   * n8n -> HQ callback (job updates) + AUTO DRAFT save
-   * - Also handles publish success (permalink/assetUrls) and can mark proposal published
+   * n8n -> HQ callback (job updates) + Draft save + Publish save
    * =========================== */
   r.post("/executions/callback", async (req, res) => {
-    if (!requireCallbackToken(req)) return okJson(res, { ok: false, error: "forbidden (missing/invalid token)" });
+    if (!requireCallbackToken(req)) {
+      return okJson(res, { ok: false, error: "forbidden (missing/invalid token)" });
+    }
 
     const jobId = String(req.body?.jobId || req.body?.id || "").trim();
     const status = String(req.body?.status || "").trim().toLowerCase();
-    const result = req.body?.result && typeof req.body.result === "object" ? deepFix(req.body.result) : {};
+    const result =
+      req.body?.result && typeof req.body.result === "object" ? deepFix(req.body.result) : {};
     const error = fixText(String(req.body?.error || "").trim());
 
     if (!jobId) return okJson(res, { ok: false, error: "jobId required" });
@@ -1735,7 +1854,8 @@ export function apiRouter({ db, wsHub }) {
     }
 
     // Draft pack (generation workflow)
-    const maybeContentPack = result?.contentPack || result?.content_pack || result?.draft || result?.draftPack || null;
+    const maybeContentPack =
+      result?.contentPack || result?.content_pack || result?.draft || result?.draftPack || null;
 
     let contentPackObj = null;
     if (maybeContentPack && typeof maybeContentPack === "object") contentPackObj = maybeContentPack;
@@ -1749,8 +1869,11 @@ export function apiRouter({ db, wsHub }) {
 
     // Publish outputs (publish workflow)
     const publishInfo = deepFix(result?.publish || result?.published || {});
-    const permalink =
-      fixText(String(result?.permalink || result?.url || publishInfo?.permalink || publishInfo?.url || "")).trim();
+    const permalink = fixText(
+      String(
+        result?.permalink || result?.url || publishInfo?.permalink || publishInfo?.url || ""
+      )
+    ).trim();
     const assetUrls = Array.isArray(result?.assetUrls)
       ? result.assetUrls.map((x) => String(x || "").trim()).filter(Boolean)
       : Array.isArray(publishInfo?.assetUrls)
@@ -1766,6 +1889,7 @@ export function apiRouter({ db, wsHub }) {
         finished_at: status === "completed" || status === "failed" ? nowIso() : undefined,
       };
 
+      // MEM mode
       if (!isDbReady(db)) {
         const row = memUpdateJob(jobId, {
           status: patch.status,
@@ -1783,7 +1907,7 @@ export function apiRouter({ db, wsHub }) {
           content = memUpsertContentItem({
             proposalId: row.proposal_id,
             threadId: null,
-            jobId: jobId,
+            jobId,
             status: "draft.ready",
             contentPack: contentPackObj,
             feedbackText: "",
@@ -1791,7 +1915,7 @@ export function apiRouter({ db, wsHub }) {
           wsHub?.broadcast?.({ type: "content.updated", content });
         }
 
-        // Publish success (permalink) -> mark content published + proposal published
+        // Publish success => mark content published + proposal published
         if (permalink && row.proposal_id && status === "completed") {
           const latest = memGetLatestContentByProposal(row.proposal_id);
           if (latest) {
@@ -1799,7 +1923,10 @@ export function apiRouter({ db, wsHub }) {
               status: "published",
               publish: { permalink, assetUrls, publishedAt: nowIso() },
             });
-            wsHub?.broadcast?.({ type: "content.updated", content: mem.contentItems.get(latest.id) });
+            wsHub?.broadcast?.({
+              type: "content.updated",
+              content: mem.contentItems.get(latest.id),
+            });
           }
           const p = mem.proposals.get(String(row.proposal_id));
           if (p) {
@@ -1832,6 +1959,7 @@ export function apiRouter({ db, wsHub }) {
         return okJson(res, { ok: true, job: row, notification: n, content, dbDisabled: true });
       }
 
+      // DB mode
       const dbPatch = {
         status: patch.status,
         output: patch.output || {},
@@ -1855,12 +1983,13 @@ export function apiRouter({ db, wsHub }) {
           contentPack: contentPackObj,
         });
         wsHub?.broadcast?.({ type: "content.updated", content });
-        await dbAudit(db, "n8n", "content.upsert", "content", String(content?.id || ""), { proposalId: String(row.proposal_id) });
+        await dbAudit(db, "n8n", "content.upsert", "content", String(content?.id || ""), {
+          proposalId: String(row.proposal_id),
+        });
       }
 
       // Publish success
       if (permalink && row.proposal_id && status === "completed") {
-        // mark latest content published (best-effort)
         const latest = await dbGetLatestContentByProposal(db, String(row.proposal_id));
         if (latest) {
           const updated = await dbUpdateContentItem(db, latest.id, {
@@ -1870,7 +1999,6 @@ export function apiRouter({ db, wsHub }) {
           wsHub?.broadcast?.({ type: "content.updated", content: updated });
         }
 
-        // mark proposal published
         try {
           const pq = await db.query(
             `update proposals
@@ -1926,13 +2054,15 @@ export function apiRouter({ db, wsHub }) {
     const executionId = String(req.query.executionId || "").trim();
 
     try {
-      await maybeCleanupExpired({ db });
+      await maybeCleanupExpired();
 
       if (!isDbReady(db)) {
         let rows = Array.from(mem.jobs.values());
         if (status) rows = rows.filter((j) => String(j.status || "").toLowerCase() === status);
         if (executionId) {
-          rows = rows.filter((j) => String(j?.output?.executionId || j?.output?.execution_id || "").trim() === executionId);
+          rows = rows.filter(
+            (j) => String(j?.output?.executionId || j?.output?.execution_id || "").trim() === executionId
+          );
         }
         rows.sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
         rows = rows.slice(0, limit);
@@ -1948,7 +2078,9 @@ export function apiRouter({ db, wsHub }) {
       }
       if (executionId) {
         params.push(executionId);
-        where.push(`(output->>'executionId' = $${params.length}::text or output->>'execution_id' = $${params.length}::text)`);
+        where.push(
+          `(output->>'executionId' = $${params.length}::text or output->>'execution_id' = $${params.length}::text)`
+        );
       }
 
       const whereSql = where.length ? `where ${where.join(" and ")}` : ``;
@@ -1981,7 +2113,7 @@ export function apiRouter({ db, wsHub }) {
     if (!id) return okJson(res, { ok: false, error: "execution id required" });
 
     try {
-      await maybeCleanupExpired({ db });
+      await maybeCleanupExpired();
 
       if (!isDbReady(db)) {
         const byId = mem.jobs.get(id);
@@ -2068,7 +2200,11 @@ export function apiRouter({ db, wsHub }) {
         [threadId]
       );
 
-      const rows = (q.rows || []).map((m) => ({ ...m, content: fixText(m.content), meta: deepFix(m.meta) }));
+      const rows = (q.rows || []).map((m) => ({
+        ...m,
+        content: fixText(m.content),
+        meta: deepFix(m.meta),
+      }));
       return okJson(res, { ok: true, threadId, messages: rows });
     } catch (e) {
       const details = serializeError(e);
@@ -2125,13 +2261,13 @@ export function apiRouter({ db, wsHub }) {
           p.decided_at,
           p.decision_by,
 
-          ci.id           as latest_draft_id,
-          ci.status       as latest_draft_status,
-          ci.version      as latest_draft_version,
-          ci.updated_at   as latest_draft_updated_at,
-          ci.content_pack as latest_draft_content_pack,
+          ci.id            as latest_draft_id,
+          ci.status        as latest_draft_status,
+          ci.version       as latest_draft_version,
+          ci.updated_at    as latest_draft_updated_at,
+          ci.content_pack  as latest_draft_content_pack,
           ci.last_feedback as latest_draft_last_feedback,
-          ci.publish      as latest_draft_publish
+          ci.publish       as latest_draft_publish
 
         from proposals p
         left join lateral (
@@ -2205,15 +2341,14 @@ export function apiRouter({ db, wsHub }) {
       return okJson(res, { ok: false, error: 'decision must be "approved" or "rejected" (or approve/reject)' });
     }
 
-    // approve => in_progress
     const nextStatus = decision === "approved" ? "in_progress" : "rejected";
 
     try {
+      // MEM mode
       if (!isDbReady(db)) {
         const row = mem.proposals.get(id);
         if (!row) return okJson(res, { ok: false, error: "proposal not found", dbDisabled: true });
 
-        // Only allow decisions while pending
         if (row.status !== "pending") {
           return okJson(res, { ok: false, error: "proposal already decided", proposal: row, dbDisabled: true });
         }
@@ -2225,8 +2360,8 @@ export function apiRouter({ db, wsHub }) {
         row.payload = deepFix(row.payload && typeof row.payload === "object" ? row.payload : {});
         row.payload.decision = {
           by,
-          decision: decision, // approved/rejected (logical)
-          status: nextStatus, // in_progress/rejected
+          decision,
+          status: nextStatus,
           reason: decision === "rejected" ? reason : "",
           at: row.decided_at,
         };
@@ -2273,13 +2408,20 @@ export function apiRouter({ db, wsHub }) {
             dbDisabled: true,
           });
         } else {
-          notifyN8n("proposal.rejected", row, { tenantId, by, decision: "rejected", status: "rejected", reason, dbDisabled: true });
+          notifyN8n("proposal.rejected", row, {
+            tenantId,
+            by,
+            decision: "rejected",
+            status: "rejected",
+            reason,
+            dbDisabled: true,
+          });
         }
 
         return okJson(res, { ok: true, proposal: row, notification: notif, job, dbDisabled: true });
       }
 
-      // DB mode: allow decision only while status='pending'
+      // DB mode (decision only while pending)
       const q = await db.query(
         `update proposals
          set status = $1::text,
@@ -2301,12 +2443,12 @@ export function apiRouter({ db, wsHub }) {
            and status = 'pending'
          returning id, thread_id, agent, type, status, title, payload, created_at, decided_at, decision_by`,
         [
-          nextStatus,                             // $1
-          by,                                     // $2
-          decision,                               // $3
-          decision === "rejected" ? reason : "",   // $4
-          id,                                     // $5 (legacy-safe)
-          tenantId,                               // $6
+          nextStatus,
+          by,
+          decision,
+          decision === "rejected" ? reason : "",
+          id,
+          tenantId,
         ]
       );
 
@@ -2368,7 +2510,14 @@ export function apiRouter({ db, wsHub }) {
           dbDisabled: false,
         });
       } else {
-        notifyN8n("proposal.rejected", row, { tenantId, by, decision: "rejected", status: "rejected", reason, dbDisabled: false });
+        notifyN8n("proposal.rejected", row, {
+          tenantId,
+          by,
+          decision: "rejected",
+          status: "rejected",
+          reason,
+          dbDisabled: false,
+        });
       }
 
       return okJson(res, { ok: true, proposal: row, notification: notif, job });
@@ -2404,14 +2553,7 @@ export function apiRouter({ db, wsHub }) {
           message: { role: "assistant", agent: out.agent, content: replyText, at: nowIso() },
         });
 
-        return okJson(res, {
-          ok: true,
-          threadId,
-          agent: out.agent,
-          replyText: replyText || "(no text)",
-          proposal: null,
-          dbDisabled: true,
-        });
+        return okJson(res, { ok: true, threadId, agent: out.agent, replyText: replyText || "(no text)", proposal: null, dbDisabled: true });
       }
 
       if (!threadIdIn) {
@@ -2440,13 +2582,7 @@ export function apiRouter({ db, wsHub }) {
         message: { role: "assistant", agent: out.agent, content: replyText, at: nowIso() },
       });
 
-      return okJson(res, {
-        ok: true,
-        threadId,
-        agent: out.agent,
-        replyText: replyText || "(no text)",
-        proposal: null,
-      });
+      return okJson(res, { ok: true, threadId, agent: out.agent, replyText: replyText || "(no text)", proposal: null });
     } catch (e) {
       const details = serializeError(e);
       return okJson(res, { ok: false, error: details.name, details });
@@ -2496,12 +2632,7 @@ export function apiRouter({ db, wsHub }) {
       if (!synthesisText) synthesisText = fallbackSynthesisFromNotes(out);
 
       if (!isDbReady(db)) {
-        memAddMessage(threadId, {
-          role: "assistant",
-          agent: "kernel",
-          content: synthesisText,
-          meta: { kind: "debate.synthesis" },
-        });
+        memAddMessage(threadId, { role: "assistant", agent: "kernel", content: synthesisText, meta: { kind: "debate.synthesis" } });
       } else {
         await db.query(
           `insert into messages (thread_id, role, agent, content, meta)
@@ -2587,7 +2718,9 @@ export function apiRouter({ db, wsHub }) {
    * Debug OpenAI
    * =========================== */
   r.post("/debug/openai", async (req, res) => {
-    if (!requireDebugToken(req)) return okJson(res, { ok: false, error: "forbidden (missing/invalid debug token)" });
+    if (!requireDebugToken(req)) {
+      return okJson(res, { ok: false, error: "forbidden (missing/invalid debug token)" });
+    }
 
     try {
       const agent = fixText(String(req.body?.agent || "orion").trim());
