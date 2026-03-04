@@ -1003,52 +1003,31 @@ async function autoAdvanceOnDraftReady({ db, wsHub, tenantId, proposalId, conten
 }
 
 /** ===========================
- * ✅ TOGETHER IMAGE GENERATOR
+ * ✅ TOGETHER IMAGE GENERATOR (Ideogram 3)
+ * - FIX: do NOT send steps (model doesn't support it)
+ * - FIX: do NOT send width/height (supported combos vary per model)
+ *   -> generate default, crop/resize later (Cloudinary) if needed
  * =========================== */
-async function togetherGenerateImage({ prompt, width = 1080, height = 1350, n = 1 }) {
+async function togetherGenerateImage({ prompt, n = 1 }) {
   const apiKey = String(process.env.TOGETHER_API_KEY || "").trim();
   if (!apiKey) throw new Error("TOGETHER_API_KEY not set");
 
-  const model = "ideogram/ideogram-3.0";
-
-  function pickIdeogramSize(w, h) {
-    const pairs = [
-      [1080, 1350], // instagram portrait
-      [1080, 1080], // square
-      [1920, 1080], // landscape
-      [1080, 1920]  // story/reel
-    ];
-
-    const W = Number(w);
-    const H = Number(h);
-
-    for (const [pw, ph] of pairs) {
-      if (pw === W && ph === H) {
-        return { width: pw, height: ph };
-      }
-    }
-
-    return { width: 1080, height: 1350 }; // fallback
-  }
-
-  const size = pickIdeogramSize(width, height);
+  const model = String(process.env.TOGETHER_IMAGE_MODEL || "ideogram/ideogram-3.0").trim();
 
   const body = {
     model,
     prompt: String(prompt || "").trim(),
-    width: size.width,
-    height: size.height,
-    n: Number(n),
-    response_format: "url"
+    n: Number(n) || 1,
+    response_format: "url",
   };
 
   const r = await fetch("https://api.together.xyz/v1/images/generations", {
     method: "POST",
     headers: {
       Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json; charset=utf-8"
+      "Content-Type": "application/json; charset=utf-8",
     },
-    body: JSON.stringify(body)
+    body: JSON.stringify(body),
   });
 
   const data = await r.json().catch(() => ({}));
@@ -1058,17 +1037,13 @@ async function togetherGenerateImage({ prompt, width = 1080, height = 1350, n = 
       data?.error?.message ||
       data?.message ||
       `Together error (${r.status})`;
-
     throw new Error(msg);
   }
 
   const url = data?.data?.[0]?.url || "";
   if (!url) throw new Error("Together returned no url");
 
-  return {
-    url,
-    raw: data
-  };
+  return { url, raw: data };
 }
 
 /** ===========================
@@ -1192,25 +1167,25 @@ export function apiRouter({ db, wsHub }) {
   });
 
   /** ===========================
-   * ✅ TOGETHER IMAGE ENDPOINT
-   * =========================== */
-  r.post("/media/image", async (req, res) => {
-    const prompt = fixText(String(req.body?.prompt || "").trim());
-    const width = clamp(req.body?.width ?? 1080, 256, 2048);
-    const height = clamp(req.body?.height ?? 1350, 256, 2048);
-    const steps = clamp(req.body?.steps ?? 28, 1, 60);
-    const n = clamp(req.body?.n ?? 1, 1, 4);
+ * ✅ TOGETHER IMAGE ENDPOINT (Ideogram 3)
+ * POST /api/media/image
+ * body: { prompt, n? }
+ * returns: { ok, url }
+ * =========================== */
+r.post("/media/image", async (req, res) => {
+  const prompt = fixText(String(req.body?.prompt || "").trim());
+  const n = clamp(req.body?.n ?? 1, 1, 4);
 
-    if (!prompt) return okJson(res, { ok: false, error: "prompt required" });
+  if (!prompt) return okJson(res, { ok: false, error: "prompt required" });
 
-    try {
-      const out = await togetherGenerateImage({ prompt, width, height, steps, n });
-      return okJson(res, { ok: true, url: out.url });
-    } catch (e) {
-      const details = serializeError(e);
-      return okJson(res, { ok: false, error: details.name, details });
-    }
-  });
+  try {
+    const out = await togetherGenerateImage({ prompt, n });
+    return okJson(res, { ok: true, url: out.url });
+  } catch (e) {
+    const details = serializeError(e);
+    return okJson(res, { ok: false, error: details.name, details });
+  }
+});
 
   /** ===========================
    * Push: VAPID public key
