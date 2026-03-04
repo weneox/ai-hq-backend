@@ -1,4 +1,5 @@
-// src/db/index.js (FINAL v1.4 — smart SSL + safe migrate + clearer errors)
+// src/db/index.js
+// (FINAL v1.5 — smart SSL + safe migrate + clearer errors)
 import pg from "pg";
 import fs from "fs";
 import path from "path";
@@ -69,7 +70,7 @@ export async function initDb() {
     return pool;
   } catch (e) {
     console.error("[ai-hq] DB connect failed:", redact(url));
-    console.error(String(e?.message || e));
+    console.error("[ai-hq] ", e?.code || "", String(e?.message || e));
     try {
       await pool.end();
     } catch {}
@@ -90,11 +91,29 @@ export async function migrate() {
 
     const sql = fs.readFileSync(schemaPath, "utf8");
 
-    // Run schema as ONE migration batch
+    // Default: run inside transaction for consistency
+    // Set DB_MIGRATE_TX=0 if you ever hit "cannot run inside a transaction block"
+    const useTx = String(cfg.DB_MIGRATE_TX ?? "1") !== "0";
+
+    if (useTx) await db.query("begin");
     await db.query(sql);
+    if (useTx) await db.query("commit");
 
     return { ok: true };
   } catch (e) {
-    return { ok: false, error: String(e?.message || e) };
+    try {
+      const useTx = String(cfg.DB_MIGRATE_TX ?? "1") !== "0";
+      if (useTx) await _db?.query?.("rollback");
+    } catch {}
+
+    return {
+      ok: false,
+      error: String(e?.message || e),
+      code: e?.code || null,
+      detail: e?.detail || null,
+      hint: e?.hint || null,
+      where: e?.where || null,
+      stack: e?.stack || null,
+    };
   }
 }

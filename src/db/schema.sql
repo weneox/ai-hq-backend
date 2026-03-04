@@ -1,9 +1,10 @@
--- AI HQ schema (upgrade-safe + FULL legacy fixes) — FINAL v7.2
+-- src/db/schema.sql
+-- AI HQ schema (upgrade-safe + FULL legacy fixes) — FINAL v7.3
 -- ✅ Adds/ensures: notifications, jobs, audit_log, push_subscriptions, tenants, content_items (DRAFT-compatible)
 -- ✅ Keeps: legacy fixes (messages/proposals conversation_id + agent_key)
 -- ✅ FIX: proposals.status includes in_progress (needed by api.js v2.9.2)
 -- ✅ FIX: content_items supports draft lifecycle columns (proposal_id, job_id, thread_id, version, content_pack, last_feedback)
--- ✅ FIX: content_items.status allows draft.* + publishing/published/failed and other states
+-- ✅ FIX: content_items.status allows draft.* + publishing/published/failed and other states (future-proof)
 -- ✅ Mojibake repair (best-effort)
 -- Safe for production: no DROP TABLE.
 
@@ -212,16 +213,11 @@ end$$;
 -- ✅ IMPORTANT: loosen/replace status constraint to include in_progress
 do $$
 begin
-  -- drop any existing proposals status check if it exists (name can vary)
   begin
-    if exists (select 1 from pg_constraint where conrelid='proposals'::regclass and contype='c') then
-      -- try common name first; ignore errors
-      begin execute 'alter table proposals drop constraint if exists proposals_status_check'; exception when others then null; end;
-    end if;
+    execute 'alter table proposals drop constraint if exists proposals_status_check';
   exception when others then null;
   end;
 
-  -- ensure allowed statuses for current backend flow
   begin
     alter table proposals
       add constraint proposals_status_check
@@ -428,7 +424,6 @@ end$$;
 -- api.js expects these columns:
 --   proposal_id, thread_id, job_id, status, version, content_pack, last_feedback, created_at, updated_at
 -- ============================================================
-
 create table if not exists content_items (
   id uuid primary key default gen_random_uuid(),
 
@@ -514,21 +509,19 @@ begin
   end;
 end$$;
 
--- ✅ Replace/loosen status constraint to allow backend draft statuses
+-- ✅ Replace/loosen status constraint to allow backend draft statuses (future-proof)
 do $$
 begin
-  -- drop known check if exists
-  begin execute 'alter table content_items drop constraint if exists content_items_status_check'; exception when others then null; end;
+  begin
+    execute 'alter table content_items drop constraint if exists content_items_status_check';
+  exception when others then null;
+  end;
 
-  -- allow a wide set (covers draft lifecycle + publish)
   begin
     alter table content_items
       add constraint content_items_status_check
       check (
         status in (
-          'draft.ready',
-          'draft.regenerating',
-          'draft.approved',
           'pending_approval',
           'approved',
           'rejected',
@@ -536,34 +529,41 @@ begin
           'published',
           'failed'
         )
+        OR status like 'draft.%'
       );
   exception when others then null;
   end;
 end$$;
 
--- FK (optional, best-effort)
+-- FK (optional, idempotent)
 do $$
 begin
-  begin
-    alter table content_items
-      add constraint content_items_proposal_id_fkey
-      foreign key (proposal_id) references proposals(id) on delete set null;
-  exception when others then null;
-  end;
+  if not exists (select 1 from pg_constraint where conname = 'content_items_proposal_id_fkey') then
+    begin
+      alter table content_items
+        add constraint content_items_proposal_id_fkey
+        foreign key (proposal_id) references proposals(id) on delete set null;
+    exception when others then null;
+    end;
+  end if;
 
-  begin
-    alter table content_items
-      add constraint content_items_thread_id_fkey
-      foreign key (thread_id) references threads(id) on delete set null;
-  exception when others then null;
-  end;
+  if not exists (select 1 from pg_constraint where conname = 'content_items_thread_id_fkey') then
+    begin
+      alter table content_items
+        add constraint content_items_thread_id_fkey
+        foreign key (thread_id) references threads(id) on delete set null;
+    exception when others then null;
+    end;
+  end if;
 
-  begin
-    alter table content_items
-      add constraint content_items_job_id_fkey
-      foreign key (job_id) references jobs(id) on delete set null;
-  exception when others then null;
-  end;
+  if not exists (select 1 from pg_constraint where conname = 'content_items_job_id_fkey') then
+    begin
+      alter table content_items
+        add constraint content_items_job_id_fkey
+        foreign key (job_id) references jobs(id) on delete set null;
+    exception when others then null;
+    end;
+  end if;
 end$$;
 
 -- indexes
