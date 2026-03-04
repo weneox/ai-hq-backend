@@ -1005,44 +1005,70 @@ async function autoAdvanceOnDraftReady({ db, wsHub, tenantId, proposalId, conten
 /** ===========================
  * ✅ TOGETHER IMAGE GENERATOR
  * =========================== */
-async function togetherGenerateImage({ prompt, width, height, steps, n }) {
+async function togetherGenerateImage({ prompt, width = 1080, height = 1350, n = 1 }) {
   const apiKey = String(process.env.TOGETHER_API_KEY || "").trim();
   if (!apiKey) throw new Error("TOGETHER_API_KEY not set");
 
   const model = "ideogram/ideogram-3.0";
 
-  // ✅ Only send supported params for ideogram
+  function pickIdeogramSize(w, h) {
+    const pairs = [
+      [1080, 1350], // instagram portrait
+      [1080, 1080], // square
+      [1920, 1080], // landscape
+      [1080, 1920]  // story/reel
+    ];
+
+    const W = Number(w);
+    const H = Number(h);
+
+    for (const [pw, ph] of pairs) {
+      if (pw === W && ph === H) {
+        return { width: pw, height: ph };
+      }
+    }
+
+    return { width: 1080, height: 1350 }; // fallback
+  }
+
+  const size = pickIdeogramSize(width, height);
+
   const body = {
     model,
     prompt: String(prompt || "").trim(),
-    width: Number(width),
-    height: Number(height),
+    width: size.width,
+    height: size.height,
     n: Number(n),
-    response_format: "url",
+    response_format: "url"
   };
-
-  // ✅ Some models accept steps; Ideogram doesn't. Keep this for future switch:
-  // if (model !== "ideogram/ideogram-3.0") body.steps = Number(steps);
 
   const r = await fetch("https://api.together.xyz/v1/images/generations", {
     method: "POST",
     headers: {
       Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json; charset=utf-8",
+      "Content-Type": "application/json; charset=utf-8"
     },
-    body: JSON.stringify(body),
+    body: JSON.stringify(body)
   });
 
   const data = await r.json().catch(() => ({}));
+
   if (!r.ok) {
-    const msg = data?.error?.message || data?.message || `Together error (${r.status})`;
+    const msg =
+      data?.error?.message ||
+      data?.message ||
+      `Together error (${r.status})`;
+
     throw new Error(msg);
   }
 
   const url = data?.data?.[0]?.url || "";
   if (!url) throw new Error("Together returned no url");
 
-  return { url, raw: data };
+  return {
+    url,
+    raw: data
+  };
 }
 
 /** ===========================
