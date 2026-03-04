@@ -1009,15 +1009,20 @@ async function togetherGenerateImage({ prompt, width, height, steps, n }) {
   const apiKey = String(process.env.TOGETHER_API_KEY || "").trim();
   if (!apiKey) throw new Error("TOGETHER_API_KEY not set");
 
+  const model = "ideogram/ideogram-3.0";
+
+  // ✅ Only send supported params for ideogram
   const body = {
-    model: "ideogram/ideogram-3.0",
+    model,
     prompt: String(prompt || "").trim(),
     width: Number(width),
     height: Number(height),
-    steps: Number(steps),
     n: Number(n),
     response_format: "url",
   };
+
+  // ✅ Some models accept steps; Ideogram doesn't. Keep this for future switch:
+  // if (model !== "ideogram/ideogram-3.0") body.steps = Number(steps);
 
   const r = await fetch("https://api.together.xyz/v1/images/generations", {
     method: "POST",
