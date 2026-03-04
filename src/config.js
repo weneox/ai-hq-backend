@@ -1,9 +1,5 @@
-// src/config.js (FINAL v2.4)
-// - Telegram toggle (default OFF)
-// - Web Push (VAPID) config
-// - Meta/Instagram Publish config (Page Access Token)
-// - Cron security secret
-// - SaaS defaults (tenant key / timezone / publish time)
+// src/config.js (FINAL v2.5)
+// - Adds DEFAULT_MODE (manual|auto) for tenant mode fallback
 
 function s(v, d = "") {
   return String(v ?? d).trim();
@@ -17,6 +13,12 @@ function b(v, d = false) {
   if (!x) return d;
   if (["1", "true", "yes", "y", "on"].includes(x)) return true;
   if (["0", "false", "no", "n", "off"].includes(x)) return false;
+  return d;
+}
+
+function mode(v, d = "manual") {
+  const x = String(v ?? "").trim().toLowerCase();
+  if (x === "auto" || x === "manual") return x;
   return d;
 }
 
@@ -60,17 +62,19 @@ export const cfg = {
   VAPID_PRIVATE_KEY: s(process.env.VAPID_PRIVATE_KEY, ""),
   VAPID_SUBJECT: s(process.env.VAPID_SUBJECT, "mailto:info@weneox.com"),
 
-  // ✅ Daily automation defaults (SaaS-ready even if you use only NEOX now)
+  // ✅ SaaS defaults
   DEFAULT_TENANT_KEY: s(process.env.DEFAULT_TENANT_KEY, "neox"),
   DEFAULT_TIMEZONE: s(process.env.DEFAULT_TIMEZONE, "Asia/Baku"),
   DAILY_PUBLISH_HOUR_LOCAL: n(process.env.DAILY_PUBLISH_HOUR_LOCAL, 10),
   DAILY_PUBLISH_MINUTE_LOCAL: n(process.env.DAILY_PUBLISH_MINUTE_LOCAL, 0),
 
-  // ✅ Cron security (Railway cron will call your endpoint)
-  // If CRON_SECRET is set -> require x-cron-secret header
+  // ✅ NEW: tenant mode fallback if DB not present or tenant row missing
+  DEFAULT_MODE: mode(process.env.DEFAULT_MODE, "manual"), // "manual" | "auto"
+
+  // ✅ Cron security
   CRON_SECRET: s(process.env.CRON_SECRET, ""),
 
-  // ✅ Meta / Instagram publish (Phase-1: single token stored in server env)
+  // ✅ Meta / Instagram publish
   META_PAGE_ACCESS_TOKEN: s(process.env.META_PAGE_ACCESS_TOKEN, ""),
   META_PAGE_ID: s(process.env.META_PAGE_ID, "1034647199727587"),
   META_IG_USER_ID: s(process.env.META_IG_USER_ID, "17841473956986087"),

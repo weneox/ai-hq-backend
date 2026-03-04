@@ -1,19 +1,14 @@
-// src/routes/api.js (FINAL v2.10.0 — Manual + Loop + Publish + Auto-ready)
+// src/routes/api.js (FINAL v2.11.0 — Manual + Loop + Publish + Auto/Manual Switch)
 //
-// ✅ Manual mode lifecycle (CEO-controlled):
-//   Pending -> (approve) Drafting(in_progress) -> (draft ready) -> Approve Draft -> Approved -> Publish -> Published
+// ✅ Adds AUTO/MANUAL switch (tenant mode):
+//   GET  /api/mode?tenantId=neox
+//   POST /api/mode { tenantId, mode: "auto"|"manual" }
 //
-// ✅ Loop (revisions) works from BOTH:
-//   - Drafting (in_progress)  -> Request changes -> regenerates draft
-//   - Approved                -> Request changes -> goes back to in_progress + regenerates draft
+// ✅ Auto behavior:
+//   - When a proposal is CREATED (debate) and mode=auto => auto-approve -> in_progress -> job -> n8n
+//   - When draft is READY from callback and mode=auto => auto approve draft -> auto publish (n8n)
 //
-// ✅ Publish is wired as:
-//   - POST /api/content/:id/publish  (publishes a specific approved draft content item)
-//   - POST /api/proposals/:id/publish (publishes latest approved draft for a proposal)
-//   - Callback can mark proposal as published when permalink is provided
-//
-// ✅ Keeps: mojibake auto-fix, push test, executions callback auto-draft save, n8n callback absolute url
-// ✅ Auto-ready: we include tenant mode fields in events (tenantId) but scheduling is typically done in n8n.
+// ✅ Manual behavior unchanged.
 
 import express from "express";
 import crypto from "crypto";
@@ -28,7 +23,6 @@ import { pushSendOne } from "../utils/push.js";
  * UTF-8 / Mojibake fix helpers
  * =========================== */
 
-// Common mojibake markers when UTF-8 bytes were wrongly read as latin1
 const MOJIBAKE_RE = /Ã.|Â.|â€|â€™|â€œ|â€�|â€“|â€”|â€¦|Ð.|Ñ.|Ø.|Þ.|Ý.|ý|þ|ð/;
 
 function scoreTextQuality(s) {
@@ -93,7 +87,6 @@ function clamp(nv, a, b) {
   return Math.max(a, Math.min(b, x));
 }
 
-// ✅ If DEBUG_API_TOKEN is set => require it. If not set => allow (dev-friendly)
 function requireDebugToken(req) {
   const expected = String(cfg.DEBUG_API_TOKEN || "").trim();
   if (!expected) return true;
@@ -158,11 +151,11 @@ function callbackTokenExpected() {
 
 function requireCallbackToken(req) {
   const expected = callbackTokenExpected();
-  if (!expected) return true; // dev allow
+  if (!expected) return true;
   const got = String(
     req.headers["x-webhook-token"] ||
       req.headers["x-callback-token"] ||
-      req.body?.token || // allow body token for easy n8n testing
+      req.body?.token ||
       ""
   ).trim();
   return Boolean(got) && got === expected;
@@ -178,17 +171,10 @@ function absoluteCallbackUrl(pathname) {
   const p = String(pathname || "").trim();
   if (!p) return p;
   if (/^https?:\/\//i.test(p)) return p;
-  if (!b) return p; // keep relative if base not configured
+  if (!b) return p;
   return `${b}${p.startsWith("/") ? "" : "/"}${p}`;
 }
 
-function normalizeStatus(s) {
-  const x = String(s || "").trim().toLowerCase();
-  if (!x) return "";
-  return x;
-}
-
-// ✅ Telegram hard toggle: OFF by default
 async function maybeTelegram(text) {
   if (!cfg.TELEGRAM_ENABLED) return;
   try {
@@ -205,10 +191,11 @@ const mem = {
   proposals: new Map(),
   notifications: new Map(),
   jobs: new Map(),
-  pushSubs: new Map(), // endpoint -> {recipient, endpoint, p256dh, auth, user_agent}
-  contentItems: new Map(), // id -> content_item
-  contentByProposal: new Map(), // proposalId -> contentItemId (latest)
+  pushSubs: new Map(),
+  contentItems: new Map(),
+  contentByProposal: new Map(),
   audit: [],
+  tenantMode: new Map(), // tenantId -> "manual"|"auto"
 };
 
 function memEnsureThread(threadId, title) {
@@ -365,7 +352,7 @@ function memUpsertContentItem({
     version: nextVersion,
     content_pack: deepFix(contentPack || existing?.content_pack || {}),
     last_feedback: fixText(String(feedbackText || existing?.last_feedback || "")),
-    publish: deepFix(existing?.publish || {}), // e.g. { permalink, platform, publishedAt, assetUrls }
+    publish: deepFix(existing?.publish || {}),
     created_at: existing?.created_at || nowIso(),
     updated_at: nowIso(),
   };
@@ -386,51 +373,70 @@ function memPatchContentItem(id, patch = {}) {
 }
 
 /** ===========================
- * Best-effort cleanup (expired rows)
+ * Tenant mode helpers (DB + MEM)
  * =========================== */
-let lastCleanupMs = 0;
+function normalizeMode(x) {
+  const s = String(x || "").trim().toLowerCase();
+  return s === "auto" ? "auto" : "manual";
+}
 
-async function maybeCleanupExpired({ db }) {
-  const now = Date.now();
-  if (now - lastCleanupMs < 10 * 60 * 1000) return; // at most every 10 minutes
-  lastCleanupMs = now;
-
-  const JOB_TTL_DAYS = clamp(cfg.JOB_TTL_DAYS ?? 30, 7, 180);
-  const NOTIF_TTL_DAYS = clamp(cfg.NOTIF_TTL_DAYS ?? 90, 14, 365);
-
-  // Memory cleanup
-  if (!isDbReady(db)) {
-    const cutoffJobs = Date.now() - JOB_TTL_DAYS * 24 * 60 * 60 * 1000;
-    for (const [id, j] of mem.jobs.entries()) {
-      const t = Date.parse(String(j.created_at || "")) || 0;
-      const final = ["completed", "failed"].includes(String(j.status || "").toLowerCase());
-      if (final && t && t < cutoffJobs) mem.jobs.delete(id);
-    }
-    const cutoffNotif = Date.now() - NOTIF_TTL_DAYS * 24 * 60 * 60 * 1000;
-    for (const [id, n] of mem.notifications.entries()) {
-      const t = Date.parse(String(n.created_at || "")) || 0;
-      if (t && t < cutoffNotif) mem.notifications.delete(id);
-    }
-    return;
+async function dbGetTenantMode(db, tenantId) {
+  if (!isDbReady(db)) return null;
+  try {
+    const q = await db.query(
+      `select key, mode
+       from tenants
+       where key = $1::text
+       limit 1`,
+      [String(tenantId)]
+    );
+    const row = q.rows?.[0] || null;
+    if (!row) return null;
+    return normalizeMode(row.mode);
+  } catch {
+    return null;
   }
+}
 
-  // DB cleanup (safe; no drops)
+async function dbSetTenantMode(db, tenantId, mode) {
+  if (!isDbReady(db)) return null;
+  const m = normalizeMode(mode);
   try {
-    await db.query(
-      `delete from jobs
-       where status in ('completed','failed')
-         and created_at < now() - ($1::int * interval '1 day')`,
-      [JOB_TTL_DAYS]
+    const q = await db.query(
+      `update tenants
+       set mode = $2::text
+       where key = $1::text
+       returning key, mode`,
+      [String(tenantId), m]
     );
-  } catch {}
+    return q.rows?.[0] || null;
+  } catch {
+    return null;
+  }
+}
 
-  try {
-    await db.query(
-      `delete from notifications
-       where created_at < now() - ($1::int * interval '1 day')`,
-      [NOTIF_TTL_DAYS]
-    );
-  } catch {}
+async function getTenantMode({ db, tenantId }) {
+  const tid = String(tenantId || cfg.DEFAULT_TENANT_KEY || "default").trim() || "default";
+  if (!isDbReady(db)) {
+    const v = mem.tenantMode.get(tid);
+    return normalizeMode(v || cfg.DEFAULT_MODE || "manual");
+  }
+  const fromDb = await dbGetTenantMode(db, tid);
+  return normalizeMode(fromDb || cfg.DEFAULT_MODE || "manual");
+}
+
+async function setTenantMode({ db, tenantId, mode }) {
+  const tid = String(tenantId || cfg.DEFAULT_TENANT_KEY || "default").trim() || "default";
+  const m = normalizeMode(mode);
+  if (!isDbReady(db)) {
+    mem.tenantMode.set(tid, m);
+    return { key: tid, mode: m, dbDisabled: true };
+  }
+  const row = await dbSetTenantMode(db, tid, m);
+  if (row) return { key: row.key, mode: normalizeMode(row.mode), dbDisabled: false };
+  // if tenant row missing, still fall back to in-memory for now (safe)
+  mem.tenantMode.set(tid, m);
+  return { key: tid, mode: m, dbDisabled: false, warning: "tenant row not updated; using memory fallback" };
 }
 
 /** ===========================
@@ -753,40 +759,6 @@ async function dbGetLatestApprovedDraftByProposal(db, proposalId) {
   return row;
 }
 
-async function dbCreateContentItem(db, {
-  proposalId,
-  threadId = null,
-  jobId = null,
-  status = "draft.ready",
-  version = 1,
-  contentPack = {},
-  lastFeedback = "",
-  publish = {},
-}) {
-  const q = await db.query(
-    `insert into content_items (proposal_id, thread_id, job_id, status, version, content_pack, last_feedback, publish)
-     values ($1::uuid, $2::uuid, $3::uuid, $4::text, $5::int, $6::jsonb, $7::text, $8::jsonb)
-     returning id, proposal_id, thread_id, job_id, status, version, content_pack, last_feedback, publish, created_at, updated_at`,
-    [
-      proposalId,
-      threadId,
-      jobId,
-      fixText(status),
-      Number(version) || 1,
-      deepFix(contentPack || {}),
-      fixText(lastFeedback || ""),
-      deepFix(publish || {}),
-    ]
-  );
-  const row = q.rows?.[0] || null;
-  if (!row) return null;
-  row.content_pack = deepFix(row.content_pack);
-  row.last_feedback = fixText(row.last_feedback || "");
-  row.status = fixText(row.status || "");
-  row.publish = deepFix(row.publish || {});
-  return row;
-}
-
 async function dbUpdateContentItem(db, id, patch = {}) {
   const status = patch.status ?? null;
   const lastFeedback = patch.last_feedback ?? patch.lastFeedback ?? null;
@@ -827,21 +799,21 @@ async function dbUpdateContentItem(db, id, patch = {}) {
 }
 
 async function dbUpsertDraftFromCallback(db, { proposalId, threadId = null, jobId = null, status = "draft.ready", contentPack = {} }) {
-  // Strategy:
-  // - if exists: update same row; bump version +1
-  // - else: create v1
   const existing = await dbGetLatestContentByProposal(db, proposalId);
   if (!existing) {
-    return await dbCreateContentItem(db, {
-      proposalId,
-      threadId,
-      jobId,
-      status,
-      version: 1,
-      contentPack,
-      lastFeedback: "",
-      publish: {},
-    });
+    const q = await db.query(
+      `insert into content_items (proposal_id, thread_id, job_id, status, version, content_pack, last_feedback, publish)
+       values ($1::uuid, $2::uuid, $3::uuid, $4::text, 1, $5::jsonb, '', '{}'::jsonb)
+       returning id, proposal_id, thread_id, job_id, status, version, content_pack, last_feedback, publish, created_at, updated_at`,
+      [proposalId, threadId, jobId, fixText(status), deepFix(contentPack || {})]
+    );
+    const row = q.rows?.[0] || null;
+    if (!row) return null;
+    row.content_pack = deepFix(row.content_pack);
+    row.last_feedback = fixText(row.last_feedback || "");
+    row.status = fixText(row.status || "");
+    row.publish = deepFix(row.publish || {});
+    return row;
   }
   const nextVersion = (Number(existing.version) || 1) + 1;
   return await dbUpdateContentItem(db, existing.id, {
@@ -853,13 +825,101 @@ async function dbUpsertDraftFromCallback(db, { proposalId, threadId = null, jobI
 }
 
 /** ===========================
+ * AUTO advance helpers
+ * =========================== */
+async function autoAdvanceOnDraftReady({ db, wsHub, tenantId, proposalId, contentItemId, contentPack, jobId }) {
+  const mode = await getTenantMode({ db, tenantId });
+  if (mode !== "auto") return { ok: false, skipped: true, mode };
+
+  const by = "auto";
+
+  // 1) approve draft + proposal => approved
+  if (!isDbReady(db)) {
+    const c = mem.contentItems.get(String(contentItemId));
+    if (c) {
+      memPatchContentItem(c.id, { status: "draft.approved" });
+      wsHub?.broadcast?.({ type: "content.updated", content: mem.contentItems.get(c.id) });
+    }
+    const p = mem.proposals.get(String(proposalId));
+    if (p) {
+      p.status = "approved";
+      p.decided_at = p.decided_at || nowIso();
+      p.decision_by = by;
+      p.payload = deepFix(p.payload || {});
+      p.payload.decision = { by, decision: "approved", at: p.decided_at, via: "autoAdvanceOnDraftReady" };
+      wsHub?.broadcast?.({ type: "proposal.updated", proposal: p });
+    }
+
+    // 2) publish
+    const latest = memGetLatestContentByProposal(proposalId);
+    if (latest) {
+      memPatchContentItem(latest.id, { status: "publishing" });
+      wsHub?.broadcast?.({ type: "content.updated", content: mem.contentItems.get(latest.id) });
+
+      notifyN8n("content.publish", null, {
+        tenantId,
+        by,
+        proposalId,
+        threadId: p?.thread_id || null,
+        contentItemId: latest.id,
+        status: "publishing",
+        contentPack: latest.content_pack || contentPack || {},
+        jobId: jobId || latest.job_id || null,
+        callback: { url: "/api/executions/callback", tokenHeader: "x-webhook-token" },
+        dbDisabled: true,
+      });
+    }
+
+    return { ok: true, mode, dbDisabled: true };
+  }
+
+  // DB mode
+  try {
+    await dbUpdateContentItem(db, String(contentItemId), { status: "draft.approved" });
+
+    await db.query(
+      `update proposals
+       set status = 'approved',
+           decided_at = coalesce(decided_at, now()),
+           decision_by = $2::text,
+           payload = (coalesce(payload,'{}'::jsonb) || jsonb_build_object('decision', jsonb_build_object(
+             'by', $2::text, 'decision', 'approved', 'at', now(), 'via', 'auto'
+           )))
+       where id = $1::uuid`,
+      [String(proposalId), by]
+    );
+
+    const approved = await dbUpdateContentItem(db, String(contentItemId), { status: "publishing" });
+    wsHub?.broadcast?.({ type: "content.updated", content: approved });
+
+    notifyN8n("content.publish", null, {
+      tenantId,
+      by,
+      proposalId,
+      threadId: null,
+      contentItemId: String(contentItemId),
+      status: "publishing",
+      contentPack: deepFix(contentPack || {}),
+      jobId: jobId || null,
+      callback: { url: "/api/executions/callback", tokenHeader: "x-webhook-token" },
+      dbDisabled: false,
+    });
+
+    wsHub?.broadcast?.({ type: "proposal.updated", proposal: await dbGetProposalById(db, String(proposalId)) });
+
+    return { ok: true, mode, dbDisabled: false };
+  } catch (e) {
+    return { ok: false, mode, error: String(e?.message || e) };
+  }
+}
+
+/** ===========================
  * Router
  * =========================== */
 export function apiRouter({ db, wsHub }) {
   const r = express.Router();
 
   r.get("/", async (_req, res) => {
-    await maybeCleanupExpired({ db });
     return okJson(res, {
       ok: true,
       service: "ai-hq-backend",
@@ -867,31 +927,59 @@ export function apiRouter({ db, wsHub }) {
       debateEngine: DEBATE_ENGINE_VERSION,
       endpoints: [
         "GET /api",
+        "GET /api/mode?tenantId=",
+        "POST /api/mode {tenantId, mode}",
         "GET /api/agents",
         "POST /api/chat",
         "POST /api/debate",
         "GET /api/threads/:id/messages",
         "GET /api/proposals?status=pending|in_progress|approved|published|rejected",
         "POST /api/proposals/:id/decision",
-        "POST /api/proposals/:id/request-changes (loop: regenerate draft from latest)",
-        "POST /api/proposals/:id/publish (publish latest approved draft)",
+        "POST /api/proposals/:id/request-changes",
+        "POST /api/proposals/:id/publish",
         "GET /api/notifications?recipient=ceo&unread=1",
         "POST /api/notifications/:id/read",
         "GET /api/push/vapid",
         "POST /api/push/subscribe",
-        "POST /api/push/test (token if DEBUG_API_TOKEN set)",
+        "POST /api/push/test",
         "GET /api/executions?status=&limit=&executionId=",
-        "GET /api/executions/:id (uuid) OR /api/executions/:executionId (digits)",
-        "POST /api/executions/callback (token)",
+        "GET /api/executions/:id",
+        "POST /api/executions/callback",
         "GET /api/content?proposalId=",
         "POST /api/content/:id/feedback",
         "POST /api/content/:id/approve",
         "POST /api/content/:id/publish",
-        "POST /api/debug/openai (token if DEBUG_API_TOKEN set)",
+        "POST /api/debug/openai",
       ],
-      telegram: { enabled: Boolean(cfg.TELEGRAM_ENABLED) },
-      push: { enabled: Boolean(cfg.PUSH_ENABLED), vapidPublicKey: cfg.VAPID_PUBLIC_KEY ? "set" : "missing" },
+      defaults: { tenant: cfg.DEFAULT_TENANT_KEY, mode: cfg.DEFAULT_MODE },
     });
+  });
+
+  /** ===========================
+   * ✅ MODE ENDPOINTS (Switcher)
+   * =========================== */
+  r.get("/mode", async (req, res) => {
+    const tenantId = fixText(String(req.query.tenantId || cfg.DEFAULT_TENANT_KEY || "default").trim()) || "default";
+    try {
+      const mode = await getTenantMode({ db, tenantId });
+      return okJson(res, { ok: true, tenantId, mode });
+    } catch (e) {
+      const details = serializeError(e);
+      return okJson(res, { ok: false, error: details.name, details });
+    }
+  });
+
+  r.post("/mode", async (req, res) => {
+    const tenantId = fixText(String(req.body?.tenantId || cfg.DEFAULT_TENANT_KEY || "default").trim()) || "default";
+    const mode = normalizeMode(req.body?.mode);
+    try {
+      const out = await setTenantMode({ db, tenantId, mode });
+      wsHub?.broadcast?.({ type: "tenant.mode", tenantId: out.key, mode: out.mode });
+      return okJson(res, { ok: true, tenantId: out.key, mode: out.mode, ...("warning" in out ? { warning: out.warning } : {}), dbDisabled: out.dbDisabled });
+    } catch (e) {
+      const details = serializeError(e);
+      return okJson(res, { ok: false, error: details.name, details });
+    }
   });
 
   r.get("/agents", (_req, res) => okJson(res, { ok: true, agents: listAgents() }));
