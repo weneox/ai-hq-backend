@@ -1,21 +1,5 @@
-// src/routes/api.js (FINAL v2.11.1 — Manual + Loop + Publish + Auto/Manual Switch + PROMPTS WIRED)
-//
-// ✅ Adds AUTO/MANUAL switch (tenant mode):
-//   GET  /api/mode?tenantId=neox
-//   POST /api/mode { tenantId, mode: "auto"|"manual" }
-//
-// ✅ Auto behavior:
-//   - When a proposal is CREATED (debate) and mode=auto => auto-approve -> in_progress -> job -> n8n
-//   - When draft is READY from callback and mode=auto => auto approve draft -> auto publish (n8n)
-//
-// ✅ Manual behavior unchanged.
-//
-// ✅ Adds render slides endpoint:
-//   POST /api/render/slides  { slides:[...], tenantId? }  => { renderId, assets:[...] }
-//
-// ✅ PROMPTS WIRED:
-//   - Every n8n event now includes:
-//     prompts: { globalPolicy, usecaseKey, usecasePrompt }
+// src/routes/api.js (FINAL v2.11.2 — v2.11.1 + Together Ideogram Image Endpoint)
+// ✅ NEW: POST /api/media/image  { prompt, width?, height?, steps?, n? } -> { ok, url, raw? }
 
 import express from "express";
 import crypto from "crypto";
@@ -218,17 +202,13 @@ async function maybeCleanupExpired() {
 
 function usecaseForEvent(event) {
   const e = String(event || "").trim();
-  // IMPORTANT: usecases filenames are EXACTLY:
-  // content.draft.txt, content.revise.txt, content.publish.txt, meta.comment_reply.txt, trend.research.txt
   if (e === "proposal.approved") return "content.draft";
   if (e === "content.revise") return "content.revise";
   if (e === "content.publish") return "content.publish";
   if (e === "meta.comment_reply") return "meta.comment_reply";
   if (e === "trend.research") return "trend.research";
-
-  // optional events we also send:
-  if (e === "content.approved") return "content.publish"; // (publish prep prompt is fine)
-  return ""; // no usecase
+  if (e === "content.approved") return "content.publish";
+  return "";
 }
 
 function buildPromptBundle(event) {
@@ -616,7 +596,6 @@ function notifyN8n(event, proposal, extra = {}) {
   const callbackRel = extra?.callback?.url || "/api/executions/callback";
   const callbackAbs = absoluteCallbackUrl(callbackRel);
 
-  // ✅ include prompts every time
   const prompts = buildPromptBundle(event);
 
   const payload = deepFix({
@@ -632,7 +611,6 @@ function notifyN8n(event, proposal, extra = {}) {
       url: callbackAbs || callbackRel,
     },
 
-    // ✅ prompts packed for n8n Message-a-model
     prompts,
 
     title: proposal?.title || extra.title || null,
@@ -1025,6 +1003,44 @@ async function autoAdvanceOnDraftReady({ db, wsHub, tenantId, proposalId, conten
 }
 
 /** ===========================
+ * ✅ TOGETHER IMAGE GENERATOR
+ * =========================== */
+async function togetherGenerateImage({ prompt, width, height, steps, n }) {
+  const apiKey = String(process.env.TOGETHER_API_KEY || "").trim();
+  if (!apiKey) throw new Error("TOGETHER_API_KEY not set");
+
+  const body = {
+    model: "ideogram/ideogram-3.0",
+    prompt: String(prompt || "").trim(),
+    width: Number(width),
+    height: Number(height),
+    steps: Number(steps),
+    n: Number(n),
+    response_format: "url",
+  };
+
+  const r = await fetch("https://api.together.xyz/v1/images/generations", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json; charset=utf-8",
+    },
+    body: JSON.stringify(body),
+  });
+
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) {
+    const msg = data?.error?.message || data?.message || `Together error (${r.status})`;
+    throw new Error(msg);
+  }
+
+  const url = data?.data?.[0]?.url || "";
+  if (!url) throw new Error("Together returned no url");
+
+  return { url, raw: data };
+}
+
+/** ===========================
  * Router
  * =========================== */
 export function apiRouter({ db, wsHub }) {
@@ -1061,6 +1077,7 @@ export function apiRouter({ db, wsHub }) {
         "POST /api/content/:id/approve",
         "POST /api/content/:id/publish",
         "POST /api/render/slides",
+        "POST /api/media/image",
         "POST /api/debug/openai",
       ],
       defaults: { tenant: cfg.DEFAULT_TENANT_KEY, mode: cfg.DEFAULT_MODE },
@@ -1144,6 +1161,27 @@ export function apiRouter({ db, wsHub }) {
   });
 
   /** ===========================
+   * ✅ TOGETHER IMAGE ENDPOINT
+   * =========================== */
+  r.post("/media/image", async (req, res) => {
+    const prompt = fixText(String(req.body?.prompt || "").trim());
+    const width = clamp(req.body?.width ?? 1080, 256, 2048);
+    const height = clamp(req.body?.height ?? 1350, 256, 2048);
+    const steps = clamp(req.body?.steps ?? 28, 1, 60);
+    const n = clamp(req.body?.n ?? 1, 1, 4);
+
+    if (!prompt) return okJson(res, { ok: false, error: "prompt required" });
+
+    try {
+      const out = await togetherGenerateImage({ prompt, width, height, steps, n });
+      return okJson(res, { ok: true, url: out.url });
+    } catch (e) {
+      const details = serializeError(e);
+      return okJson(res, { ok: false, error: details.name, details });
+    }
+  });
+
+  /** ===========================
    * Push: VAPID public key
    * =========================== */
   r.get("/push/vapid", (_req, res) => {
@@ -1155,9 +1193,6 @@ export function apiRouter({ db, wsHub }) {
     return okJson(res, { ok: true, publicKey });
   });
 
-  /** ===========================
-   * Push: subscribe
-   * =========================== */
   r.get("/push/subscribe", (_req, res) => {
     res.setHeader("Content-Type", "application/json; charset=utf-8");
     return res
@@ -1201,9 +1236,6 @@ export function apiRouter({ db, wsHub }) {
     }
   });
 
-  /** ===========================
-   * Push: TEST SEND ✅
-   * =========================== */
   r.post("/push/test", async (req, res) => {
     if (!requireDebugToken(req)) {
       return okJson(res, { ok: false, error: "forbidden (missing/invalid debug token)" });
