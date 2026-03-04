@@ -1457,12 +1457,7 @@ export function apiRouter({ db, wsHub }) {
       });
 
       const proposalAfter = await dbGetProposalById(db, String(row.proposal_id));
-      return okJson(res, {
-        ok: true,
-        content: updated,
-        notification: notif,
-        proposal: proposalAfter || null,
-      });
+      return okJson(res, { ok: true, content: updated, notification: notif, proposal: proposalAfter || null });
     } catch (e) {
       const details = serializeError(e);
       return okJson(res, { ok: false, error: details.name, details });
@@ -1530,13 +1525,7 @@ export function apiRouter({ db, wsHub }) {
           dbDisabled: true,
         });
 
-        return okJson(res, {
-          ok: true,
-          content: updated,
-          notification: n,
-          proposal: p || null,
-          dbDisabled: true,
-        });
+        return okJson(res, { ok: true, content: updated, notification: n, proposal: p || null, dbDisabled: true });
       }
 
       // DB
@@ -1920,6 +1909,7 @@ export function apiRouter({ db, wsHub }) {
       return okJson(res, { ok: false, error: 'status must be "running"|"completed"|"failed"' });
     }
 
+    // Draft pack (generation workflow)
     const maybeContentPack =
       result?.contentPack || result?.content_pack || result?.draft || result?.draftPack || null;
 
@@ -1933,9 +1923,12 @@ export function apiRouter({ db, wsHub }) {
       }
     }
 
+    // Publish outputs (publish workflow)
     const publishInfo = deepFix(result?.publish || result?.published || {});
     const permalink = fixText(
-      String(result?.permalink || result?.url || publishInfo?.permalink || publishInfo?.url || "")
+      String(
+        result?.permalink || result?.url || publishInfo?.permalink || publishInfo?.url || ""
+      )
     ).trim();
     const assetUrls = Array.isArray(result?.assetUrls)
       ? result.assetUrls.map((x) => String(x || "").trim()).filter(Boolean)
@@ -1965,6 +1958,7 @@ export function apiRouter({ db, wsHub }) {
 
         let content = null;
 
+        // Draft save on completed generation
         if (contentPackObj && row.proposal_id && status === "completed") {
           content = memUpsertContentItem({
             proposalId: row.proposal_id,
@@ -1977,6 +1971,7 @@ export function apiRouter({ db, wsHub }) {
           wsHub?.broadcast?.({ type: "content.updated", content });
         }
 
+        // Publish success => mark content published + proposal published
         if (permalink && row.proposal_id && status === "completed") {
           const latest = memGetLatestContentByProposal(row.proposal_id);
           if (latest) {
@@ -1984,7 +1979,10 @@ export function apiRouter({ db, wsHub }) {
               status: "published",
               publish: { permalink, assetUrls, publishedAt: nowIso() },
             });
-            wsHub?.broadcast?.({ type: "content.updated", content: mem.contentItems.get(latest.id) });
+            wsHub?.broadcast?.({
+              type: "content.updated",
+              content: mem.contentItems.get(latest.id),
+            });
           }
           const p = mem.proposals.get(String(row.proposal_id));
           if (p) {
@@ -2031,6 +2029,7 @@ export function apiRouter({ db, wsHub }) {
 
       let content = null;
 
+      // Draft save on completed generation
       if (contentPackObj && row.proposal_id && status === "completed") {
         content = await dbUpsertDraftFromCallback(db, {
           proposalId: String(row.proposal_id),
@@ -2045,6 +2044,7 @@ export function apiRouter({ db, wsHub }) {
         });
       }
 
+      // Publish success
       if (permalink && row.proposal_id && status === "completed") {
         const latest = await dbGetLatestContentByProposal(db, String(row.proposal_id));
         if (latest) {
@@ -2379,6 +2379,11 @@ export function apiRouter({ db, wsHub }) {
 
   /** ===========================
    * Decision + Job + n8n + notify + push
+   *
+   * ✅ NEW FLOW:
+   * - decision=approved => proposal.status becomes "in_progress" (NOT approved),
+   *   job created + n8n proposal.approved
+   * - decision=rejected => proposal.status="rejected" (final)
    * =========================== */
   r.post("/proposals/:id/decision", async (req, res) => {
     const id = String(req.params.id || "").trim();
@@ -2472,7 +2477,7 @@ export function apiRouter({ db, wsHub }) {
         return okJson(res, { ok: true, proposal: row, notification: notif, job, dbDisabled: true });
       }
 
-      // DB mode
+      // DB mode (decision only while pending)
       const q = await db.query(
         `update proposals
          set status = $1::text,
