@@ -1,8 +1,9 @@
-// src/kernel/debateEngine.js (FINAL v3.5 — UTF fix + safer JSON parse)
+// src/kernel/debateEngine.js (FINAL v3.6 — prompts/usecases + UTF fix + safer JSON parse)
 import OpenAI from "openai";
 import { cfg } from "../config.js";
+import { getGlobalPolicy, getUsecasePrompt } from "../prompts/index.js";
 
-export const DEBATE_ENGINE_VERSION = "final-v3.5";
+export const DEBATE_ENGINE_VERSION = "final-v3.6";
 console.log(`[debateEngine] LOADED ${DEBATE_ENGINE_VERSION}`);
 
 const DEFAULT_AGENTS = ["orion", "nova", "atlas", "echo"];
@@ -59,7 +60,6 @@ function fixMojibake(input) {
 
   try {
     const fixed = Buffer.from(t, "latin1").toString("utf8");
-    // if it got worse, keep original
     if (/[�]/.test(fixed) && !/[�]/.test(t)) return t;
     return fixed;
   } catch {
@@ -257,12 +257,12 @@ function extractJsonFromText(text) {
   const s0 = String(text || "").trim();
   if (!s0) return null;
 
-  // Try direct parse first
+  // direct parse
   try {
     return JSON.parse(s0);
   } catch {}
 
-  // If there's extra text, slice { ... }
+  // slice first {...} block
   const start = s0.indexOf("{");
   const end = s0.lastIndexOf("}");
   if (start >= 0 && end > start) {
@@ -293,28 +293,38 @@ function fallbackSynthesis(agentNotes = []) {
   return parts.join("\n\n").trim();
 }
 
-function buildFallbackProposalFromText(finalAnswer) {
-  const summary = String(finalAnswer || "").replace(/\s+/g, " ").trim().slice(0, 320) || "Plan summary";
+function pickUsecaseFromMode(mode) {
+  const m = String(mode || "").trim().toLowerCase();
+  if (m === "draft") return "content.draft";
+  if (m === "revise") return "content.revise";
+  if (m === "publish") return "content.publish";
+  if (m === "trend") return "trend.research";
+  if (m === "meta_comment") return "meta.comment_reply";
+  return null;
+}
 
-  const steps = Array.from({ length: 7 }, (_, i) => {
-    const day = i + 1;
-    return {
-      day,
-      title: `Gün ${day}`,
-      tasks: ["ICP və təklifin dəqiqləşdirilməsi", "Kanal icrası (email/LinkedIn/IG/WhatsApp) planı", "Demo/booked görüş hədəfi və follow-up"],
-    };
-  });
+function buildSynthesisSystem({ mode }) {
+  const global = getGlobalPolicy();
+  const usecase = pickUsecaseFromMode(mode);
+  const ucText = usecase ? getUsecasePrompt(usecase) : "";
 
-  const kpis = ["Reply rate (cavab nisbəti)", "Demo booked", "Demo show-up", "SQL sayı", "Təklif göndərilənlər", "Win rate"];
+  const base = `
+You are AI HQ Kernel.
+Follow GLOBAL POLICY and USECASE instructions strictly.
+Return clean outputs. If USECASE requires JSON: output ONLY valid JSON.
+`.trim();
 
-  const ownerMap = {
-    orion: "Strategiya, ICP, offer, risklər",
-    nova: "Kontent, kreativ, CTA, sosial sübut",
-    atlas: "Outreach, skriptlər, pipeline, CRM əməliyyat",
-    echo: "KPI, tracking, experiment, dashboard",
-  };
-
-  return { type: "plan", title: "Debate Proposal", payload: { summary, steps, kpis, ownerMap } };
+  return [
+    base,
+    "",
+    "GLOBAL POLICY:",
+    global || "(missing policy.global.txt)",
+    "",
+    usecase ? `USECASE: ${usecase}` : "",
+    usecase ? ucText : "",
+  ]
+    .filter((x) => String(x || "").trim())
+    .join("\n");
 }
 
 async function synthesizeFinal({ openai, message, agentNotes, mode, timeoutMs }) {
@@ -324,26 +334,15 @@ async function synthesizeFinal({ openai, message, agentNotes, mode, timeoutMs })
 
   const maxOut = Number(cfg.OPENAI_DEBATE_SYNTH_TOKENS || 1400);
 
-  const sysText = `
-Sən AI HQ “Kernel”sən. 4 agentin töhfələrini birləşdirib yekun çıxar.
-
-QAYDALAR:
-- Qısa + konkret ol.
-- Format:
-  1) Final Plan (bəndlərlə)
-  2) KPI-lar (bəndlərlə)
-  3) Risklər (bəndlərlə)
-  4) Next Actions (icra taskları)
-
-ÇOX VACİB: BOŞ CAVAB QADAĞANDIR.
-`.trim();
+  // If mode is draft/trend/etc, use the usecase prompt to demand JSON.
+  const sysText = buildSynthesisSystem({ mode });
 
   const userText = `
-İSTİFADƏÇİ MESAJI:
+USER_REQUEST:
 ${message}
 
-AGENT NOTLARI:
-${notesText || "(agent notları boşdur)"}
+AGENT_NOTES:
+${notesText || "(empty)"}
 `.trim();
 
   const reqText = {
@@ -356,108 +355,79 @@ ${notesText || "(agent notları boşdur)"}
     ],
   };
 
-  const respText = await withTimeout(openai.responses.create(reqText), timeoutMs, "OpenAI timeout (synthesis-text)");
+  const respText = await withTimeout(openai.responses.create(reqText), timeoutMs, "OpenAI timeout (synthesis)");
+  let outText = extractText(respText);
 
-  let finalAnswer = extractText(respText);
-  if (!String(finalAnswer || "").trim()) {
-    logRawIfEmpty("synth-text", "kernel", respText, finalAnswer);
-    finalAnswer = visibleEmptyMarker("synth-text", "kernel", respText);
+  if (!String(outText || "").trim()) {
+    logRawIfEmpty("synth", "kernel", respText, outText);
+    outText = visibleEmptyMarker("synth", "kernel", respText);
   }
 
-  finalAnswer = fixMojibake(String(finalAnswer || "").trim());
-  if (!finalAnswer) finalAnswer = fallbackSynthesis(agentNotes);
+  outText = fixMojibake(String(outText || "").trim());
+  if (!outText) outText = fallbackSynthesis(agentNotes);
 
-  let proposal = null;
+  // Try parse JSON if mode expects JSON (draft/trend/publish/revise/meta_comment/proposal)
+  const expectsJson = ["proposal", "draft", "trend", "publish", "revise", "meta_comment"].includes(
+    String(mode || "").toLowerCase()
+  );
 
-  if (mode === "proposal") {
-    const sysJson = `
-You generate ONLY valid JSON. No markdown. No extra text.
-Output must be a single JSON object.
-
-Schema:
-{
-  "type": "plan",
-  "title": "string",
-  "payload": {
-    "summary": "string",
-    "steps": [{"day": 1, "title": "string", "tasks": ["..."]}],
-    "kpis": ["..."],
-    "ownerMap": {"orion": "...", "nova": "...", "atlas": "...", "echo": "..."}
+  if (!expectsJson) {
+    return { finalAnswer: outText, proposal: null };
   }
-}
 
-Rules:
-- steps must have days 1..7 (exactly 7 items)
-- tasks array must be 3-6 items per day
-- kpis must be 5-10 items
-- Keep strings short and executable
-`.trim();
+  let obj = extractJsonFromText(outText);
 
-    const userJson = `
-User request:
-${message}
-
-Use this synthesized plan as the only context:
-${finalAnswer}
-`.trim();
-
-    const reqJson = {
+  if (!obj) {
+    // repair pass
+    const repairSys = `You will be given text that should be JSON but may be invalid. Return ONLY corrected valid JSON. No extra text.`;
+    const repairReq = {
       model: cfg.OPENAI_MODEL || "gpt-5",
       text: { format: { type: "text" } },
-      max_output_tokens: clamp(Number(cfg.OPENAI_DEBATE_SYNTH_TOKENS || 1400), 700, 2000),
+      max_output_tokens: 1200,
       input: [
-        { role: "system", content: sysJson },
-        { role: "user", content: userJson },
+        { role: "system", content: repairSys },
+        { role: "user", content: String(outText || "") },
       ],
     };
 
-    const respJson = await withTimeout(openai.responses.create(reqJson), timeoutMs, "OpenAI timeout (synthesis-json)");
-
-    let jsonText = extractText(respJson);
-    if (!String(jsonText || "").trim()) {
-      logRawIfEmpty("synth-json", "kernel", respJson, jsonText);
-      jsonText = visibleEmptyMarker("synth-json", "kernel", respJson);
-    }
-
-    jsonText = fixMojibake(jsonText);
-
-    proposal = extractJsonFromText(jsonText);
-
-    if (!proposal) {
-      const repairSys = `
-You will be given text that should be JSON but may be invalid.
-Return ONLY corrected valid JSON object. No extra text.
-`.trim();
-
-      const repairReq = {
-        model: cfg.OPENAI_MODEL || "gpt-5",
-        text: { format: { type: "text" } },
-        max_output_tokens: 1000,
-        input: [
-          { role: "system", content: repairSys },
-          { role: "user", content: String(jsonText || "") },
-        ],
-      };
-
-      try {
-        const respFix = await withTimeout(openai.responses.create(repairReq), timeoutMs, "OpenAI timeout (json-repair)");
-        const fixed = fixMojibake(extractText(respFix));
-        proposal = extractJsonFromText(fixed);
-      } catch {}
-    }
-
-    if (!proposal || typeof proposal !== "object") {
-      proposal = buildFallbackProposalFromText(finalAnswer);
-    }
+    try {
+      const respFix = await withTimeout(openai.responses.create(repairReq), timeoutMs, "OpenAI timeout (json-repair)");
+      const fixed = fixMojibake(extractText(respFix));
+      obj = extractJsonFromText(fixed);
+    } catch {}
   }
 
-  // final cleanup (avoid mojibake in fields)
-  try {
-    if (proposal?.title) proposal.title = fixMojibake(proposal.title);
-    if (proposal?.payload?.summary) proposal.payload.summary = fixMojibake(proposal.payload.summary);
-  } catch {}
+  // For backward compatibility: we always return {finalAnswer, proposal}
+  // - if mode=proposal => proposal=obj
+  // - else => proposal={type: mode, title:..., payload: obj} OR if obj already has type/title/payload keep it.
+  if (mode === "proposal") {
+    if (!obj || typeof obj !== "object") obj = null;
+    return { finalAnswer: outText, proposal: obj };
+  }
 
-  return { finalAnswer, proposal };
+  if (obj && typeof obj === "object") {
+    if (obj.type && obj.payload) {
+      return { finalAnswer: outText, proposal: obj };
+    }
+    return {
+      finalAnswer: outText,
+      proposal: {
+        type: String(mode),
+        title: String(obj.title || obj.summary || obj.topic || "Draft").slice(0, 120),
+        payload: obj,
+      },
+    };
+  }
+
+  // absolute fallback
+  return {
+    finalAnswer: outText,
+    proposal: {
+      type: String(mode),
+      title: "Draft",
+      payload: { raw: outText },
+    },
+  };
 }
 
 export async function runDebate({ message, agents = DEFAULT_AGENTS, rounds = 2, mode = "answer" }) {
@@ -470,7 +440,9 @@ export async function runDebate({ message, agents = DEFAULT_AGENTS, rounds = 2, 
     };
   }
 
-  const agentIds = (Array.isArray(agents) ? agents : DEFAULT_AGENTS).map((x) => String(x || "").trim()).filter(Boolean);
+  const agentIds = (Array.isArray(agents) ? agents : DEFAULT_AGENTS)
+    .map((x) => String(x || "").trim())
+    .filter(Boolean);
 
   const rCount = clamp(Number(rounds || 2), 1, 3);
   const timeoutMs = Number(cfg.OPENAI_TIMEOUT_MS || 25_000);

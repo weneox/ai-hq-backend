@@ -1,6 +1,7 @@
-// src/kernel/agentKernel.js (FINAL v2.2 — UTF fix + clean outputs)
+// src/kernel/agentKernel.js (FINAL v2.3 — UTF fix + prompts folder support)
 import OpenAI from "openai";
 import { cfg } from "../config.js";
+import { getGlobalPolicy, getUsecasePrompt } from "../prompts/index.js";
 
 const AGENTS = {
   orion: {
@@ -149,7 +150,29 @@ function makeEmptyHelp(resp, model) {
   return `Cavab boş gəldi (model=${model}, status=${status}, id=${id}, outTok=${outTok}, reasoningTok=${reasonTok}). ${hint}`;
 }
 
-export async function kernelHandle({ message, agentHint } = {}) {
+function buildSystem({ agentId, usecase }) {
+  const globalPolicy = getGlobalPolicy();
+  const usecaseTxt = usecase ? getUsecasePrompt(usecase) : "";
+
+  // Agent base system + global rules + optional usecase rules
+  const parts = [
+    `AGENT_ID: ${agentId}`,
+    "",
+    "GLOBAL POLICY:",
+    globalPolicy || "(missing policy.global.txt)",
+    "",
+    "AGENT SYSTEM:",
+    AGENTS[agentId]?.system || "",
+  ];
+
+  if (usecaseTxt) {
+    parts.push("", `USECASE: ${usecase}`, usecaseTxt);
+  }
+
+  return parts.filter(Boolean).join("\n");
+}
+
+export async function kernelHandle({ message, agentHint, usecase } = {}) {
   const text = normalizeUserMessage(message);
   const agentId = String(agentHint || "orion").trim().toLowerCase() || "orion";
   const agent = AGENTS[agentId] ? agentId : "orion";
@@ -169,7 +192,7 @@ export async function kernelHandle({ message, agentHint } = {}) {
       text: { format: { type: "text" } },
       max_output_tokens: maxTok,
       input: [
-        { role: "system", content: AGENTS[agent].system },
+        { role: "system", content: buildSystem({ agentId: agent, usecase }) },
         { role: "user", content: text },
       ],
     });
@@ -187,7 +210,7 @@ export async function kernelHandle({ message, agentHint } = {}) {
   }
 }
 
-export async function debugOpenAI({ agent = "orion", message = "ping" } = {}) {
+export async function debugOpenAI({ agent = "orion", message = "ping", usecase } = {}) {
   const openai = ensureOpenAI();
   if (!openai) return { ok: false, status: null, agent, extractedText: "", raw: "OpenAI disabled" };
 
@@ -202,7 +225,7 @@ export async function debugOpenAI({ agent = "orion", message = "ping" } = {}) {
       text: { format: { type: "text" } },
       max_output_tokens: maxTok,
       input: [
-        { role: "system", content: AGENTS[a].system },
+        { role: "system", content: buildSystem({ agentId: a, usecase }) },
         { role: "user", content: normalizeUserMessage(message) },
       ],
     });

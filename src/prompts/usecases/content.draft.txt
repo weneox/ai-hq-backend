@@ -1,0 +1,57 @@
+TASK: Generate a DAILY SOCIAL CONTENT DRAFT for NEOX.
+
+Context:
+- This is a single-day draft (not multi-day plan).
+- It will be reviewed by CEO in AI HQ (Drafting stage).
+- Draft must be highly detailed: caption + hashtags + design/layout instructions.
+- Rotate format: image OR carousel OR short video/reel. Choose one per draft.
+
+OUTPUT FORMAT: Return STRICT JSON only.
+
+JSON SCHEMA:
+{
+  "type": "content_draft",
+  "tenantKey": "neox",
+  "language": "az|tr|ru|en",
+  "format": "image|carousel|reel",
+  "topic": "string",
+  "goal": "string (lead / awareness / trust / offer)",
+  "targetAudience": "string",
+  "hook": "string (first line)",
+  "caption": "string (final caption, ready to post)",
+  "cta": "string",
+  "hashtags": ["#..."],
+  "visualPlan": {
+    "style": "string (premium, futuristic, minimal, NEOX brand)",
+    "aspectRatio": "1:1|4:5|9:16",
+    "composition": "string (where logo/text/subject goes)",
+    "colorNotes": "string",
+    "textOnVisual": ["short phrases if any"],
+    "frames": [
+      {
+        "index": 1,
+        "frameType": "cover|slide|scene",
+        "headline": "string",
+        "subline": "string",
+        "layout": "string (exact placement guidance)",
+        "visualElements": ["string"],
+        "motion": "string (if reel)",
+        "durationSec": 0
+      }
+    ]
+  },
+  "assetBrief": {
+    "neededAssets": ["image|video|icons|mockups"],
+    "imagePrompt": "string (for image generation if needed)",
+    "brollIdeas": ["string (if reel)"]
+  },
+  "complianceNotes": ["string"],
+  "reviewQuestionsForCEO": ["string (max 3)"]
+}
+
+RULES:
+- MUST be detailed: provide real layout guidance, not generic.
+- Caption must be natural and native (no robotic text).
+- Hashtags: 8-18, relevant, mix AZ/EN tags if suitable.
+- If format=carousel: frames length 5-8. If reel: frames length 3-6 with motion/duration.
+- Do NOT include markdown. Return JSON only.
