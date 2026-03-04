@@ -1,9 +1,23 @@
-// src/kernel/debateEngine.js (FINAL v3.6 — prompts/usecases + UTF fix + safer JSON parse)
+// src/kernel/debateEngine.js (FINAL v3.7 — strict usecases + UTF fix + safer JSON + meta_comment plain text)
+//
+// Modes (recommended):
+// - "answer" (default): normal text answer
+// - "proposal": proposal JSON (your debate proposal schema)
+// - "draft": generates content draft JSON via prompts/usecases/content.draft.txt
+// - "revise": revises existing draft (previousDraft + feedback) via prompts/usecases/content.revise.txt
+// - "publish": prepares publish-ready pack JSON via prompts/usecases/content.publish.txt
+// - "trend": trend brief JSON via prompts/usecases/trend.research.txt
+// - "meta_comment": replies to IG comment (PLAIN TEXT) via prompts/usecases/meta.comment_reply.txt
+//
+// Notes:
+// - For "revise": pass message containing BOTH previousDraft JSON + feedback string (your API layer should format it).
+// - For "publish": pass message containing approved draft JSON (and assetUrls if you have them).
+
 import OpenAI from "openai";
 import { cfg } from "../config.js";
 import { getGlobalPolicy, getUsecasePrompt } from "../prompts/index.js";
 
-export const DEBATE_ENGINE_VERSION = "final-v3.6";
+export const DEBATE_ENGINE_VERSION = "final-v3.7";
 console.log(`[debateEngine] LOADED ${DEBATE_ENGINE_VERSION}`);
 
 const DEFAULT_AGENTS = ["orion", "nova", "atlas", "echo"];
@@ -253,6 +267,17 @@ async function askAgent({ openai, agentId, message, round, notesSoFar, timeoutMs
   return fixMojibake(text);
 }
 
+function stripLeadingJunkToJsonCandidate(t) {
+  const s0 = String(t || "").trim();
+  if (!s0) return "";
+  const fence = s0.match(/```json\s*([\s\S]*?)\s*```/i);
+  if (fence?.[1]) return String(fence[1] || "").trim();
+  const start = s0.indexOf("{");
+  const end = s0.lastIndexOf("}");
+  if (start >= 0 && end > start) return s0.slice(start, end + 1).trim();
+  return s0;
+}
+
 function extractJsonFromText(text) {
   const s0 = String(text || "").trim();
   if (!s0) return null;
@@ -262,21 +287,11 @@ function extractJsonFromText(text) {
     return JSON.parse(s0);
   } catch {}
 
-  // slice first {...} block
-  const start = s0.indexOf("{");
-  const end = s0.lastIndexOf("}");
-  if (start >= 0 && end > start) {
-    const slice = s0.slice(start, end + 1).trim();
+  // candidate slice
+  const cand = stripLeadingJunkToJsonCandidate(s0);
+  if (cand && cand !== s0) {
     try {
-      return JSON.parse(slice);
-    } catch {}
-  }
-
-  // code fence
-  const fence = s0.match(/```json\s*([\s\S]*?)\s*```/i);
-  if (fence?.[1]) {
-    try {
-      return JSON.parse(fence[1]);
+      return JSON.parse(cand);
     } catch {}
   }
 
@@ -294,12 +309,28 @@ function fallbackSynthesis(agentNotes = []) {
 }
 
 function pickUsecaseFromMode(mode) {
-  const m = String(mode || "").trim().toLowerCase();
+  const m0 = String(mode || "").trim().toLowerCase();
+
+  // aliases (so your API can send more explicit names)
+  const m =
+    m0 === "content_publish" || m0 === "publish_pack" || m0 === "content.publish"
+      ? "publish"
+      : m0 === "content_revise" || m0 === "content.revise"
+      ? "revise"
+      : m0 === "content_draft" || m0 === "content.draft"
+      ? "draft"
+      : m0 === "trend_research" || m0 === "trend.research"
+      ? "trend"
+      : m0 === "comment" || m0 === "meta_comment_reply" || m0 === "meta.comment_reply"
+      ? "meta_comment"
+      : m0;
+
   if (m === "draft") return "content.draft";
   if (m === "revise") return "content.revise";
   if (m === "publish") return "content.publish";
   if (m === "trend") return "trend.research";
   if (m === "meta_comment") return "meta.comment_reply";
+
   return null;
 }
 
@@ -311,7 +342,9 @@ function buildSynthesisSystem({ mode }) {
   const base = `
 You are AI HQ Kernel.
 Follow GLOBAL POLICY and USECASE instructions strictly.
-Return clean outputs. If USECASE requires JSON: output ONLY valid JSON.
+Return clean outputs.
+If USECASE requires STRICT JSON: output ONLY valid JSON (no markdown, no extra text).
+If USECASE requires plain text: output ONLY plain text.
 `.trim();
 
   return [
@@ -327,15 +360,57 @@ Return clean outputs. If USECASE requires JSON: output ONLY valid JSON.
     .join("\n");
 }
 
+function modeExpectsJson(mode) {
+  const m0 = String(mode || "").trim().toLowerCase();
+  // meta_comment is PLAIN TEXT by spec
+  if (m0 === "meta_comment") return false;
+  return ["proposal", "draft", "trend", "publish", "revise"].includes(m0);
+}
+
+function normalizeMode(mode) {
+  const m0 = String(mode || "").trim().toLowerCase();
+  if (m0 === "content_publish" || m0 === "publish_pack" || m0 === "content.publish") return "publish";
+  if (m0 === "content_revise" || m0 === "content.revise") return "revise";
+  if (m0 === "content_draft" || m0 === "content.draft") return "draft";
+  if (m0 === "trend_research" || m0 === "trend.research") return "trend";
+  if (m0 === "comment" || m0 === "meta_comment_reply" || m0 === "meta.comment_reply") return "meta_comment";
+  return m0;
+}
+
+async function strictJsonRepair({ openai, badText, timeoutMs }) {
+  const repairSys = `You will be given text that MUST be valid JSON but may be invalid.
+Return ONLY corrected valid JSON.
+Rules:
+- No markdown.
+- No extra text.
+- Keep the same structure/keys.
+- If the text contains multiple JSON objects, return the best single final object.`;
+
+  const repairReq = {
+    model: cfg.OPENAI_MODEL || "gpt-5",
+    text: { format: { type: "text" } },
+    max_output_tokens: 1200,
+    input: [
+      { role: "system", content: repairSys },
+      { role: "user", content: String(badText || "") },
+    ],
+  };
+
+  const respFix = await withTimeout(openai.responses.create(repairReq), timeoutMs, "OpenAI timeout (json-repair)");
+  const fixed = fixMojibake(extractText(respFix));
+  return extractJsonFromText(fixed);
+}
+
 async function synthesizeFinal({ openai, message, agentNotes, mode, timeoutMs }) {
+  const normMode = normalizeMode(mode);
+
   const notesText = (agentNotes || [])
     .map((n) => `### ${n.agentId}\n${String(n.text || "").trim()}`)
     .join("\n\n");
 
   const maxOut = Number(cfg.OPENAI_DEBATE_SYNTH_TOKENS || 1400);
 
-  // If mode is draft/trend/etc, use the usecase prompt to demand JSON.
-  const sysText = buildSynthesisSystem({ mode });
+  const sysText = buildSynthesisSystem({ mode: normMode });
 
   const userText = `
 USER_REQUEST:
@@ -366,11 +441,9 @@ ${notesText || "(empty)"}
   outText = fixMojibake(String(outText || "").trim());
   if (!outText) outText = fallbackSynthesis(agentNotes);
 
-  // Try parse JSON if mode expects JSON (draft/trend/publish/revise/meta_comment/proposal)
-  const expectsJson = ["proposal", "draft", "trend", "publish", "revise", "meta_comment"].includes(
-    String(mode || "").toLowerCase()
-  );
+  const expectsJson = modeExpectsJson(normMode);
 
+  // ✅ meta_comment: plain text only
   if (!expectsJson) {
     return { finalAnswer: outText, proposal: null };
   }
@@ -378,29 +451,15 @@ ${notesText || "(empty)"}
   let obj = extractJsonFromText(outText);
 
   if (!obj) {
-    // repair pass
-    const repairSys = `You will be given text that should be JSON but may be invalid. Return ONLY corrected valid JSON. No extra text.`;
-    const repairReq = {
-      model: cfg.OPENAI_MODEL || "gpt-5",
-      text: { format: { type: "text" } },
-      max_output_tokens: 1200,
-      input: [
-        { role: "system", content: repairSys },
-        { role: "user", content: String(outText || "") },
-      ],
-    };
-
     try {
-      const respFix = await withTimeout(openai.responses.create(repairReq), timeoutMs, "OpenAI timeout (json-repair)");
-      const fixed = fixMojibake(extractText(respFix));
-      obj = extractJsonFromText(fixed);
+      obj = await strictJsonRepair({ openai, badText: outText, timeoutMs });
     } catch {}
   }
 
-  // For backward compatibility: we always return {finalAnswer, proposal}
+  // For backward compatibility: always return {finalAnswer, proposal}
   // - if mode=proposal => proposal=obj
-  // - else => proposal={type: mode, title:..., payload: obj} OR if obj already has type/title/payload keep it.
-  if (mode === "proposal") {
+  // - else => proposal wrapper with payload=obj (unless already wrapper)
+  if (normMode === "proposal") {
     if (!obj || typeof obj !== "object") obj = null;
     return { finalAnswer: outText, proposal: obj };
   }
@@ -412,8 +471,8 @@ ${notesText || "(empty)"}
     return {
       finalAnswer: outText,
       proposal: {
-        type: String(mode),
-        title: String(obj.title || obj.summary || obj.topic || "Draft").slice(0, 120),
+        type: String(normMode),
+        title: String(obj.title || obj.summary || obj.topic || obj.name || "Draft").slice(0, 120),
         payload: obj,
       },
     };
@@ -423,7 +482,7 @@ ${notesText || "(empty)"}
   return {
     finalAnswer: outText,
     proposal: {
-      type: String(mode),
+      type: String(normMode),
       title: "Draft",
       payload: { raw: outText },
     },
@@ -465,7 +524,13 @@ export async function runDebate({ message, agents = DEFAULT_AGENTS, rounds = 2, 
     notesSoFar = agentNotes.map((n) => `[${n.agentId}] ${n.text}`).join("\n\n");
   }
 
-  const synth = await synthesizeFinal({ openai, message, agentNotes, mode, timeoutMs });
+  const synth = await synthesizeFinal({
+    openai,
+    message,
+    agentNotes,
+    mode: normalizeMode(mode),
+    timeoutMs,
+  });
 
   return {
     finalAnswer: fixMojibake(synth.finalAnswer),

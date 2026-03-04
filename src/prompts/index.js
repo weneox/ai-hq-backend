@@ -1,5 +1,3 @@
-// src/prompts/index.js (FINAL)
-
 import fs from "fs";
 import path from "path";
 
@@ -13,29 +11,26 @@ function readRel(relPath) {
     return cache.get(full);
   }
 
-  try {
-    const txt = fs.readFileSync(full, "utf8");
-    const cleaned = String(txt || "").trim();
-    cache.set(full, cleaned);
-    return cleaned;
-  } catch (err) {
-    console.error("[prompts] failed to load:", full);
+  if (!fs.existsSync(full)) {
+    console.error("[prompts] missing file:", full);
     return "";
   }
+
+  const txt = fs.readFileSync(full, "utf8");
+  cache.set(full, txt);
+
+  return txt;
 }
 
 export function getGlobalPolicy() {
-  return readRel("policy.global.txt");
+  return readRel("policy.global.txt").trim();
 }
 
-// usecase: "content.draft" => usecases/content.draft.txt
+// usecase: "content.draft" => "usecases/content.draft.txt"
 export function getUsecasePrompt(usecase) {
   const uc = String(usecase || "").trim();
 
-  if (!uc) {
-    console.warn("[prompts] empty usecase requested");
-    return "";
-  }
+  if (!uc) return "";
 
-  return readRel(`usecases/${uc}.txt`);
+  return readRel(`usecases/${uc}.txt`).trim();
 }

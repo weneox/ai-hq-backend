@@ -1,15 +1,35 @@
 TASK: Create a trend/competitor insight brief for NEOX social content.
 
-OUTPUT: STRICT JSON only:
+Return STRICT JSON only.
+
 {
   "type": "trend_brief",
   "language": "az|tr|ru|en",
   "summary": "string",
-  "trends": [{"name":"string","whyItMatters":"string","contentAngle":"string"}],
-  "competitorAngles": [{"angle":"string","whatToCopy":"string","whatToAvoid":"string"}],
-  "draftIdeas": [{"format":"image|carousel|reel","topic":"string","hook":"string"}]
+  "trends": [
+    {
+      "name": "string",
+      "whyItMatters": "string",
+      "contentAngle": "string"
+    }
+  ],
+  "competitorAngles": [
+    {
+      "angle": "string",
+      "whatToCopy": "string",
+      "whatToAvoid": "string"
+    }
+  ],
+  "draftIdeas": [
+    {
+      "format": "image|carousel|reel",
+      "topic": "string",
+      "hook": "string"
+    }
+  ]
 }
 
-RULES:
-- Practical, actionable.
-- No fake sources.
+Rules:
+- practical insights
+- no fake sources
+- actionable ideas

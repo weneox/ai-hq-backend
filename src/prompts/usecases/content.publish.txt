@@ -1,21 +1,34 @@
 TASK: Prepare the FINAL publish-ready pack from an approved draft.
 
-OUTPUT: STRICT JSON only:
+OUTPUT: STRICT JSON only.
+
 {
   "type": "content_publish_pack",
   "language": "az|tr|ru|en",
   "caption": "string",
   "hashtags": ["#..."],
-  "assetUrls": ["string"], 
+  "assetUrls": ["string"],
   "platform": "instagram",
   "postType": "feed|reel|carousel",
   "meta": {
-    "firstComment": "string (optional)",
+    "firstComment": "string",
     "altText": "string",
-    "utmSuggestion": "string (optional)"
+    "utmSuggestion": "string"
   }
 }
 
-RULES:
-- Caption must be final, no placeholders.
-- If assetUrls missing, still output pack with empty array and say nothing else.
+Rules:
+
+Caption:
+- must be final
+- no placeholders
+
+Hashtags:
+- 8 to 18
+- relevant to topic
+
+If assetUrls are missing:
+- return empty array
+- do not add explanations.
+
+Return JSON only.

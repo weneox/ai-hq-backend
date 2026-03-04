@@ -1,11 +1,18 @@
 TASK: Revise an existing content draft based on CEO feedback.
 
-INPUTS you will receive:
+Inputs:
 - previousDraft (JSON)
 - feedback (string)
 
-OUTPUT: Return STRICT JSON only.
-- Keep the same schema as previousDraft.
-- Apply feedback precisely.
-- Improve clarity, hook, CTA, and visual plan.
-- If CEO asks for changes in caption, update caption and matching on-visual text.
+Goal:
+Improve the draft while respecting CEO feedback.
+
+Rules:
+- Keep the SAME JSON schema as previousDraft.
+- Modify only necessary sections.
+- Improve hook, caption clarity, CTA, and visual plan.
+- If caption changes, update matching visual text.
+
+Important:
+Return STRICT JSON only.
+No explanations.

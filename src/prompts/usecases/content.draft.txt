@@ -1,122 +1,88 @@
 TASK: Generate a DAILY SOCIAL CONTENT DRAFT for NEOX.
 
-This draft will appear in AI HQ "Drafting" stage and will be reviewed by the CEO.
+Context:
+- This is a single-day content idea.
+- The draft will be reviewed by the CEO in AI HQ.
+- Output must be detailed and production-ready.
 
-IMPORTANT:
-- This is ONE single-day draft (not a multi-day plan).
-- Content must be high quality and specific.
-- Avoid generic marketing language.
+Brand:
+NEOX is an AI automation and digital technology company.
+
+Content must:
+- look premium
+- feel modern
+- highlight AI, automation, innovation
+
+Choose ONE format:
+- image
+- carousel
+- reel
 
 Return STRICT JSON only.
 
-------------------------------------------------
-
-JSON SCHEMA (REQUIRED):
+JSON SCHEMA:
 
 {
-  "type": "draft",
+  "type": "content_draft",
   "tenantKey": "neox",
-
-  "language": "az",
-
-  "title": "short descriptive title (max 80 chars)",
-
-  "format": "image | carousel | reel",
-
-  "topic": "main idea of the post",
-
-  "goal": "lead | awareness | trust | offer",
-
-  "targetAudience": "who this post is for",
-
-  "hook": "first line that grabs attention",
-
-  "caption": "final caption ready to publish",
-
-  "cta": "call to action",
-
+  "language": "az|tr|ru|en",
+  "format": "image|carousel|reel",
+  "topic": "string",
+  "goal": "lead|awareness|trust|offer",
+  "targetAudience": "string",
+  "hook": "string",
+  "caption": "string",
+  "cta": "string",
   "hashtags": ["#..."],
-
   "visualPlan": {
-    "style": "premium futuristic NEOX brand",
-
-    "aspectRatio": "1:1 | 4:5 | 9:16",
-
-    "composition": "exact layout description",
-
-    "colorNotes": "colors based on NEOX brand",
-
-    "textOnVisual": ["short phrases shown on design"],
-
+    "style": "string",
+    "aspectRatio": "1:1|4:5|9:16",
+    "composition": "string",
+    "colorNotes": "string",
+    "textOnVisual": ["string"],
     "frames": [
       {
         "index": 1,
-
-        "frameType": "cover | slide | scene",
-
-        "headline": "short headline",
-
-        "subline": "secondary text",
-
-        "layout": "exact placement instructions",
-
-        "visualElements": ["objects shown in frame"],
-
-        "motion": "camera or animation notes",
-
+        "frameType": "cover|slide|scene",
+        "headline": "string",
+        "subline": "string",
+        "layout": "string",
+        "visualElements": ["string"],
+        "motion": "string",
         "durationSec": 0
       }
     ]
   },
-
   "assetBrief": {
-    "neededAssets": ["image | video | icons | mockups"],
-
-    "imagePrompt": "prompt for AI image generation",
-
-    "brollIdeas": ["extra visual ideas"]
+    "neededAssets": ["image|video|icons|mockups"],
+    "imagePrompt": "string",
+    "brollIdeas": ["string"]
   },
-
-  "complianceNotes": ["notes about tone or restrictions"],
-
-  "reviewQuestionsForCEO": [
-    "short review question"
-  ]
+  "complianceNotes": ["string"],
+  "reviewQuestionsForCEO": ["string"]
 }
 
-------------------------------------------------
-
-RULES:
-
-Format rotation:
-- Choose ONE format only:
-  image OR carousel OR reel
-
-Carousel rules:
-- frames length must be 5-8
-
-Reel rules:
-- frames length must be 3-6
-- durationSec must be > 0
-- include motion description
-
-Image rules:
-- frames length must be 1
-
-Hashtags:
-- 8-18 hashtags
-- mix Azerbaijani and English tags if appropriate
+Rules:
 
 Caption:
-- natural language
+- must sound native and natural
 - not robotic
-- suitable for Instagram
+- include hook + value + CTA
 
-Visual instructions:
-- must be specific
-- describe layout and composition clearly
+Hashtags:
+- 8 to 18
+- mix Azerbaijani and English
 
-Output:
-- JSON only
-- no markdown
-- no explanations
+Carousel rules:
+- 5 to 8 slides
+
+Reel rules:
+- 3 to 6 scenes
+- include motion and duration
+
+Visual plan must be precise:
+- where logo appears
+- where text appears
+- layout guidance
+
+Return JSON only.
