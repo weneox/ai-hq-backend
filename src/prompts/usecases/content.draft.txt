@@ -1,57 +1,122 @@
 TASK: Generate a DAILY SOCIAL CONTENT DRAFT for NEOX.
 
-Context:
-- This is a single-day draft (not multi-day plan).
-- It will be reviewed by CEO in AI HQ (Drafting stage).
-- Draft must be highly detailed: caption + hashtags + design/layout instructions.
-- Rotate format: image OR carousel OR short video/reel. Choose one per draft.
+This draft will appear in AI HQ "Drafting" stage and will be reviewed by the CEO.
 
-OUTPUT FORMAT: Return STRICT JSON only.
+IMPORTANT:
+- This is ONE single-day draft (not a multi-day plan).
+- Content must be high quality and specific.
+- Avoid generic marketing language.
 
-JSON SCHEMA:
+Return STRICT JSON only.
+
+------------------------------------------------
+
+JSON SCHEMA (REQUIRED):
+
 {
-  "type": "content_draft",
+  "type": "draft",
   "tenantKey": "neox",
-  "language": "az|tr|ru|en",
-  "format": "image|carousel|reel",
-  "topic": "string",
-  "goal": "string (lead / awareness / trust / offer)",
-  "targetAudience": "string",
-  "hook": "string (first line)",
-  "caption": "string (final caption, ready to post)",
-  "cta": "string",
+
+  "language": "az",
+
+  "title": "short descriptive title (max 80 chars)",
+
+  "format": "image | carousel | reel",
+
+  "topic": "main idea of the post",
+
+  "goal": "lead | awareness | trust | offer",
+
+  "targetAudience": "who this post is for",
+
+  "hook": "first line that grabs attention",
+
+  "caption": "final caption ready to publish",
+
+  "cta": "call to action",
+
   "hashtags": ["#..."],
+
   "visualPlan": {
-    "style": "string (premium, futuristic, minimal, NEOX brand)",
-    "aspectRatio": "1:1|4:5|9:16",
-    "composition": "string (where logo/text/subject goes)",
-    "colorNotes": "string",
-    "textOnVisual": ["short phrases if any"],
+    "style": "premium futuristic NEOX brand",
+
+    "aspectRatio": "1:1 | 4:5 | 9:16",
+
+    "composition": "exact layout description",
+
+    "colorNotes": "colors based on NEOX brand",
+
+    "textOnVisual": ["short phrases shown on design"],
+
     "frames": [
       {
         "index": 1,
-        "frameType": "cover|slide|scene",
-        "headline": "string",
-        "subline": "string",
-        "layout": "string (exact placement guidance)",
-        "visualElements": ["string"],
-        "motion": "string (if reel)",
+
+        "frameType": "cover | slide | scene",
+
+        "headline": "short headline",
+
+        "subline": "secondary text",
+
+        "layout": "exact placement instructions",
+
+        "visualElements": ["objects shown in frame"],
+
+        "motion": "camera or animation notes",
+
         "durationSec": 0
       }
     ]
   },
+
   "assetBrief": {
-    "neededAssets": ["image|video|icons|mockups"],
-    "imagePrompt": "string (for image generation if needed)",
-    "brollIdeas": ["string (if reel)"]
+    "neededAssets": ["image | video | icons | mockups"],
+
+    "imagePrompt": "prompt for AI image generation",
+
+    "brollIdeas": ["extra visual ideas"]
   },
-  "complianceNotes": ["string"],
-  "reviewQuestionsForCEO": ["string (max 3)"]
+
+  "complianceNotes": ["notes about tone or restrictions"],
+
+  "reviewQuestionsForCEO": [
+    "short review question"
+  ]
 }
 
+------------------------------------------------
+
 RULES:
-- MUST be detailed: provide real layout guidance, not generic.
-- Caption must be natural and native (no robotic text).
-- Hashtags: 8-18, relevant, mix AZ/EN tags if suitable.
-- If format=carousel: frames length 5-8. If reel: frames length 3-6 with motion/duration.
-- Do NOT include markdown. Return JSON only.
+
+Format rotation:
+- Choose ONE format only:
+  image OR carousel OR reel
+
+Carousel rules:
+- frames length must be 5-8
+
+Reel rules:
+- frames length must be 3-6
+- durationSec must be > 0
+- include motion description
+
+Image rules:
+- frames length must be 1
+
+Hashtags:
+- 8-18 hashtags
+- mix Azerbaijani and English tags if appropriate
+
+Caption:
+- natural language
+- not robotic
+- suitable for Instagram
+
+Visual instructions:
+- must be specific
+- describe layout and composition clearly
+
+Output:
+- JSON only
+- no markdown
+- no explanations

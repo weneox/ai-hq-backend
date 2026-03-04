@@ -1,4 +1,4 @@
-// src/routes/api.js (FINAL v2.11.0 — Manual + Loop + Publish + Auto/Manual Switch)
+// src/routes/api.js (FINAL v2.11.1 — Manual + Loop + Publish + Auto/Manual Switch + PROMPTS WIRED)
 //
 // ✅ Adds AUTO/MANUAL switch (tenant mode):
 //   GET  /api/mode?tenantId=neox
@@ -12,6 +12,10 @@
 //
 // ✅ Adds render slides endpoint:
 //   POST /api/render/slides  { slides:[...], tenantId? }  => { renderId, assets:[...] }
+//
+// ✅ PROMPTS WIRED:
+//   - Every n8n event now includes:
+//     prompts: { globalPolicy, usecaseKey, usecasePrompt }
 
 import express from "express";
 import crypto from "crypto";
@@ -26,6 +30,9 @@ import { sendTelegram } from "../utils/telegram.js";
 import { pushSendOne } from "../utils/push.js";
 
 import { renderSlidesToPng } from "../render/renderSlides.js";
+
+// ✅ PROMPTS
+import { getGlobalPolicy, getUsecasePrompt } from "../prompts/index.js";
 
 /** ===========================
  * UTF-8 / Mojibake fix helpers
@@ -203,6 +210,48 @@ async function maybeTelegram(text) {
 // optional hook (kept so routes using it never crash)
 async function maybeCleanupExpired() {
   return;
+}
+
+/** ===========================
+ * PROMPT BUNDLE for n8n
+ * =========================== */
+
+function usecaseForEvent(event) {
+  const e = String(event || "").trim();
+  // IMPORTANT: usecases filenames are EXACTLY:
+  // content.draft.txt, content.revise.txt, content.publish.txt, meta.comment_reply.txt, trend.research.txt
+  if (e === "proposal.approved") return "content.draft";
+  if (e === "content.revise") return "content.revise";
+  if (e === "content.publish") return "content.publish";
+  if (e === "meta.comment_reply") return "meta.comment_reply";
+  if (e === "trend.research") return "trend.research";
+
+  // optional events we also send:
+  if (e === "content.approved") return "content.publish"; // (publish prep prompt is fine)
+  return ""; // no usecase
+}
+
+function buildPromptBundle(event) {
+  let globalPolicy = "";
+  let usecaseKey = "";
+  let usecasePrompt = "";
+
+  try {
+    globalPolicy = fixText(getGlobalPolicy() || "");
+  } catch {
+    globalPolicy = "";
+  }
+
+  usecaseKey = usecaseForEvent(event);
+  if (usecaseKey) {
+    try {
+      usecasePrompt = fixText(getUsecasePrompt(usecaseKey) || "");
+    } catch {
+      usecasePrompt = "";
+    }
+  }
+
+  return deepFix({ globalPolicy, usecaseKey, usecasePrompt });
 }
 
 /** ===========================
@@ -558,7 +607,7 @@ async function pushBroadcastToCeo({ db, title, body, data }) {
 }
 
 /** ===========================
- * n8n notify helper
+ * n8n notify helper (PROMPTS INCLUDED)
  * =========================== */
 function notifyN8n(event, proposal, extra = {}) {
   const url = String(cfg.N8N_WEBHOOK_URL || "").trim();
@@ -566,6 +615,9 @@ function notifyN8n(event, proposal, extra = {}) {
 
   const callbackRel = extra?.callback?.url || "/api/executions/callback";
   const callbackAbs = absoluteCallbackUrl(callbackRel);
+
+  // ✅ include prompts every time
+  const prompts = buildPromptBundle(event);
 
   const payload = deepFix({
     event,
@@ -579,6 +631,10 @@ function notifyN8n(event, proposal, extra = {}) {
       ...(extra.callback || { url: callbackRel, tokenHeader: "x-webhook-token" }),
       url: callbackAbs || callbackRel,
     },
+
+    // ✅ prompts packed for n8n Message-a-model
+    prompts,
+
     title: proposal?.title || extra.title || null,
     summary: extra.summary || null,
     tasks: extra.tasks || null,
