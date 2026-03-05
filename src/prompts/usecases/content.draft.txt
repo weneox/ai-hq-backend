@@ -5,18 +5,47 @@ Context:
 - The draft will be reviewed by the CEO in AI HQ.
 - Output must be detailed and production-ready.
 
-Brand:
-NEOX is an AI automation and digital technology company.
+DATE: {{today}}
+TENANT: {{tenantId}}
 
-Content must:
-- look premium
-- feel modern
-- highlight AI, automation, innovation
+FORMAT RULE (STRICT):
+The format is PRESELECTED by the system.
 
-Choose ONE format:
+FORMAT = {{format}}
+
+You MUST use this format.
+Do NOT choose another format.
+
+Allowed formats:
 - image
 - carousel
 - reel
+
+If FORMAT = image → produce single-frame content.
+If FORMAT = carousel → produce 5–8 slides.
+If FORMAT = reel → produce 3–6 scenes.
+
+Brand:
+NEOX is an AI automation and digital technology company.
+
+Brand tone:
+- premium
+- modern
+- intelligent
+- innovation-focused
+- confident but not arrogant
+
+Content must:
+- feel futuristic
+- highlight AI, automation, business efficiency
+- look like a high-end tech brand
+
+Audience:
+- startup founders
+- SMEs
+- tech founders
+- entrepreneurs
+- business owners interested in automation
 
 Return STRICT JSON only.
 
@@ -24,9 +53,9 @@ JSON SCHEMA:
 
 {
   "type": "content_draft",
-  "tenantKey": "neox",
-  "language": "az|tr|ru|en",
-  "format": "image|carousel|reel",
+  "tenantKey": "{{tenantId}}",
+  "language": "az",
+  "format": "{{format}}",
   "topic": "string",
   "goal": "lead|awareness|trust|offer",
   "targetAudience": "string",
@@ -65,24 +94,42 @@ JSON SCHEMA:
 Rules:
 
 Caption:
-- must sound native and natural
-- not robotic
-- include hook + value + CTA
+- must sound natural
+- must not sound robotic
+- structure: hook → value → CTA
+- max 1200 characters
 
 Hashtags:
-- 8 to 18
+- between 8 and 18
 - mix Azerbaijani and English
+- include #AI #Automation #Neox
 
 Carousel rules:
 - 5 to 8 slides
+- first slide must be a strong hook
+- last slide must contain CTA
 
 Reel rules:
 - 3 to 6 scenes
-- include motion and duration
+- include motion
+- include approximate duration
 
-Visual plan must be precise:
+Image rules:
+- single strong visual
+- bold headline
+- minimal text
+
+Visual plan must clearly specify:
 - where logo appears
-- where text appears
+- where headline appears
 - layout guidance
+- visual hierarchy
+
+Asset brief must be practical:
+- usable for designers
+- usable for AI image tools
 
 Return JSON only.
+No explanation.
+No markdown.
+No text outside JSON.
