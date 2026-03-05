@@ -1,3 +1,15 @@
+// src/routes/api/content.js (FINAL — Draft review loop + publish bridge)
+//
+// Endpoints:
+// - GET  /api/content?proposalId=uuid
+// - POST /api/content/:id/feedback { feedbackText, tenantId? }   -> draft.regenerating + job + n8n content.revise
+// - POST /api/content/:id/approve  { tenantId? }                -> draft.approved + proposal=approved
+// - POST /api/content/:id/publish  { tenantId? }                -> publish.requested + job + n8n content.publish
+//
+// Notes:
+// - "Reject" stays in proposals route (next file).
+// - This file ensures n8n gets consistent payloads + UI always has content_items row.
+
 import express from "express";
 import crypto from "crypto";
 import { cfg } from "../../config.js";
@@ -16,9 +28,8 @@ import {
 import {
   dbGetLatestContentByProposal,
   dbUpdateContentItem,
-  dbGetLatestDraftLikeByProposal,
-  dbGetLatestApprovedDraftByProposal,
 } from "../../db/helpers/content.js";
+
 import { dbGetProposalById, dbSetProposalStatus } from "../../db/helpers/proposals.js";
 import { dbCreateJob } from "../../db/helpers/jobs.js";
 import { dbCreateNotification } from "../../db/helpers/notifications.js";
@@ -26,20 +37,26 @@ import { dbAudit } from "../../db/helpers/audit.js";
 
 import { pushBroadcastToCeo } from "../../services/pushBroadcast.js";
 import { notifyN8n } from "../../services/n8nNotify.js";
-import { getTenantMode } from "./mode.js";
 
 function normalizeContentPack(x) {
   if (!x) return null;
   if (typeof x === "string") {
     try {
       const o = JSON.parse(x);
-      return typeof o === "object" ? deepFix(o) : null;
+      return typeof o === "object" && o ? deepFix(o) : null;
     } catch {
       return null;
     }
   }
   if (typeof x === "object") return deepFix(x);
   return null;
+}
+
+function pickTenantId(req) {
+  return (
+    fixText(String(req.body?.tenantId || req.query?.tenantId || cfg.DEFAULT_TENANT_KEY || "default").trim()) ||
+    "default"
+  );
 }
 
 export function contentRoutes({ db, wsHub }) {
@@ -56,17 +73,23 @@ export function contentRoutes({ db, wsHub }) {
         const row = memGetLatestContentByProposal(proposalId);
         return okJson(res, { ok: true, proposalId, content: row, dbDisabled: true });
       }
+
       const row = await dbGetLatestContentByProposal(db, proposalId);
       return okJson(res, { ok: true, proposalId, content: row });
     } catch (e) {
-      return okJson(res, { ok: false, error: "Error", details: { message: String(e?.message || e) } });
+      return okJson(res, {
+        ok: false,
+        error: "Error",
+        details: { message: String(e?.message || e) },
+      });
     }
   });
 
-  // POST /api/content/:id/feedback  { feedbackText }
-  // sets content.status = draft.regenerating and notifies n8n "content.revise"
+  // POST /api/content/:id/feedback  { feedbackText, tenantId? }
+  // sets content.status=draft.regenerating and notifies n8n "content.revise"
   r.post("/content/:id/feedback", async (req, res) => {
     const id = String(req.params.id || "").trim();
+    const tenantId = pickTenantId(req);
     const feedbackText = fixText(String(req.body?.feedbackText || req.body?.feedback || "").trim());
 
     if (!id) return okJson(res, { ok: false, error: "contentId required" });
@@ -90,6 +113,7 @@ export function contentRoutes({ db, wsHub }) {
 
         memAudit("ceo", "content.feedback", "content", id, { proposalId: row.proposal_id });
 
+        // (Optional) if you want mem-mode to also hit n8n, you can enable it later.
         return okJson(res, { ok: true, content: row, dbDisabled: true });
       }
 
@@ -114,7 +138,7 @@ export function contentRoutes({ db, wsHub }) {
         await dbUpdateContentItem(db, updated.id, { job_id: job?.id || updated.job_id });
 
         notifyN8n("content.revise", proposal, {
-          tenantId: cfg.DEFAULT_TENANT_KEY || "default",
+          tenantId,
           proposalId: String(proposal.id),
           threadId: String(proposal.thread_id),
           jobId: job?.id || null,
@@ -153,7 +177,7 @@ export function contentRoutes({ db, wsHub }) {
   });
 
   // POST /api/content/:id/approve
-  // sets content.status=draft.approved and proposal.status=approved (manual finalization)
+  // sets content.status=draft.approved and proposal.status=approved
   r.post("/content/:id/approve", async (req, res) => {
     const id = String(req.params.id || "").trim();
     if (!id) return okJson(res, { ok: false, error: "contentId required" });
@@ -222,7 +246,7 @@ export function contentRoutes({ db, wsHub }) {
   // requires content.status=draft.approved, creates job, notifies n8n "content.publish"
   r.post("/content/:id/publish", async (req, res) => {
     const id = String(req.params.id || "").trim();
-    const tenantId = fixText(String(req.body?.tenantId || cfg.DEFAULT_TENANT_KEY || "default").trim()) || "default";
+    const tenantId = pickTenantId(req);
 
     if (!id) return okJson(res, { ok: false, error: "contentId required" });
 
@@ -230,24 +254,46 @@ export function contentRoutes({ db, wsHub }) {
       if (!isDbReady(db)) {
         const row = mem.contentItems.get(id) || null;
         if (!row) return okJson(res, { ok: false, error: "content not found", dbDisabled: true });
+
         if (String(row.status) !== "draft.approved") {
-          return okJson(res, { ok: false, error: "content must be draft.approved before publish", status: row.status, dbDisabled: true });
+          return okJson(res, {
+            ok: false,
+            error: "content must be draft.approved before publish",
+            status: row.status,
+            dbDisabled: true,
+          });
         }
 
         // create job (mem)
         const jobId = crypto.randomUUID();
+        const contentPack = normalizeContentPack(row.content_pack);
+
         mem.jobs.set(jobId, {
           id: jobId,
           proposal_id: row.proposal_id,
           type: "publish",
           status: "queued",
-          input: { contentId: id, contentPack: row.content_pack },
+          input: { contentId: id, contentPack },
           output: {},
           error: null,
           created_at: nowIso(),
           started_at: null,
           finished_at: null,
         });
+
+        // ✅ ALSO notify n8n in mem-mode (so local tests can publish too)
+        const p = mem.proposals.get(row.proposal_id) || null;
+        if (p) {
+          notifyN8n("content.publish", p, {
+            tenantId,
+            proposalId: String(p.id),
+            threadId: String(p.thread_id || p.threadId || ""),
+            jobId,
+            contentId: String(id),
+            contentPack,
+            callback: { url: "/api/executions/callback", tokenHeader: "x-webhook-token" },
+          });
+        }
 
         const notif = memCreateNotification({
           recipient: "ceo",
@@ -267,8 +313,10 @@ export function contentRoutes({ db, wsHub }) {
 
       if (!isUuid(id)) return okJson(res, { ok: false, error: "contentId must be uuid" });
 
-      const row = await dbUpdateContentItem(db, id, {}); // fetch by updating noop
+      // fetch row (noop update)
+      const row = await dbUpdateContentItem(db, id, {});
       if (!row) return okJson(res, { ok: false, error: "content not found" });
+
       if (String(row.status) !== "draft.approved") {
         return okJson(res, { ok: false, error: "content must be draft.approved before publish", status: row.status });
       }
@@ -276,11 +324,13 @@ export function contentRoutes({ db, wsHub }) {
       const proposal = await dbGetProposalById(db, String(row.proposal_id));
       if (!proposal) return okJson(res, { ok: false, error: "proposal not found for content" });
 
+      const contentPack = normalizeContentPack(row.content_pack);
+
       const job = await dbCreateJob(db, {
         proposalId: proposal.id,
         type: "publish",
         status: "queued",
-        input: { contentId: row.id, contentPack: row.content_pack },
+        input: { contentId: row.id, contentPack },
       });
 
       await dbUpdateContentItem(db, row.id, { status: "publish.requested", job_id: job?.id || row.job_id });
@@ -291,7 +341,7 @@ export function contentRoutes({ db, wsHub }) {
         threadId: String(proposal.thread_id),
         jobId: job?.id || null,
         contentId: String(row.id),
-        contentPack: row.content_pack,
+        contentPack,
         callback: { url: "/api/executions/callback", tokenHeader: "x-webhook-token" },
       });
 
