@@ -1,5 +1,6 @@
-// src/config.js (FINAL v2.5)
+// src/config.js (FINAL v2.6)
 // - Adds DEFAULT_MODE (manual|auto) for tenant mode fallback
+// - Adds N8N_WEBHOOK_BASE + retries/backoff knobs
 
 function s(v, d = "") {
   return String(v ?? d).trim();
@@ -45,9 +46,16 @@ export const cfg = {
   OPENAI_DEBATE_SYNTH_TOKENS: n(process.env.OPENAI_DEBATE_SYNTH_TOKENS, 1400),
 
   // HQ -> n8n
+  // ✅ If you set this: "https://neoxcompany.app.n8n.cloud/webhook"
+  // we will route per-event to /aihq-approved, /aihq-publish, etc.
+  N8N_WEBHOOK_BASE: s(process.env.N8N_WEBHOOK_BASE, ""), // ✅ NEW
+  // ✅ Single URL fallback (works even if BASE not set)
   N8N_WEBHOOK_URL: s(process.env.N8N_WEBHOOK_URL, ""),
   N8N_WEBHOOK_TOKEN: s(process.env.N8N_WEBHOOK_TOKEN, ""),
   N8N_TIMEOUT_MS: n(process.env.N8N_TIMEOUT_MS, 10_000),
+  N8N_RETRIES: n(process.env.N8N_RETRIES, 2), // ✅ NEW
+  N8N_BACKOFF_MS: n(process.env.N8N_BACKOFF_MS, 500), // ✅ NEW
+
   // n8n -> HQ callback
   N8N_CALLBACK_TOKEN: s(process.env.N8N_CALLBACK_TOKEN, ""),
 
