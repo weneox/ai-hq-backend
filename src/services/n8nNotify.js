@@ -1,7 +1,4 @@
-// src/services/n8nNotify.js (FINAL v2.2 — Correct event routing)
-// ✅ FIX: content.assets.generate was NOT mapped => was going to wrong webhook
-// ✅ Works with either N8N_WEBHOOK_BASE or single N8N_WEBHOOK_URL
-// ✅ Uses cfg.N8N_RETRIES / cfg.N8N_BACKOFF_MS from config
+// src/services/n8nNotify.js (FINAL — FIXED routing for draft approve -> asset generate workflow)
 
 import { cfg } from "../config.js";
 import { deepFix } from "../utils/textFix.js";
@@ -9,11 +6,8 @@ import { absoluteCallbackUrl } from "../utils/url.js";
 import { buildPromptBundle } from "./promptBundle.js";
 import { postToN8n } from "../utils/n8n.js";
 
-function joinBase(base, path) {
-  const b = String(base || "").trim().replace(/\/+$/, "");
-  const p = String(path || "").trim().replace(/^\/+/, "");
-  if (!b || !p) return "";
-  return `${b}/${p}`;
+function cleanBase(u) {
+  return String(u || "").trim().replace(/\/+$/, "");
 }
 
 function pickWebhookUrl(event, extra = {}) {
@@ -21,42 +15,34 @@ function pickWebhookUrl(event, extra = {}) {
   const override = String(extra.webhookUrl || "").trim();
   if (override) return override;
 
-  // 2) base routing (recommended)
+  // 2) event-based routing via base
   // Set in Railway:
   // N8N_WEBHOOK_BASE=https://neoxcompany.app.n8n.cloud/webhook
-  const base = String(cfg.N8N_WEBHOOK_BASE || "").trim();
+  const base = cleanBase(cfg.N8N_WEBHOOK_BASE);
   if (base) {
-    // ✅ IMPORTANT:
-    // Your provided production webhook is: /webhook/aihq-approved
-    // We'll route ALL approval / asset-generation events there unless you create separate endpoints.
+    // ✅ YOUR REAL WORKFLOWS
+    // You showed: /webhook/aihq-approved
+    if (event === "proposal.approved") return `${base}/aihq-approved`;
+    if (event === "proposal.rejected") return `${base}/aihq-approved`;
 
-    // Approve pipeline (draft generate)
-    if (event === "proposal.approved") return joinBase(base, "aihq-approved");
-    if (event === "proposal.rejected") return joinBase(base, "aihq-approved");
+    // ✅ IMPORTANT: Draft page Approve triggers this event:
+    if (event === "content.assets.generate") return `${base}/aihq-approved`;
 
-    // Draft revise loop
-    if (event === "content.revise") return joinBase(base, "aihq-approved");
+    // optional routes if you have separate webhooks later
+    if (event === "content.publish") return `${base}/aihq-publish`;
+    if (event === "content.revise") return `${base}/aihq-content-pack`;
 
-    // ✅ THE FIX: Asset generation trigger MUST go to the same flow you showed
-    if (event === "content.assets.generate") return joinBase(base, "aihq-approved");
-
-    // Publish flow (if you have separate webhook later)
-    if (event === "content.publish") return joinBase(base, "aihq-publish");
-
-    // default
-    return joinBase(base, "aihq-approved");
+    // fallback
+    return `${base}/aihq-approved`;
   }
 
-  // 3) single URL fallback (works if you set N8N_WEBHOOK_URL directly)
+  // 3) legacy single URL fallback (if you don't want BASE routing)
   return String(cfg.N8N_WEBHOOK_URL || "").trim();
 }
 
 export function notifyN8n(event, proposal, extra = {}) {
   const url = pickWebhookUrl(event, extra);
-  if (!url) {
-    console.log(`[n8n] skip (no url) event=${event}`);
-    return;
-  }
+  if (!url) return;
 
   const callbackRel = extra?.callback?.url || "/api/executions/callback";
   const callbackAbs = absoluteCallbackUrl(callbackRel);
@@ -68,6 +54,7 @@ export function notifyN8n(event, proposal, extra = {}) {
     tenantId: extra.tenantId || "default",
     proposalId: extra.proposalId || proposal?.id || null,
     threadId: extra.threadId || proposal?.thread_id || null,
+
     by: extra.by || proposal?.decision_by || "unknown",
     decidedAt: extra.decidedAt || proposal?.decided_at || null,
     jobId: extra.jobId || null,
@@ -79,13 +66,10 @@ export function notifyN8n(event, proposal, extra = {}) {
 
     prompts,
     title: proposal?.title || extra.title || null,
-    summary: extra.summary || null,
-    tasks: extra.tasks || null,
-    ownerMap: extra.ownerMap || null,
     decision: extra.decision || proposal?.status || null,
     proposal: proposal || null,
 
-    // keep extra fields (imageUrl/caption/contentPack/etc)
+    // keep extra fields (contentPack, assetUrl, caption, etc)
     ...extra,
   });
 
@@ -102,10 +86,8 @@ export function notifyN8n(event, proposal, extra = {}) {
     .then((r) => {
       const info = r?.ok ? `ok ${r.status || ""}` : `fail ${r.status || r.error || ""}`;
       const preview =
-        typeof r?.data === "string"
-          ? r.data.slice(0, 200)
-          : JSON.stringify(r?.data || {}).slice(0, 200);
-      console.log(`[n8n] ${event} → ${info} url=${url} ${preview}`);
+        typeof r?.data === "string" ? r.data.slice(0, 160) : JSON.stringify(r?.data || {}).slice(0, 160);
+      console.log(`[n8n] ${event} → ${info} ${preview}`);
     })
     .catch((e) => console.log("[n8n] error", String(e?.message || e)));
 }
