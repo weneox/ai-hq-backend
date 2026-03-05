@@ -1,4 +1,4 @@
-// src/services/n8nNotify.js (FINAL — FIXED routing for draft approve -> asset generate workflow)
+// src/services/n8nNotify.js (FIXED — compat: Draft Approve triggers the existing /aihq-approved flow)
 
 import { cfg } from "../config.js";
 import { deepFix } from "../utils/textFix.js";
@@ -11,46 +11,36 @@ function cleanBase(u) {
 }
 
 function pickWebhookUrl(event, extra = {}) {
-  // 1) per-call override
   const override = String(extra.webhookUrl || "").trim();
   if (override) return override;
 
-  // 2) event-based routing via base
-  // Set in Railway:
-  // N8N_WEBHOOK_BASE=https://neoxcompany.app.n8n.cloud/webhook
   const base = cleanBase(cfg.N8N_WEBHOOK_BASE);
   if (base) {
-    // ✅ YOUR REAL WORKFLOWS
-    // You showed: /webhook/aihq-approved
-    if (event === "proposal.approved") return `${base}/aihq-approved`;
-    if (event === "proposal.rejected") return `${base}/aihq-approved`;
-
-    // ✅ IMPORTANT: Draft page Approve triggers this event:
-    if (event === "content.assets.generate") return `${base}/aihq-approved`;
-
-    // optional routes if you have separate webhooks later
-    if (event === "content.publish") return `${base}/aihq-publish`;
-    if (event === "content.revise") return `${base}/aihq-content-pack`;
-
-    // fallback
+    // single flow in prod
     return `${base}/aihq-approved`;
   }
 
-  // 3) legacy single URL fallback (if you don't want BASE routing)
   return String(cfg.N8N_WEBHOOK_URL || "").trim();
 }
 
 export function notifyN8n(event, proposal, extra = {}) {
-  const url = pickWebhookUrl(event, extra);
+  // ✅ COMPAT LAYER:
+  // Your existing production n8n workflow listens to "proposal.approved".
+  // Draft Approve emits "content.assets.generate" -> we map it to proposal.approved
+  // while keeping the original intent in `action`.
+  const mappedEvent = event === "content.assets.generate" ? "proposal.approved" : event;
+
+  const url = pickWebhookUrl(mappedEvent, extra);
   if (!url) return;
 
   const callbackRel = extra?.callback?.url || "/api/executions/callback";
   const callbackAbs = absoluteCallbackUrl(callbackRel);
 
-  const prompts = buildPromptBundle(event);
+  const prompts = buildPromptBundle(mappedEvent);
 
   const payload = deepFix({
-    event,
+    event: mappedEvent,
+    action: extra.action || event, // keeps original event name
     tenantId: extra.tenantId || "default",
     proposalId: extra.proposalId || proposal?.id || null,
     threadId: extra.threadId || proposal?.thread_id || null,
@@ -69,7 +59,6 @@ export function notifyN8n(event, proposal, extra = {}) {
     decision: extra.decision || proposal?.status || null,
     proposal: proposal || null,
 
-    // keep extra fields (contentPack, assetUrl, caption, etc)
     ...extra,
   });
 
@@ -86,8 +75,10 @@ export function notifyN8n(event, proposal, extra = {}) {
     .then((r) => {
       const info = r?.ok ? `ok ${r.status || ""}` : `fail ${r.status || r.error || ""}`;
       const preview =
-        typeof r?.data === "string" ? r.data.slice(0, 160) : JSON.stringify(r?.data || {}).slice(0, 160);
-      console.log(`[n8n] ${event} → ${info} ${preview}`);
+        typeof r?.data === "string"
+          ? r.data.slice(0, 160)
+          : JSON.stringify(r?.data || {}).slice(0, 160);
+      console.log(`[n8n] ${mappedEvent} → ${info} ${preview}`);
     })
     .catch((e) => console.log("[n8n] error", String(e?.message || e)));
 }
