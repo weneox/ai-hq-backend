@@ -7,7 +7,7 @@
 // - POST /api/content/:id/publish  { tenantId? }                -> publish.requested + job + n8n content.publish
 //
 // Notes:
-// - "Reject" stays in proposals route (next file).
+// - "Reject" stays in proposals route.
 // - This file ensures n8n gets consistent payloads + UI always has content_items row.
 
 import express from "express";
@@ -59,6 +59,36 @@ function pickTenantId(req) {
   );
 }
 
+function pickFirstImageUrl(contentPack) {
+  if (!contentPack || typeof contentPack !== "object") return null;
+
+  // prefer explicit
+  const direct =
+    contentPack.imageUrl ||
+    contentPack.image_url ||
+    contentPack.coverUrl ||
+    contentPack.cover_url ||
+    null;
+  if (direct) return String(direct);
+
+  // assets array (Cloudinary urls)
+  const a = Array.isArray(contentPack.assets) ? contentPack.assets : [];
+  const first = a[0] || null;
+  if (!first) return null;
+
+  const u = first.url || first.secure_url || first.publicUrl || null;
+  return u ? String(u) : null;
+}
+
+function buildCaption(contentPack) {
+  if (!contentPack || typeof contentPack !== "object") return "";
+
+  const captionText = fixText(String(contentPack.caption || contentPack.text || "").trim());
+  const hashtagsText = fixText(String(contentPack.hashtags || "").trim());
+
+  return [captionText, hashtagsText].filter(Boolean).join("\n\n");
+}
+
 export function contentRoutes({ db, wsHub }) {
   const r = express.Router();
 
@@ -86,7 +116,6 @@ export function contentRoutes({ db, wsHub }) {
   });
 
   // POST /api/content/:id/feedback  { feedbackText, tenantId? }
-  // sets content.status=draft.regenerating and notifies n8n "content.revise"
   r.post("/content/:id/feedback", async (req, res) => {
     const id = String(req.params.id || "").trim();
     const tenantId = pickTenantId(req);
@@ -113,7 +142,6 @@ export function contentRoutes({ db, wsHub }) {
 
         memAudit("ceo", "content.feedback", "content", id, { proposalId: row.proposal_id });
 
-        // (Optional) if you want mem-mode to also hit n8n, you can enable it later.
         return okJson(res, { ok: true, content: row, dbDisabled: true });
       }
 
@@ -127,7 +155,6 @@ export function contentRoutes({ db, wsHub }) {
 
       const proposal = await dbGetProposalById(db, String(updated.proposal_id));
       if (proposal) {
-        // create job for revision
         const job = await dbCreateJob(db, {
           proposalId: proposal.id,
           type: "draft.regen",
@@ -177,7 +204,6 @@ export function contentRoutes({ db, wsHub }) {
   });
 
   // POST /api/content/:id/approve
-  // sets content.status=draft.approved and proposal.status=approved
   r.post("/content/:id/approve", async (req, res) => {
     const id = String(req.params.id || "").trim();
     if (!id) return okJson(res, { ok: false, error: "contentId required" });
@@ -243,7 +269,6 @@ export function contentRoutes({ db, wsHub }) {
   });
 
   // POST /api/content/:id/publish
-  // requires content.status=draft.approved, creates job, notifies n8n "content.publish"
   r.post("/content/:id/publish", async (req, res) => {
     const id = String(req.params.id || "").trim();
     const tenantId = pickTenantId(req);
@@ -264,16 +289,22 @@ export function contentRoutes({ db, wsHub }) {
           });
         }
 
-        // create job (mem)
         const jobId = crypto.randomUUID();
         const contentPack = normalizeContentPack(row.content_pack);
+
+        const imageUrl = pickFirstImageUrl(contentPack);
+        const caption = buildCaption(contentPack);
+
+        if (!imageUrl) {
+          return okJson(res, { ok: false, error: "publish requires imageUrl (missing assets/url)", dbDisabled: true });
+        }
 
         mem.jobs.set(jobId, {
           id: jobId,
           proposal_id: row.proposal_id,
           type: "publish",
           status: "queued",
-          input: { contentId: id, contentPack },
+          input: { contentId: id, contentPack, imageUrl, caption },
           output: {},
           error: null,
           created_at: nowIso(),
@@ -281,7 +312,6 @@ export function contentRoutes({ db, wsHub }) {
           finished_at: null,
         });
 
-        // ✅ ALSO notify n8n in mem-mode (so local tests can publish too)
         const p = mem.proposals.get(row.proposal_id) || null;
         if (p) {
           notifyN8n("content.publish", p, {
@@ -290,6 +320,11 @@ export function contentRoutes({ db, wsHub }) {
             threadId: String(p.thread_id || p.threadId || ""),
             jobId,
             contentId: String(id),
+
+            // ✅ what publish flow needs:
+            imageUrl,
+            caption,
+
             contentPack,
             callback: { url: "/api/executions/callback", tokenHeader: "x-webhook-token" },
           });
@@ -313,7 +348,6 @@ export function contentRoutes({ db, wsHub }) {
 
       if (!isUuid(id)) return okJson(res, { ok: false, error: "contentId must be uuid" });
 
-      // fetch row (noop update)
       const row = await dbUpdateContentItem(db, id, {});
       if (!row) return okJson(res, { ok: false, error: "content not found" });
 
@@ -325,12 +359,18 @@ export function contentRoutes({ db, wsHub }) {
       if (!proposal) return okJson(res, { ok: false, error: "proposal not found for content" });
 
       const contentPack = normalizeContentPack(row.content_pack);
+      const imageUrl = pickFirstImageUrl(contentPack);
+      const caption = buildCaption(contentPack);
+
+      if (!imageUrl) {
+        return okJson(res, { ok: false, error: "publish requires imageUrl (missing assets/url)" });
+      }
 
       const job = await dbCreateJob(db, {
         proposalId: proposal.id,
         type: "publish",
         status: "queued",
-        input: { contentId: row.id, contentPack },
+        input: { contentId: row.id, contentPack, imageUrl, caption },
       });
 
       await dbUpdateContentItem(db, row.id, { status: "publish.requested", job_id: job?.id || row.job_id });
@@ -341,6 +381,11 @@ export function contentRoutes({ db, wsHub }) {
         threadId: String(proposal.thread_id),
         jobId: job?.id || null,
         contentId: String(row.id),
+
+        // ✅ publish flow fields:
+        imageUrl,
+        caption,
+
         contentPack,
         callback: { url: "/api/executions/callback", tokenHeader: "x-webhook-token" },
       });

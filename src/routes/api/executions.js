@@ -121,7 +121,7 @@ export function executionsRoutes({ db, wsHub }) {
   });
 
   // POST /api/executions/callback  (n8n -> HQ)
-  // body: { jobId, status:"completed"|"failed", result:{...} }
+  // body: { jobId, status:"completed"|"failed"|"running", result:{...} }
   r.post("/executions/callback", async (req, res) => {
     if (!requireCallbackToken(req)) {
       return okJson(res, { ok: false, error: "forbidden (invalid callback token)" });
@@ -145,6 +145,22 @@ export function executionsRoutes({ db, wsHub }) {
         finished_at,
       };
 
+      // Helper: merge assets into contentPack (FIX)
+      function pickContentPackWithAssets(jobProposalId) {
+        const rawPack = result?.contentPack || result?.content_pack || result?.draft || null;
+        const assets = Array.isArray(result?.assets) ? result.assets : [];
+        const merged =
+          rawPack && typeof rawPack === "object"
+            ? deepFix({
+                ...rawPack,
+                assets: Array.isArray(rawPack.assets) ? rawPack.assets : assets,
+              })
+            : null;
+
+        const proposalId = jobProposalId || result?.proposalId || result?.proposal_id || null;
+        return { proposalId, contentPack: merged };
+      }
+
       // ========== MEMORY ==========
       if (!isDbReady(db)) {
         const job = mem.jobs.get(jobId);
@@ -152,9 +168,7 @@ export function executionsRoutes({ db, wsHub }) {
 
         memUpdateJob(jobId, patch);
 
-        // If this job produced a contentPack => upsert content draft
-        const proposalId = job.proposal_id || result?.proposalId || result?.proposal_id || null;
-        const contentPack = result?.contentPack || result?.content_pack || result?.draft || null;
+        const { proposalId, contentPack } = pickContentPackWithAssets(job.proposal_id);
 
         let contentRow = null;
         if (proposalId && contentPack && typeof contentPack === "object") {
@@ -162,17 +176,26 @@ export function executionsRoutes({ db, wsHub }) {
             proposalId,
             threadId: result?.threadId || result?.thread_id || null,
             jobId,
-            status: "draft.ready",
+            status: status === "completed" ? "draft.ready" : "draft.failed",
             contentPack,
           });
         }
 
-        // push+notif
         const notif = memCreateNotification({
           recipient: "ceo",
-          type: status === "completed" ? "success" : "error",
-          title: status === "completed" ? "Execution completed" : "Execution failed",
-          body: status === "completed" ? "Draft hazır oldu." : (errorText || "n8n failed"),
+          type: status === "completed" ? "success" : status === "running" ? "info" : "error",
+          title:
+            status === "completed"
+              ? "Execution completed"
+              : status === "running"
+              ? "Execution running"
+              : "Execution failed",
+          body:
+            status === "completed"
+              ? "Draft hazır oldu."
+              : status === "running"
+              ? "İcra gedir…"
+              : (errorText || "n8n failed"),
           payload: { jobId, status, proposalId, content: contentRow },
         });
 
@@ -180,18 +203,14 @@ export function executionsRoutes({ db, wsHub }) {
         wsHub?.broadcast?.({ type: "notification.created", notification: notif });
         if (contentRow) wsHub?.broadcast?.({ type: "content.updated", content: contentRow });
 
-        // AUTO mode: if tenant=auto and draft.ready => auto-approve + auto-publish (delegated to proposals/content routes; here only notify)
         return okJson(res, { ok: true, jobId, status, dbDisabled: true });
       }
 
       // ========== DB ==========
-      // update job
       const jobRow = await dbUpdateJob(db, jobId, patch);
       if (!jobRow) return okJson(res, { ok: false, error: "job not found" });
 
-      // Draft handling (if contentPack exists)
-      const proposalId = jobRow.proposal_id || result?.proposalId || result?.proposal_id || null;
-      const contentPack = result?.contentPack || result?.content_pack || result?.draft || null;
+      const { proposalId, contentPack } = pickContentPackWithAssets(jobRow.proposal_id);
 
       let contentRow = null;
       if (proposalId && contentPack && typeof contentPack === "object") {
@@ -199,17 +218,26 @@ export function executionsRoutes({ db, wsHub }) {
           proposalId,
           threadId: result?.threadId || result?.thread_id || jobRow?.thread_id || null,
           jobId,
-          status: "draft.ready",
+          status: status === "completed" ? "draft.ready" : "draft.failed",
           contentPack,
         });
       }
 
-      // notify + push
       const notif = await dbCreateNotification(db, {
         recipient: "ceo",
-        type: status === "completed" ? "success" : "error",
-        title: status === "completed" ? "Execution completed" : "Execution failed",
-        body: status === "completed" ? "Draft hazır oldu." : (errorText || "n8n failed"),
+        type: status === "completed" ? "success" : status === "running" ? "info" : "error",
+        title:
+          status === "completed"
+            ? "Execution completed"
+            : status === "running"
+            ? "Execution running"
+            : "Execution failed",
+        body:
+          status === "completed"
+            ? "Draft hazır oldu."
+            : status === "running"
+            ? "İcra gedir…"
+            : (errorText || "n8n failed"),
         payload: { jobId, status, proposalId, contentId: contentRow?.id || null },
       });
 
@@ -219,21 +247,24 @@ export function executionsRoutes({ db, wsHub }) {
 
       await pushBroadcastToCeo({
         db,
-        title: status === "completed" ? "Draft hazırdır" : "Execution failed",
-        body: status === "completed" ? "AI draft yaratdı — baxıb təsdiqlə." : (errorText || "n8n error"),
+        title: status === "completed" ? "Draft hazırdır" : status === "running" ? "İcra gedir" : "Execution failed",
+        body:
+          status === "completed"
+            ? "AI draft yaratdı — baxıb təsdiqlə."
+            : status === "running"
+            ? "n8n hazırda işləyir…"
+            : (errorText || "n8n error"),
         data: { type: "execution", jobId, proposalId },
       });
 
       await dbAudit(db, "n8n", "execution.callback", "job", jobId, { status });
 
-      // AUTO mode: if tenant mode auto and draft ready => auto approve draft -> auto publish
-      // Bunu server-side “event” kimi n8n-ə push edirik, real status dəyişimi content/proposals route-larında edilir.
+      // AUTO mode hook (safe)
       try {
         if (proposalId && contentRow?.status === "draft.ready") {
           const tenantId = result?.tenantId || cfg.DEFAULT_TENANT_KEY || "default";
           const mode = await getTenantMode({ db, tenantId });
           if (mode === "auto") {
-            // event: draft.ready.auto (n8n orchestration can call approve+publish endpoints)
             const proposal = await dbGetProposalById(db, String(proposalId));
             if (proposal) {
               notifyN8n("draft.ready.auto", proposal, {
