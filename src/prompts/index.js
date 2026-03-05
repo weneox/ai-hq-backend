@@ -1,4 +1,5 @@
-// src/prompts/index.js
+// src/prompts/index.js (FINAL — template vars + dot keys + json safe)
+
 import fs from "fs";
 import path from "path";
 
@@ -30,18 +31,19 @@ function escapeVal(v) {
   }
 }
 
-// very small mustache-like: {{key}}
+// very small mustache-like: {{key}}  (supports dot keys: a.b.c)
 function renderTemplate(tpl, vars = {}) {
   const src = String(tpl || "");
   return src.replace(/\{\{\s*([a-zA-Z0-9_.-]+)\s*\}\}/g, (_m, key) => {
     const k = String(key);
-    // allow dot keys: a.b.c
     const parts = k.split(".");
     let cur = vars;
+
     for (const p of parts) {
       if (!cur || typeof cur !== "object") return "";
       cur = cur[p];
     }
+
     return escapeVal(cur);
   });
 }

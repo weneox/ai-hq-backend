@@ -1,8 +1,8 @@
 // src/kernel/debateEngine.js (FINAL v3.8 — strict usecases + UTF fix + safer JSON + meta_comment plain text + TEMPLATE VARS)
+//
 // ✅ NEW in v3.8:
 // - Supports template vars in prompts: {{format}}, {{tenantId}}, {{today}}, {{threadId}}, {{mode}}
 // - runDebate accepts { tenantId, threadId, formatHint } and passes vars into getGlobalPolicy/getUsecasePrompt
-// - If your prompts/index.js supports vars, it will render; if not, it still works (falls back to raw text)
 //
 // Modes:
 // - "answer" (default): normal text answer
@@ -248,16 +248,7 @@ async function askAgent({ openai, agentId, message, round, notesSoFar, timeoutMs
 
   let text = extractText(resp);
 
-  console.log(
-    "[debate] agent",
-    agentId,
-    "status=",
-    resp?.status || null,
-    "id=",
-    resp?.id || null,
-    "len=",
-    (text || "").length
-  );
+  console.log("[debate] agent", agentId, "status=", resp?.status || null, "id=", resp?.id || null, "len=", (text || "").length);
 
   if (!String(text || "").trim()) {
     logRawIfEmpty("agent", agentId, resp, text);
@@ -282,12 +273,10 @@ function extractJsonFromText(text) {
   const s0 = String(text || "").trim();
   if (!s0) return null;
 
-  // direct parse
   try {
     return JSON.parse(s0);
   } catch {}
 
-  // candidate slice
   const cand = stripLeadingJunkToJsonCandidate(s0);
   if (cand && cand !== s0) {
     try {
@@ -349,9 +338,8 @@ function modeExpectsJson(mode) {
   return ["proposal", "draft", "trend", "publish", "revise"].includes(m0);
 }
 
-// ✅ Build system prompt with vars that can be used by prompt templates
+// ✅ Build system prompt with vars usable in templates
 function buildSynthesisSystem({ mode, vars }) {
-  // If prompts/index.js doesn't support vars yet, these calls still work (extra arg ignored)
   const global = getGlobalPolicy(vars);
   const usecase = pickUsecaseFromMode(mode);
   const ucText = usecase ? getUsecasePrompt(usecase, vars) : "";
@@ -442,7 +430,6 @@ ${notesText || "(empty)"}
 
   const expectsJson = modeExpectsJson(normMode);
 
-  // ✅ meta_comment: plain text only
   if (!expectsJson) {
     return { finalAnswer: outText, proposal: null };
   }
@@ -455,7 +442,6 @@ ${notesText || "(empty)"}
     } catch {}
   }
 
-  // For backward compatibility: always return {finalAnswer, proposal}
   if (normMode === "proposal") {
     if (!obj || typeof obj !== "object") obj = null;
     return { finalAnswer: outText, proposal: obj };
