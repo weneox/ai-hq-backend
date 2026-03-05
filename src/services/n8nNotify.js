@@ -1,4 +1,5 @@
-// src/services/n8nNotify.js (FIXED — compat: Draft Approve triggers the existing /aihq-approved flow)
+// src/services/n8nNotify.js
+// FINAL — FIXED (NO double /aihq-approved) + COMPAT mapping for existing flow
 
 import { cfg } from "../config.js";
 import { deepFix } from "../utils/textFix.js";
@@ -6,28 +7,43 @@ import { absoluteCallbackUrl } from "../utils/url.js";
 import { buildPromptBundle } from "./promptBundle.js";
 import { postToN8n } from "../utils/n8n.js";
 
-function cleanBase(u) {
-  return String(u || "").trim().replace(/\/+$/, "");
+function clean(u) {
+  return String(u || "").trim();
+}
+function stripTrailingSlashes(u) {
+  return clean(u).replace(/\/+$/, "");
+}
+function looksLikeFullWebhookUrl(u) {
+  // if user already provided a full webhook endpoint like .../webhook/aihq-approved
+  return /\/webhook\/[^/]+$/i.test(stripTrailingSlashes(u));
 }
 
-function pickWebhookUrl(event, extra = {}) {
-  const override = String(extra.webhookUrl || "").trim();
+function pickWebhookUrl(_event, extra = {}) {
+  // 1) per-call override
+  const override = clean(extra.webhookUrl);
   if (override) return override;
 
-  const base = cleanBase(cfg.N8N_WEBHOOK_BASE);
-  if (base) {
-    // single flow in prod
-    return `${base}/aihq-approved`;
-  }
+  // 2) explicit full URL wins (most stable)
+  const full = clean(cfg.N8N_WEBHOOK_URL);
+  if (full) return stripTrailingSlashes(full);
 
-  return String(cfg.N8N_WEBHOOK_URL || "").trim();
+  // 3) base routing fallback
+  // expected: https://neoxcompany.app.n8n.cloud/webhook
+  // but sometimes people paste full endpoint here -> handle both
+  const base = stripTrailingSlashes(cfg.N8N_WEBHOOK_BASE);
+  if (!base) return "";
+
+  // if BASE already ends with /webhook/<name> treat it as full endpoint
+  if (looksLikeFullWebhookUrl(base)) return base;
+
+  // otherwise append our single prod flow path
+  return `${base}/aihq-approved`;
 }
 
 export function notifyN8n(event, proposal, extra = {}) {
   // ✅ COMPAT LAYER:
-  // Your existing production n8n workflow listens to "proposal.approved".
-  // Draft Approve emits "content.assets.generate" -> we map it to proposal.approved
-  // while keeping the original intent in `action`.
+  // existing prod workflow listens to "proposal.approved"
+  // Draft approve emits "content.assets.generate" -> map to "proposal.approved"
   const mappedEvent = event === "content.assets.generate" ? "proposal.approved" : event;
 
   const url = pickWebhookUrl(mappedEvent, extra);
@@ -40,7 +56,7 @@ export function notifyN8n(event, proposal, extra = {}) {
 
   const payload = deepFix({
     event: mappedEvent,
-    action: extra.action || event, // keeps original event name
+    action: extra.action || event, // keep original intent
     tenantId: extra.tenantId || "default",
     proposalId: extra.proposalId || proposal?.id || null,
     threadId: extra.threadId || proposal?.thread_id || null,
@@ -59,12 +75,13 @@ export function notifyN8n(event, proposal, extra = {}) {
     decision: extra.decision || proposal?.status || null,
     proposal: proposal || null,
 
+    // keep extra fields (contentPack, assetUrl, caption, etc.)
     ...extra,
   });
 
   postToN8n({
     url,
-    token: String(cfg.N8N_WEBHOOK_TOKEN || "").trim(),
+    token: clean(cfg.N8N_WEBHOOK_TOKEN),
     timeoutMs: Number(cfg.N8N_TIMEOUT_MS || 10_000),
     payload,
     retries: Number(cfg.N8N_RETRIES ?? 2),

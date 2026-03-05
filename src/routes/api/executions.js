@@ -16,7 +16,7 @@ import {
   mem,
   memCreateNotification,
   memUpdateJob,
-  memUpsertContentItem, // IMPORTANT: mem store should create new versions (or at least update safely)
+  memUpsertContentItem,
   memPatchContentItem,
   memGetLatestContentByProposal,
   memAudit,
@@ -50,7 +50,11 @@ function normalizeStatus(x) {
 }
 
 function pickTenantIdFromResult(result) {
-  return fixText(String(result?.tenantId || result?.tenant_id || cfg.DEFAULT_TENANT_KEY || "default").trim()) || "default";
+  return (
+    fixText(
+      String(result?.tenantId || result?.tenant_id || cfg.DEFAULT_TENANT_KEY || "default").trim()
+    ) || "default"
+  );
 }
 
 // Merge assets into pack (prevents missing assets bug)
@@ -65,6 +69,10 @@ function mergePackAssets(result) {
       assets: rpAssets.length ? rpAssets : assets,
     });
   }
+
+  // If pack is missing but assets exist, still return a pack
+  if (assets.length) return deepFix({ assets });
+
   return null;
 }
 
@@ -94,15 +102,12 @@ function pickPublishInfo(result) {
 
   const platform = result?.platform || pub?.platform || "instagram";
 
-  const out = deepFix({
+  return deepFix({
     platform,
     publishedMediaId: publishedMediaId ? String(publishedMediaId) : null,
     permalink: permalink ? String(permalink) : null,
     raw: pub ? deepFix(pub) : null,
   });
-
-  // keep small
-  return out;
 }
 
 // Try to find contentId from result/job.input
@@ -112,10 +117,16 @@ function pickContentId(result, jobInput) {
     result?.content_id ||
     result?.draftId ||
     result?.draft_id ||
-    (jobInput && typeof jobInput === "object" ? (jobInput.contentId || jobInput.content_id || jobInput.draftId || jobInput.draft_id) : null) ||
+    (jobInput && typeof jobInput === "object"
+      ? (jobInput.contentId || jobInput.content_id || jobInput.draftId || jobInput.draft_id)
+      : null) ||
     null;
 
   return cid ? String(cid) : null;
+}
+
+function jobTypeLc(x) {
+  return String(x || "").trim().toLowerCase();
 }
 
 export function executionsRoutes({ db, wsHub }) {
@@ -201,7 +212,6 @@ export function executionsRoutes({ db, wsHub }) {
   });
 
   // POST /api/executions/callback  (n8n -> HQ)
-  // body: { jobId, status:"completed"|"failed"|"running", result:{...}, error? }
   r.post("/executions/callback", async (req, res) => {
     if (!requireCallbackToken(req)) {
       return okJson(res, { ok: false, error: "forbidden (invalid callback token)" });
@@ -219,7 +229,6 @@ export function executionsRoutes({ db, wsHub }) {
     try {
       const finished_at = nowIso();
 
-      // patch job
       const patch = {
         status,
         output: deepFix({ result }),
@@ -234,8 +243,9 @@ export function executionsRoutes({ db, wsHub }) {
 
         memUpdateJob(jobId, patch);
 
-        const jobType = String(job.type || "").trim(); // draft.generate | draft.regen | publish ...
-        const proposalId = String(job.proposal_id || result?.proposalId || result?.proposal_id || "").trim() || null;
+        const jt = jobTypeLc(job.type);
+        const proposalId =
+          String(job.proposal_id || result?.proposalId || result?.proposal_id || "").trim() || null;
         const tenantId = pickTenantIdFromResult(result);
         const jobInput = deepFix(job.input || {});
         const contentIdFromInput = pickContentId(result, jobInput);
@@ -245,11 +255,16 @@ export function executionsRoutes({ db, wsHub }) {
 
         let contentRow = null;
 
-        // DRAFT callbacks
-        if (proposalId && contentPack && (jobType.startsWith("draft") || jobType === "content.draft" || jobType === "draft.generate" || jobType === "draft.regen")) {
+        // ✅ DRAFT callbacks
+        if (
+          proposalId &&
+          contentPack &&
+          (jt.startsWith("draft") || jt === "content.draft" || jt === "draft.generate" || jt === "draft.regen")
+        ) {
           contentRow = memUpsertContentItem({
             proposalId,
-            threadId: result?.threadId || result?.thread_id || jobInput?.threadId || jobInput?.thread_id || null,
+            threadId:
+              result?.threadId || result?.thread_id || jobInput?.threadId || jobInput?.thread_id || null,
             jobId,
             status: status === "completed" ? "draft.ready" : "draft.failed",
             contentPack,
@@ -257,24 +272,47 @@ export function executionsRoutes({ db, wsHub }) {
           wsHub?.broadcast?.({ type: "content.updated", content: contentRow });
         }
 
-        // PUBLISH callbacks
-        if (proposalId && (jobType === "publish" || jobType === "content.publish")) {
-          // find latest content row for proposal (or by contentId if you keep that in mem)
-          const latest = contentIdFromInput ? (mem.contentItems.get(contentIdFromInput) || null) : memGetLatestContentByProposal(proposalId);
+        // ✅ ASSET GENERATE callbacks (THIS WAS MISSING)
+        if (proposalId && (jt === "asset.generate" || jt === "content.assets.generate")) {
+          const target =
+            contentIdFromInput ? (mem.contentItems.get(contentIdFromInput) || null) : memGetLatestContentByProposal(proposalId);
+
+          if (target) {
+            const nextStatus = status === "completed" ? "asset.ready" : "asset.failed";
+            // merge assets into existing pack
+            const prevPack = deepFix(target.content_pack || {});
+            const merged = deepFix({ ...prevPack, ...(contentPack || {}) });
+
+            memPatchContentItem(target.id, {
+              status: nextStatus,
+              content_pack: merged,
+              assets: Array.isArray(merged.assets) ? merged.assets : (Array.isArray(result?.assets) ? result.assets : []),
+            });
+
+            contentRow = mem.contentItems.get(target.id) || null;
+
+            // proposal becomes APPROVED only after assets ready
+            const p = mem.proposals.get(proposalId) || null;
+            if (p && status === "completed") p.status = "approved";
+
+            wsHub?.broadcast?.({ type: "content.updated", content: contentRow });
+            wsHub?.broadcast?.({ type: "proposal.updated", proposal: p });
+          }
+        }
+
+        // ✅ PUBLISH callbacks
+        if (proposalId && (jt === "publish" || jt === "content.publish")) {
+          const latest =
+            contentIdFromInput ? (mem.contentItems.get(contentIdFromInput) || null) : memGetLatestContentByProposal(proposalId);
 
           if (latest) {
             const nextStatus = status === "completed" ? "published" : "publish.failed";
             memPatchContentItem(latest.id, {
               status: nextStatus,
-              publish: deepFix({
-                ...publishInfo,
-                status,
-                finished_at,
-              }),
+              publish: deepFix({ ...publishInfo, status, finished_at }),
             });
             contentRow = mem.contentItems.get(latest.id) || null;
 
-            // proposal -> published
             const p = mem.proposals.get(proposalId);
             if (p && status === "completed") p.status = "published";
 
@@ -288,13 +326,21 @@ export function executionsRoutes({ db, wsHub }) {
           type: status === "completed" ? "success" : status === "running" ? "info" : "error",
           title:
             status === "completed"
-              ? (jobType === "publish" || jobType === "content.publish" ? "Published" : "Draft ready")
+              ? (jt === "publish" || jt === "content.publish"
+                  ? "Published"
+                  : jt === "asset.generate" || jt === "content.assets.generate"
+                  ? "Assets ready"
+                  : "Draft ready")
               : status === "running"
               ? "Execution running"
               : "Execution failed",
           body:
             status === "completed"
-              ? (jobType === "publish" || jobType === "content.publish" ? "Instagram paylaşımı edildi." : "Draft hazır oldu.")
+              ? (jt === "publish" || jt === "content.publish"
+                  ? "Instagram paylaşımı edildi."
+                  : jt === "asset.generate" || jt === "content.assets.generate"
+                  ? "Assets hazır oldu."
+                  : "Draft hazır oldu.")
               : status === "running"
               ? "İcra gedir…"
               : (errorText || "n8n failed"),
@@ -304,7 +350,7 @@ export function executionsRoutes({ db, wsHub }) {
         wsHub?.broadcast?.({ type: "execution.updated", execution: mem.jobs.get(jobId) });
         wsHub?.broadcast?.({ type: "notification.created", notification: notif });
 
-        memAudit("n8n", "execution.callback", "job", jobId, { status, jobType });
+        memAudit("n8n", "execution.callback", "job", jobId, { status, jobType: jt });
 
         return okJson(res, { ok: true, jobId, status, dbDisabled: true });
       }
@@ -313,18 +359,23 @@ export function executionsRoutes({ db, wsHub }) {
       const jobRow = await dbUpdateJob(db, jobId, patch);
       if (!jobRow) return okJson(res, { ok: false, error: "job not found" });
 
-      const jobType = fixText(String(jobRow.type || "").trim());
+      const jt = jobTypeLc(jobRow.type);
       const tenantId = pickTenantIdFromResult(result);
       const jobInput = deepFix(jobRow.input || {});
-      const proposalId = String(jobRow.proposal_id || result?.proposalId || result?.proposal_id || "").trim() || null;
+      const proposalId =
+        String(jobRow.proposal_id || result?.proposalId || result?.proposal_id || "").trim() || null;
 
       const contentPack = mergePackAssets(result);
       const publishInfo = pickPublishInfo(result);
 
       let contentRow = null;
 
-      // DRAFT callback: insert versioned draft (v1,v2,v3...)
-      if (proposalId && contentPack && (jobType.startsWith("draft") || jobType === "content.draft" || jobType === "draft.generate" || jobType === "draft.regen")) {
+      // ✅ DRAFT callback
+      if (
+        proposalId &&
+        contentPack &&
+        (jt.startsWith("draft") || jt === "content.draft" || jt === "draft.generate" || jt === "draft.regen")
+      ) {
         contentRow = await dbUpsertDraftFromCallback(db, {
           proposalId,
           threadId: result?.threadId || result?.thread_id || jobInput?.threadId || jobInput?.thread_id || null,
@@ -334,20 +385,50 @@ export function executionsRoutes({ db, wsHub }) {
         });
       }
 
-      // PUBLISH callback: mark published + save publish info
-      if (proposalId && (jobType === "publish" || jobType === "content.publish")) {
-        // we prefer explicit contentId from job.input (created by /api/content/:id/publish)
+      // ✅ ASSET GENERATE callback (THIS WAS MISSING)
+      if (proposalId && (jt === "asset.generate" || jt === "content.assets.generate")) {
         const contentId = pickContentId(result, jobInput);
 
-        // find row to update
+        // choose which content row to update
         let rowToUpdate = null;
 
         if (contentId && isUuid(contentId)) {
-          rowToUpdate = await dbUpdateContentItem(db, contentId, {}); // fetch via noop update (returns row)
+          rowToUpdate = await dbUpdateContentItem(db, contentId, {}); // fetch row
+        }
+        if (!rowToUpdate) {
+          rowToUpdate = await dbGetLatestDraftLikeByProposal(db, proposalId);
+          if (!rowToUpdate) rowToUpdate = await dbGetLatestContentByProposal(db, proposalId);
+        }
+
+        if (rowToUpdate) {
+          const nextStatus = status === "completed" ? "asset.ready" : "asset.failed";
+
+          const prevPack = deepFix(rowToUpdate.content_pack || {});
+          const merged = deepFix({ ...prevPack, ...(contentPack || {}) });
+
+          contentRow = await dbUpdateContentItem(db, rowToUpdate.id, {
+            status: nextStatus,
+            content_pack: merged,
+          });
+
+          // proposal becomes APPROVED only after assets ready
+          if (status === "completed") {
+            await dbSetProposalStatus(db, String(proposalId), "approved", deepFix({ assets: merged.assets || [] }));
+          }
+        }
+      }
+
+      // ✅ PUBLISH callback
+      if (proposalId && (jt === "publish" || jt === "content.publish")) {
+        const contentId = pickContentId(result, jobInput);
+
+        let rowToUpdate = null;
+
+        if (contentId && isUuid(contentId)) {
+          rowToUpdate = await dbUpdateContentItem(db, contentId, {});
         }
 
         if (!rowToUpdate) {
-          // fallback to latest content for proposal
           rowToUpdate = await dbGetLatestContentByProposal(db, proposalId);
         }
 
@@ -356,11 +437,7 @@ export function executionsRoutes({ db, wsHub }) {
 
           contentRow = await dbUpdateContentItem(db, rowToUpdate.id, {
             status: nextStatus,
-            publish: deepFix({
-              ...publishInfo,
-              status,
-              finished_at,
-            }),
+            publish: deepFix({ ...publishInfo, status, finished_at }),
           });
 
           if (status === "completed") {
@@ -374,13 +451,21 @@ export function executionsRoutes({ db, wsHub }) {
         type: status === "completed" ? "success" : status === "running" ? "info" : "error",
         title:
           status === "completed"
-            ? (jobType === "publish" || jobType === "content.publish" ? "Published" : "Draft ready")
+            ? (jt === "publish" || jt === "content.publish"
+                ? "Published"
+                : jt === "asset.generate" || jt === "content.assets.generate"
+                ? "Assets ready"
+                : "Draft ready")
             : status === "running"
             ? "Execution running"
             : "Execution failed",
         body:
           status === "completed"
-            ? (jobType === "publish" || jobType === "content.publish" ? "Instagram paylaşımı edildi." : "Draft hazır oldu.")
+            ? (jt === "publish" || jt === "content.publish"
+                ? "Instagram paylaşımı edildi."
+                : jt === "asset.generate" || jt === "content.assets.generate"
+                ? "Assets hazır oldu."
+                : "Draft hazır oldu.")
             : status === "running"
             ? "İcra gedir…"
             : (errorText || "n8n failed"),
@@ -401,22 +486,30 @@ export function executionsRoutes({ db, wsHub }) {
         db,
         title:
           status === "completed"
-            ? (jobType === "publish" || jobType === "content.publish" ? "Published" : "Draft hazırdır")
+            ? (jt === "publish" || jt === "content.publish"
+                ? "Published"
+                : jt === "asset.generate" || jt === "content.assets.generate"
+                ? "Assets hazırdır"
+                : "Draft hazırdır")
             : status === "running"
             ? "İcra gedir"
             : "Execution failed",
         body:
           status === "completed"
-            ? (jobType === "publish" || jobType === "content.publish" ? "Post paylaşıldı." : "AI draft yaratdı — baxıb təsdiqlə.")
+            ? (jt === "publish" || jt === "content.publish"
+                ? "Post paylaşıldı."
+                : jt === "asset.generate" || jt === "content.assets.generate"
+                ? "Vizual hazır oldu — Approved tab-a keçdi."
+                : "AI draft yaratdı — baxıb təsdiqlə.")
             : status === "running"
             ? "n8n hazırda işləyir…"
             : (errorText || "n8n error"),
-        data: { type: "execution", jobId, proposalId, jobType },
+        data: { type: "execution", jobId, proposalId, jobType: jt },
       });
 
-      await dbAudit(db, "n8n", "execution.callback", "job", jobId, { status, jobType });
+      await dbAudit(db, "n8n", "execution.callback", "job", jobId, { status, jobType: jt });
 
-      // AUTO mode hook (safe) — only for drafts, NOT publish
+      // AUTO mode hook (safe) — only for drafts
       try {
         if (proposalId && contentRow?.status === "draft.ready") {
           const mode = await getTenantMode({ db, tenantId });
@@ -436,7 +529,14 @@ export function executionsRoutes({ db, wsHub }) {
         }
       } catch {}
 
-      return okJson(res, { ok: true, jobId, status, jobType, proposalId, contentId: contentRow?.id || null });
+      return okJson(res, {
+        ok: true,
+        jobId,
+        status,
+        jobType: jt,
+        proposalId,
+        contentId: contentRow?.id || null,
+      });
     } catch (e) {
       return okJson(res, { ok: false, error: "Error", details: serializeError(e) });
     }
