@@ -1,12 +1,10 @@
 -- src/db/schema.sql
--- AI HQ schema (upgrade-safe + FULL legacy fixes) — FINAL v7.3
--- ✅ Adds/ensures: notifications, jobs, audit_log, push_subscriptions, tenants, content_items (DRAFT-compatible)
+-- AI HQ schema (upgrade-safe + FULL legacy fixes) — FINAL v7.4
+-- ✅ Adds/ensures: notifications, jobs, audit_log, push_subscriptions, tenants, content_items
 -- ✅ Keeps: legacy fixes (messages/proposals conversation_id + agent_key)
--- ✅ FIX: proposals.status includes in_progress (needed by api.js v2.9.2)
--- ✅ FIX: content_items supports draft lifecycle columns (proposal_id, job_id, thread_id, version, content_pack, last_feedback)
--- ✅ FIX: content_items.status allows draft.* + publishing/published/failed and other states (future-proof)
--- ✅ Mojibake repair (best-effort)
--- Safe for production: no DROP TABLE.
+-- ✅ FIX: proposals.status includes in_progress + published
+-- ✅ FIX: content_items.status includes full draft -> asset -> publish lifecycle
+-- ✅ Safe for production: no DROP TABLE
 
 create extension if not exists pgcrypto;
 
@@ -65,7 +63,6 @@ alter table messages add column if not exists content text;
 alter table messages add column if not exists meta jsonb default '{}'::jsonb;
 alter table messages add column if not exists created_at timestamptz default now();
 
--- drop legacy FK to conversation_id if exists
 do $$
 begin
   if exists (select 1 from pg_constraint where conname = 'messages_conversation_id_fkey') then
@@ -76,7 +73,6 @@ begin
   end if;
 end$$;
 
--- drop NOT NULL on legacy conversation_id if exists
 do $$
 begin
   if exists (
@@ -106,7 +102,6 @@ begin
   end;
 end$$;
 
--- ensure FK exists (idempotent)
 do $$
 begin
   if not exists (select 1 from pg_constraint where conname = 'messages_thread_id_fkey') then
@@ -148,7 +143,6 @@ alter table proposals add column if not exists created_at timestamptz default no
 alter table proposals add column if not exists decided_at timestamptz;
 alter table proposals add column if not exists decision_by text;
 
--- drop legacy FK to conversation_id if exists
 do $$
 begin
   if exists (select 1 from pg_constraint where conname = 'proposals_conversation_id_fkey') then
@@ -159,7 +153,6 @@ begin
   end if;
 end$$;
 
--- drop NOT NULL on legacy conversation_id if exists
 do $$
 begin
   if exists (
@@ -173,7 +166,6 @@ begin
   end if;
 end$$;
 
--- legacy agent_key not-null fix
 do $$
 begin
   if exists (
@@ -187,7 +179,6 @@ begin
   end if;
 end$$;
 
--- if both exist, backfill agent_key from agent
 do $$
 begin
   if exists (
@@ -210,7 +201,6 @@ begin
   end;
 end$$;
 
--- ✅ IMPORTANT: loosen/replace status constraint to include in_progress
 do $$
 begin
   begin
@@ -221,7 +211,7 @@ begin
   begin
     alter table proposals
       add constraint proposals_status_check
-      check (status in ('pending','in_progress','approved','rejected'));
+      check (status in ('pending','in_progress','approved','published','rejected'));
   exception when others then null;
   end;
 end$$;
@@ -382,7 +372,7 @@ create unique index if not exists uq_push_endpoint on push_subscriptions(endpoin
 create index if not exists idx_push_recipient on push_subscriptions(recipient, created_at desc);
 
 -- ============================================================
--- tenants (SaaS-ready; NEOX is default)
+-- tenants
 -- ============================================================
 create table if not exists tenants (
   id uuid primary key default gen_random_uuid(),
@@ -419,26 +409,20 @@ exception when others then null;
 end$$;
 
 -- ============================================================
--- content_items (DRAFT lifecycle + can keep your existing post fields)
--- IMPORTANT:
--- api.js expects these columns:
---   proposal_id, thread_id, job_id, status, version, content_pack, last_feedback, created_at, updated_at
+-- content_items
 -- ============================================================
 create table if not exists content_items (
   id uuid primary key default gen_random_uuid(),
 
-  -- ✅ Draft linkage (needed by backend)
   proposal_id uuid,
   thread_id uuid,
   job_id uuid,
 
-  -- ✅ Draft state (needed by backend)
   status text not null default 'draft.ready',
   version int not null default 1,
   content_pack jsonb not null default '{}'::jsonb,
   last_feedback text not null default '',
 
-  -- Optional: keep your existing posting fields (safe; backend ignores if unused)
   tenant_key text not null default 'neox',
   type text not null default 'image',
   title text not null default '',
@@ -455,7 +439,6 @@ create table if not exists content_items (
   updated_at timestamptz not null default now()
 );
 
--- Ensure columns exist in older deployments (idempotent)
 alter table content_items add column if not exists proposal_id uuid;
 alter table content_items add column if not exists thread_id uuid;
 alter table content_items add column if not exists job_id uuid;
@@ -480,7 +463,6 @@ alter table content_items add column if not exists publish jsonb default '{}'::j
 alter table content_items add column if not exists created_at timestamptz default now();
 alter table content_items add column if not exists updated_at timestamptz default now();
 
--- defaults (best-effort)
 do $$
 begin
   begin
@@ -509,7 +491,7 @@ begin
   end;
 end$$;
 
--- ✅ Replace/loosen status constraint to allow backend draft statuses (future-proof)
+-- ✅ FULL lifecycle statuses supported here
 do $$
 begin
   begin
@@ -527,7 +509,18 @@ begin
           'rejected',
           'publishing',
           'published',
-          'failed'
+          'failed',
+
+          'in_progress',
+
+          'asset.requested',
+          'asset.ready',
+          'asset.failed',
+
+          'publish.requested',
+          'publish.queued',
+          'publish.running',
+          'publish.failed'
         )
         OR status like 'draft.%'
       );
@@ -535,7 +528,6 @@ begin
   end;
 end$$;
 
--- FK (optional, idempotent)
 do $$
 begin
   if not exists (select 1 from pg_constraint where conname = 'content_items_proposal_id_fkey') then
@@ -566,13 +558,11 @@ begin
   end if;
 end$$;
 
--- indexes
 create index if not exists idx_content_proposal_updated on content_items(proposal_id, updated_at desc);
 create index if not exists idx_content_status_updated on content_items(status, updated_at desc);
 create index if not exists idx_content_tenant_status on content_items(tenant_key, status, created_at desc);
 create index if not exists idx_content_schedule on content_items(status, schedule_at);
 
--- auto updated_at trigger (best-effort)
 do $$
 begin
   if not exists (select 1 from pg_trigger where tgname = 'trg_content_items_updated_at') then
@@ -586,12 +576,10 @@ exception when others then null;
 end$$;
 
 -- ============================================================
--- ✅ Mojibake repair (best-effort)
--- If text contains common broken markers, try latin1->utf8 recovery.
+-- Mojibake repair (best-effort)
 -- ============================================================
 do $$
 begin
-  -- messages.content
   begin
     update messages
       set content = convert_from(convert_to(content, 'LATIN1'), 'UTF8')
@@ -599,7 +587,6 @@ begin
   exception when others then null;
   end;
 
-  -- proposals.title
   begin
     update proposals
       set title = convert_from(convert_to(title, 'LATIN1'), 'UTF8')
@@ -607,7 +594,6 @@ begin
   exception when others then null;
   end;
 
-  -- notifications.title
   begin
     update notifications
       set title = convert_from(convert_to(title, 'LATIN1'), 'UTF8')
@@ -615,13 +601,11 @@ begin
   exception when others then null;
   end;
 
-  -- notifications.body
   begin
     update notifications
       set body = convert_from(convert_to(body, 'LATIN1'), 'UTF8')
     where body is not null and body ~ 'Ã.|Â.|â€|â€™|â€œ|â€�|â€“|â€”|â€¦';
   exception when others then null;
   end;
-
 exception when others then null;
 end$$;
