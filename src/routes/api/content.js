@@ -1,4 +1,4 @@
-// src/routes/api/content.js (FINAL v2 — Draft -> Asset Generate -> Publish)
+// src/routes/api/content.js (FINAL v2.1 — Draft -> Asset Generate -> Publish)
 //
 // Endpoints:
 // - GET  /api/content?proposalId=uuid
@@ -68,7 +68,6 @@ function packType(pack) {
 function pickFirstAssetUrl(contentPack) {
   if (!contentPack || typeof contentPack !== "object") return null;
 
-  // prefer explicit
   const direct =
     contentPack.imageUrl ||
     contentPack.image_url ||
@@ -79,7 +78,6 @@ function pickFirstAssetUrl(contentPack) {
     null;
   if (direct) return String(direct);
 
-  // assets array
   const a = Array.isArray(contentPack.assets) ? contentPack.assets : [];
   const first = a[0] || null;
   if (!first) return null;
@@ -88,10 +86,23 @@ function pickFirstAssetUrl(contentPack) {
   return u ? String(u) : null;
 }
 
+function normalizeHashtagsValue(v) {
+  if (!v) return "";
+  if (Array.isArray(v)) return v.map((x) => String(x).trim()).filter(Boolean).join(" ");
+  if (typeof v === "string") return fixText(v.trim());
+  try {
+    return fixText(JSON.stringify(v));
+  } catch {
+    return "";
+  }
+}
+
 function buildCaption(contentPack) {
   if (!contentPack || typeof contentPack !== "object") return "";
+
   const captionText = fixText(String(contentPack.caption || contentPack.text || "").trim());
-  const hashtagsText = fixText(String(contentPack.hashtags || "").trim());
+  const hashtagsText = normalizeHashtagsValue(contentPack.hashtags);
+
   return [captionText, hashtagsText].filter(Boolean).join("\n\n");
 }
 
@@ -101,7 +112,16 @@ function statusLc(x) {
 
 function isDraftReadyStatus(s) {
   const v = statusLc(s);
-  return v === "draft.ready" || v === "draft" || v.startsWith("draft.");
+
+  // ✅ important:
+  // UI / backend sometimes keeps proposal in_progress while content row is draft-ready.
+  // To avoid false reject on approve, allow in_progress here too.
+  return (
+    v === "draft.ready" ||
+    v === "draft" ||
+    v === "in_progress" ||
+    v.startsWith("draft.")
+  );
 }
 
 function isAssetReadyStatus(s) {
@@ -137,7 +157,7 @@ export function contentRoutes({ db, wsHub }) {
     }
   });
 
-  // POST /api/content/:id/feedback  { feedbackText, tenantId? }
+  // POST /api/content/:id/feedback
   r.post("/content/:id/feedback", async (req, res) => {
     const id = String(req.params.id || "").trim();
     const tenantId = pickTenantId(req);
@@ -239,16 +259,22 @@ export function contentRoutes({ db, wsHub }) {
         if (!row) return okJson(res, { ok: false, error: "content not found", dbDisabled: true });
 
         const st = statusLc(row.status);
+
         if (isPublishRequestedStatus(st)) {
           return okJson(res, { ok: false, error: "publish already requested", status: row.status, dbDisabled: true });
         }
 
-        // allow approve when draft is ready; if asset already ready, do nothing
         if (isAssetReadyStatus(st)) {
           return okJson(res, { ok: true, content: row, note: "asset already ready", dbDisabled: true });
         }
+
         if (!isDraftReadyStatus(st)) {
-          return okJson(res, { ok: false, error: "content must be draft.ready before approve", status: row.status, dbDisabled: true });
+          return okJson(res, {
+            ok: false,
+            error: "content must be draft.ready before approve",
+            status: row.status,
+            dbDisabled: true,
+          });
         }
 
         const jobId = crypto.randomUUID();
@@ -310,14 +336,21 @@ export function contentRoutes({ db, wsHub }) {
       if (!row) return okJson(res, { ok: false, error: "content not found" });
 
       const st = statusLc(row.status);
+
       if (isPublishRequestedStatus(st)) {
         return okJson(res, { ok: false, error: "publish already requested", status: row.status });
       }
+
       if (isAssetReadyStatus(st)) {
         return okJson(res, { ok: true, content: row, note: "asset already ready" });
       }
+
       if (!isDraftReadyStatus(st)) {
-        return okJson(res, { ok: false, error: "content must be draft.ready before approve", status: row.status });
+        return okJson(res, {
+          ok: false,
+          error: "content must be draft.ready before approve",
+          status: row.status,
+        });
       }
 
       const proposal = await dbGetProposalById(db, String(row.proposal_id));
@@ -366,7 +399,10 @@ export function contentRoutes({ db, wsHub }) {
         data: { type: "asset.requested", contentId: row.id, proposalId: proposal.id, jobId: job?.id || null },
       });
 
-      await dbAudit(db, "ceo", "content.approve.assets", "content", row.id, { proposalId: proposal.id, jobId: job?.id || null });
+      await dbAudit(db, "ceo", "content.approve.assets", "content", row.id, {
+        proposalId: proposal.id,
+        jobId: job?.id || null,
+      });
 
       return okJson(res, { ok: true, content: updated, jobId: job?.id || null });
     } catch (e) {
