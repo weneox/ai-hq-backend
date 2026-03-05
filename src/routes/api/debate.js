@@ -1,14 +1,4 @@
-// src/routes/api/debate.js (FINAL — cron draft + formatHint + proposal+content_items persist)
-//
-// ✅ Supports:
-// - POST /api/debate { message?, mode, rounds?, agents?, tenantId?, threadId?, formatHint? }
-// - Cron can call with NO message for mode=draft/trend
-// - Persists proposal for JSON modes + creates content_items for draft
-// - Broadcasts WS events: proposal.created, content.updated, thread.message
-//
-// Notes:
-// - "Approve/Change/Reject" buttons are FRONTEND logic (next step).
-// - This file ensures UI can fetch draft via GET /api/content?proposalId=...
+// src/routes/api/debate.js (FINAL — cron draft + formatHint wired to engine + proposal+content_items persist)
 
 import express from "express";
 import crypto from "crypto";
@@ -17,7 +7,11 @@ import { cfg } from "../../config.js";
 import { okJson, clamp, isDbReady } from "../../utils/http.js";
 import { deepFix, fixText } from "../../utils/textFix.js";
 import { runDebate } from "../../kernel/debateEngine.js";
-import { memEnsureThread, memAddMessage, memCreateProposal } from "../../utils/memStore.js";
+import {
+  memEnsureThread,
+  memAddMessage,
+  memCreateProposal,
+} from "../../utils/memStore.js";
 
 function normalizeMode(mode) {
   const m = String(mode || "answer").trim().toLowerCase();
@@ -31,21 +25,20 @@ function normalizeMode(mode) {
 
 // debateEngine returns:
 // - for mode="proposal": proposal is proposal JSON
-// - for mode="draft"/"trend"/"publish"/"revise": proposal is wrapper {type,title,payload} (your engine does this)
+// - for mode="draft"/"trend"/"publish"/"revise": proposal is wrapper {type,title,payload} or payload (your engine)
+// This unwrap tries to extract the "payload" object as content pack
 function unwrapContentPackFromProposalPayload(p) {
   if (!p || typeof p !== "object") return null;
-  // wrapper
   if (p.payload && typeof p.payload === "object") return deepFix(p.payload);
-  // raw
   return deepFix(p);
 }
 
 function statusForMode(mode) {
   const m = normalizeMode(mode);
-  if (m === "draft") return "in_progress"; // Drafting tab
-  if (m === "revise") return "in_progress"; // regenerating loop
-  if (m === "publish") return "approved"; // usually called after approve (but you also have content/:id/publish route)
-  if (m === "trend") return "approved"; // informational
+  if (m === "draft") return "in_progress";   // Drafting tab
+  if (m === "revise") return "in_progress";  // regenerating loop
+  if (m === "publish") return "approved";
+  if (m === "trend") return "approved";
   if (m === "proposal") return "pending";
   return "pending";
 }
@@ -63,9 +56,9 @@ export function debateRoutes({ db, wsHub }) {
     const rounds = clamp(req.body?.rounds ?? 1, 1, 5);
     const agents = Array.isArray(req.body?.agents) ? req.body.agents : null;
 
-    const formatHint = fixText(
-      String(req.body?.formatHint || req.body?.FORMAT || req.body?.format || "").trim()
-    );
+    // ✅ Accept from n8n: formatHint | FORMAT | format
+    const formatHintRaw = req.body?.formatHint ?? req.body?.FORMAT ?? req.body?.format ?? "";
+    const formatHint = fixText(String(formatHintRaw || "").trim());
 
     let threadId = String(req.body?.threadId || "").trim();
     if (!threadId) threadId = crypto.randomUUID();
@@ -115,12 +108,15 @@ Return STRICT JSON ONLY as usecase requires.
         );
       }
 
-      // 2) Run debate engine
+      // 2) Run debate engine  ✅ formatHint + tenantId engine-ə gedir
       const out = await runDebate({
         message,
         mode,
         rounds,
         agents,
+        tenantId,
+        threadId,
+        formatHint: formatHint || null,
       });
 
       const finalAnswer = fixText(String(out?.finalAnswer || "").trim());
@@ -156,6 +152,8 @@ Return STRICT JSON ONLY as usecase requires.
 
       if (out?.proposal && typeof out.proposal === "object") {
         const payload = deepFix(out.proposal);
+
+        // title best-effort
         const title =
           fixText(payload.title || payload.name || payload.summary || payload.goal || payload.topic || "") ||
           `Draft ${new Date().toISOString()}`;
@@ -166,12 +164,6 @@ Return STRICT JSON ONLY as usecase requires.
         if (!isDbReady(db)) {
           proposal = memCreateProposal(threadId, { agent: "debate", type, title, payload });
           wsHub?.broadcast?.({ type: "proposal.created", proposal });
-
-          // Memory-mode content_items (optional): UI-da “no draft” olmasın deyə
-          if (mode === "draft") {
-            // memStore-də contentItems xəritən varsa sonradan qoşarıq.
-            // Hələlik proposal.payload içində draft var.
-          }
         } else {
           const q2 = await db.query(
             `insert into proposals (thread_id, agent, type, status, title, payload)

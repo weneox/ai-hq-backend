@@ -1,23 +1,23 @@
-// src/kernel/debateEngine.js (FINAL v3.7 — strict usecases + UTF fix + safer JSON + meta_comment plain text)
+// src/kernel/debateEngine.js (FINAL v3.8 — strict usecases + UTF fix + safer JSON + meta_comment plain text + TEMPLATE VARS)
+// ✅ NEW in v3.8:
+// - Supports template vars in prompts: {{format}}, {{tenantId}}, {{today}}, {{threadId}}, {{mode}}
+// - runDebate accepts { tenantId, threadId, formatHint } and passes vars into getGlobalPolicy/getUsecasePrompt
+// - If your prompts/index.js supports vars, it will render; if not, it still works (falls back to raw text)
 //
-// Modes (recommended):
+// Modes:
 // - "answer" (default): normal text answer
-// - "proposal": proposal JSON (your debate proposal schema)
-// - "draft": generates content draft JSON via prompts/usecases/content.draft.txt
-// - "revise": revises existing draft (previousDraft + feedback) via prompts/usecases/content.revise.txt
-// - "publish": prepares publish-ready pack JSON via prompts/usecases/content.publish.txt
+// - "proposal": proposal JSON
+// - "draft": content draft JSON via prompts/usecases/content.draft.txt
+// - "revise": revise draft JSON via prompts/usecases/content.revise.txt
+// - "publish": publish pack JSON via prompts/usecases/content.publish.txt
 // - "trend": trend brief JSON via prompts/usecases/trend.research.txt
-// - "meta_comment": replies to IG comment (PLAIN TEXT) via prompts/usecases/meta.comment_reply.txt
-//
-// Notes:
-// - For "revise": pass message containing BOTH previousDraft JSON + feedback string (your API layer should format it).
-// - For "publish": pass message containing approved draft JSON (and assetUrls if you have them).
+// - "meta_comment": IG comment reply (PLAIN TEXT) via prompts/usecases/meta.comment_reply.txt
 
 import OpenAI from "openai";
 import { cfg } from "../config.js";
 import { getGlobalPolicy, getUsecasePrompt } from "../prompts/index.js";
 
-export const DEBATE_ENGINE_VERSION = "final-v3.7";
+export const DEBATE_ENGINE_VERSION = "final-v3.8";
 console.log(`[debateEngine] LOADED ${DEBATE_ENGINE_VERSION}`);
 
 const DEFAULT_AGENTS = ["orion", "nova", "atlas", "echo"];
@@ -311,7 +311,6 @@ function fallbackSynthesis(agentNotes = []) {
 function pickUsecaseFromMode(mode) {
   const m0 = String(mode || "").trim().toLowerCase();
 
-  // aliases (so your API can send more explicit names)
   const m =
     m0 === "content_publish" || m0 === "publish_pack" || m0 === "content.publish"
       ? "publish"
@@ -334,10 +333,28 @@ function pickUsecaseFromMode(mode) {
   return null;
 }
 
-function buildSynthesisSystem({ mode }) {
-  const global = getGlobalPolicy();
+function normalizeMode(mode) {
+  const m0 = String(mode || "").trim().toLowerCase();
+  if (m0 === "content_publish" || m0 === "publish_pack" || m0 === "content.publish") return "publish";
+  if (m0 === "content_revise" || m0 === "content.revise") return "revise";
+  if (m0 === "content_draft" || m0 === "content.draft") return "draft";
+  if (m0 === "trend_research" || m0 === "trend.research") return "trend";
+  if (m0 === "comment" || m0 === "meta_comment_reply" || m0 === "meta.comment_reply") return "meta_comment";
+  return m0;
+}
+
+function modeExpectsJson(mode) {
+  const m0 = String(mode || "").trim().toLowerCase();
+  if (m0 === "meta_comment") return false;
+  return ["proposal", "draft", "trend", "publish", "revise"].includes(m0);
+}
+
+// ✅ Build system prompt with vars that can be used by prompt templates
+function buildSynthesisSystem({ mode, vars }) {
+  // If prompts/index.js doesn't support vars yet, these calls still work (extra arg ignored)
+  const global = getGlobalPolicy(vars);
   const usecase = pickUsecaseFromMode(mode);
-  const ucText = usecase ? getUsecasePrompt(usecase) : "";
+  const ucText = usecase ? getUsecasePrompt(usecase, vars) : "";
 
   const base = `
 You are AI HQ Kernel.
@@ -358,23 +375,6 @@ If USECASE requires plain text: output ONLY plain text.
   ]
     .filter((x) => String(x || "").trim())
     .join("\n");
-}
-
-function modeExpectsJson(mode) {
-  const m0 = String(mode || "").trim().toLowerCase();
-  // meta_comment is PLAIN TEXT by spec
-  if (m0 === "meta_comment") return false;
-  return ["proposal", "draft", "trend", "publish", "revise"].includes(m0);
-}
-
-function normalizeMode(mode) {
-  const m0 = String(mode || "").trim().toLowerCase();
-  if (m0 === "content_publish" || m0 === "publish_pack" || m0 === "content.publish") return "publish";
-  if (m0 === "content_revise" || m0 === "content.revise") return "revise";
-  if (m0 === "content_draft" || m0 === "content.draft") return "draft";
-  if (m0 === "trend_research" || m0 === "trend.research") return "trend";
-  if (m0 === "comment" || m0 === "meta_comment_reply" || m0 === "meta.comment_reply") return "meta_comment";
-  return m0;
 }
 
 async function strictJsonRepair({ openai, badText, timeoutMs }) {
@@ -401,7 +401,7 @@ Rules:
   return extractJsonFromText(fixed);
 }
 
-async function synthesizeFinal({ openai, message, agentNotes, mode, timeoutMs }) {
+async function synthesizeFinal({ openai, message, agentNotes, mode, timeoutMs, vars }) {
   const normMode = normalizeMode(mode);
 
   const notesText = (agentNotes || [])
@@ -409,8 +409,7 @@ async function synthesizeFinal({ openai, message, agentNotes, mode, timeoutMs })
     .join("\n\n");
 
   const maxOut = Number(cfg.OPENAI_DEBATE_SYNTH_TOKENS || 1400);
-
-  const sysText = buildSynthesisSystem({ mode: normMode });
+  const sysText = buildSynthesisSystem({ mode: normMode, vars });
 
   const userText = `
 USER_REQUEST:
@@ -457,8 +456,6 @@ ${notesText || "(empty)"}
   }
 
   // For backward compatibility: always return {finalAnswer, proposal}
-  // - if mode=proposal => proposal=obj
-  // - else => proposal wrapper with payload=obj (unless already wrapper)
   if (normMode === "proposal") {
     if (!obj || typeof obj !== "object") obj = null;
     return { finalAnswer: outText, proposal: obj };
@@ -478,7 +475,6 @@ ${notesText || "(empty)"}
     };
   }
 
-  // absolute fallback
   return {
     finalAnswer: outText,
     proposal: {
@@ -489,7 +485,15 @@ ${notesText || "(empty)"}
   };
 }
 
-export async function runDebate({ message, agents = DEFAULT_AGENTS, rounds = 2, mode = "answer" }) {
+export async function runDebate({
+  message,
+  agents = DEFAULT_AGENTS,
+  rounds = 2,
+  mode = "answer",
+  tenantId = "default",
+  threadId = "",
+  formatHint = null,
+}) {
   const openai = ensureOpenAI();
   if (!openai) {
     return {
@@ -524,12 +528,22 @@ export async function runDebate({ message, agents = DEFAULT_AGENTS, rounds = 2, 
     notesSoFar = agentNotes.map((n) => `[${n.agentId}] ${n.text}`).join("\n\n");
   }
 
+  // ✅ Vars available to templates (content.draft.txt etc)
+  const vars = {
+    tenantId: String(tenantId || "default"),
+    threadId: String(threadId || ""),
+    format: String(formatHint || "").trim() || "auto",
+    today: new Date().toISOString().slice(0, 10),
+    mode: normalizeMode(mode),
+  };
+
   const synth = await synthesizeFinal({
     openai,
     message,
     agentNotes,
     mode: normalizeMode(mode),
     timeoutMs,
+    vars,
   });
 
   return {
