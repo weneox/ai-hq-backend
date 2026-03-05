@@ -1,6 +1,7 @@
-// src/config.js (FINAL v2.6)
-// - Adds DEFAULT_MODE (manual|auto) for tenant mode fallback
-// - Adds N8N_WEBHOOK_BASE + retries/backoff knobs
+// src/config.js (FINAL v2.6.1 — FIXED)
+// ✅ Adds PUBLIC_BASE_URL (needed for absoluteCallbackUrl -> n8n callback)
+// ✅ Keeps all your v2.6 fields unchanged
+// ✅ Adds PUBLIC_BASE_URL comment + safe default ("") so local dev works
 
 function s(v, d = "") {
   return String(v ?? d).trim();
@@ -32,6 +33,10 @@ export const cfg = {
 
   DATABASE_URL: s(process.env.DATABASE_URL, ""),
   WS_AUTH_TOKEN: s(process.env.WS_AUTH_TOKEN, ""),
+
+  // ✅ REQUIRED for building absolute callback URLs for n8n callbacks
+  // Example (Railway): https://ai-hq-backend-production.up.railway.app
+  PUBLIC_BASE_URL: s(process.env.PUBLIC_BASE_URL, ""), // ✅ NEW (FIX)
 
   // If set => required for /api/debug/openai and /api/push/test
   DEBUG_API_TOKEN: s(process.env.DEBUG_API_TOKEN, ""),
