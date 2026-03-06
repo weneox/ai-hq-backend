@@ -9,7 +9,7 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js",
-    "postinstall": "playwright install chromium"
+    "postinstall": "playwright install --with-deps chromium"
   },
   "dependencies": {
     "cors": "^2.8.5",
