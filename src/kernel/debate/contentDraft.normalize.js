@@ -89,31 +89,35 @@ function buildFallbackVideoPrompt({
   visualPlan,
   slides,
   caption,
+  cta,
 }) {
   const first = asObj(slides[0]);
   const second = asObj(slides[1]);
   const third = asObj(slides[2]);
 
   const lines = [
-    "Create a premium cinematic AI-generated vertical commercial video for NEOX, an AI automation and digital technology brand.",
-    "Format: short-form vertical 9:16 video.",
-    topic ? `Topic: ${topic}.` : "",
-    hook ? `Opening hook mood: ${hook}.` : "",
+    "Create a premium cinematic AI-generated vertical brand video for NEOX, an AI automation and digital technology brand.",
+    "Output format: 9:16 vertical short-form commercial video.",
+    topic ? `Core topic: ${topic}.` : "",
+    hook ? `Opening emotional direction: ${hook}.` : "",
+    caption ? `Narrative direction: ${caption}.` : "",
+    cta ? `Ending intent: ${cta}.` : "",
     `Visual preset: ${visualPreset}.`,
-    visualPlan?.style ? `Style: ${visualPlan.style}.` : "",
-    visualPlan?.composition ? `Composition: ${visualPlan.composition}.` : "",
-    first?.visualPrompt ? `Opening scene: ${first.visualPrompt}` : "",
-    second?.visualPrompt ? `Middle scene: ${second.visualPrompt}` : "",
-    third?.visualPrompt ? `Closing scene: ${third.visualPrompt}` : "",
-    caption ? `Overall message direction: ${caption}.` : "",
-    "The video must feel like a premium business-tech micro film.",
-    "Use realistic camera motion, refined lighting, elegant futuristic atmosphere, believable motion, and clean cinematic composition.",
-    "Do not generate readable text, subtitles, title cards, logos, UI screens, dashboards, browser windows, or poster-like layouts.",
-    "Avoid slideshow feeling. Avoid template feeling. Avoid social media graphic aesthetics.",
-    "Focus on a coherent commercial story with premium technology visuals and believable scene motion.",
+    visualPlan?.style ? `Overall visual style: ${visualPlan.style}.` : "",
+    visualPlan?.composition ? `Composition direction: ${visualPlan.composition}.` : "",
+    visualPlan?.colorNotes ? `Color direction: ${visualPlan.colorNotes}.` : "",
+    first?.visualPrompt ? `Scene 1: ${first.visualPrompt}` : "",
+    second?.visualPrompt ? `Scene 2: ${second.visualPrompt}` : "",
+    third?.visualPrompt ? `Scene 3: ${third.visualPrompt}` : "",
+    "The result must feel like a premium technology commercial, not a slideshow and not a template.",
+    "Use coherent scene-to-scene continuity, elegant motion, controlled lighting, cinematic camera movement, believable depth, premium industrial design language, and realistic material rendering.",
+    "No readable text inside the video.",
+    "No subtitles, no title cards, no fake UI, no dashboards, no app screens, no browser windows, no website sections, no posters, no infographic layouts.",
+    "Avoid social media graphic look. Avoid flat marketing poster look. Avoid fake interface elements.",
+    "Focus on one strong story arc with premium futuristic business-tech visuals.",
   ];
 
-  return truncate(lines.filter(Boolean).join(" "), 2400);
+  return truncate(lines.filter(Boolean).join(" "), 2600);
 }
 
 function buildFallbackVoiceoverText({ hook, caption, cta, topic }) {
@@ -124,11 +128,36 @@ function buildFallbackVoiceoverText({ hook, caption, cta, topic }) {
     parts.push(`${topic} üçün NEOX ilə daha ağıllı və daha sürətli həll qurmaq mümkündür.`);
   }
   if (cta) parts.push(cta);
+
   return truncate(
     parts.filter(Boolean).join(" ").replace(/\s+/g, " ").trim() ||
       "NEOX ilə biznesiniz üçün daha ağıllı, daha sürətli və daha sistemli AI avtomatlaşdırma həlləri qurun.",
     900
   );
+}
+
+function pickDefaultReelDuration(frames = []) {
+  const total = asArr(frames).reduce((sum, f) => {
+    const d = Number(f?.durationSec || 0);
+    return sum + (Number.isFinite(d) && d > 0 ? d : 0);
+  }, 0);
+
+  if (total >= 6 && total <= 20) return total;
+  return 10;
+}
+
+function buildReelMeta(payload) {
+  const frames = asArr(payload?.visualPlan?.frames);
+  const durationSec = pickDefaultReelDuration(frames);
+
+  return {
+    sceneCount: frames.length || 3,
+    durationSec,
+    motionIntensity: "medium",
+    cameraStyle: "cinematic_commercial",
+    deliveryStyle: "premium_business_tech",
+    videoModelHint: "runway",
+  };
 }
 
 function normalizeReelFramesAndSlides(payload) {
@@ -250,7 +279,7 @@ export function normalizeContentDraftPayload(rawPayload, vars = {}) {
       ),
       videoPrompt:
         format === "reel"
-          ? truncate(fixMojibake(assetBriefSrc.videoPrompt || "").trim(), 2400)
+          ? truncate(fixMojibake(assetBriefSrc.videoPrompt || "").trim(), 2600)
           : "",
       voiceoverText:
         format === "reel"
@@ -260,6 +289,14 @@ export function normalizeContentDraftPayload(rawPayload, vars = {}) {
     },
     complianceNotes: uniqStrings(asArr(src.complianceNotes)).slice(0, 10),
     reviewQuestionsForCEO: uniqStrings(asArr(src.reviewQuestionsForCEO)).slice(0, 8),
+
+    // ✅ top-level stable fields for n8n / runway / execution layer
+    imagePrompt: "",
+    videoPrompt: "",
+    voiceoverText: "",
+    aspectRatio: normalizeAspectRatio(src.aspectRatio || visualPlan.aspectRatio, format),
+    neededAssets: [],
+    reelMeta: null,
   };
 
   if (!payload.reviewQuestionsForCEO.length) {
@@ -319,6 +356,7 @@ export function normalizeContentDraftPayload(rawPayload, vars = {}) {
         visualPlan: payload.visualPlan,
         slides: payload.slides,
         caption: payload.caption,
+        cta: payload.cta,
       });
     }
 
@@ -337,6 +375,17 @@ export function normalizeContentDraftPayload(rawPayload, vars = {}) {
         ...payload.assetBrief.neededAssets,
       ]).slice(0, 10);
     }
+  }
+
+  payload.imagePrompt = payload.assetBrief.imagePrompt || "";
+  payload.videoPrompt = payload.assetBrief.videoPrompt || "";
+  payload.voiceoverText = payload.assetBrief.voiceoverText || "";
+  payload.neededAssets = uniqStrings(payload.assetBrief.neededAssets || []).slice(0, 10);
+  payload.aspectRatio = normalizeAspectRatio(payload.aspectRatio, payload.format);
+
+  if (payload.format === "reel") {
+    payload.reelMeta = buildReelMeta(payload);
+    if (!payload.aspectRatio) payload.aspectRatio = "9:16";
   }
 
   return payload;

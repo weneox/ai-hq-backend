@@ -1,19 +1,20 @@
 // src/routes/api/proposals.js
 //
-// FINAL v2.0 — proposals routes for drafting flow + latest content support
+// FINAL v3.0 — proposals routes for drafting flow + latest content support
 //
 // Flow:
 // pending -> approve -> in_progress (drafting) -> content draft generated
 // final content approve/publish handled elsewhere
 //
 // Goals:
-// ✅ GET /api/proposals?status=... supports latestContent
+// ✅ GET /api/proposals?status=... supports latest content
 // ✅ Approve => in_progress + create job + notify n8n
 // ✅ Reject => rejected
 // ✅ request-changes => return latest draft-like contentId
 // ✅ publish => return latest approved draft contentId
 // ✅ Stable DB + memory fallback
 // ✅ Better payload/title/topic passing to n8n
+// ✅ Reel / Runway aware extra payload
 
 import express from "express";
 import { cfg } from "../../config.js";
@@ -77,6 +78,69 @@ function safeTopic(p) {
   );
 }
 
+function safeFormat(p) {
+  const payload = safePayload(p);
+  return fixText(
+    String(payload?.format || payload?.postType || payload?.post_type || "").trim().toLowerCase()
+  );
+}
+
+function safeAspectRatio(p) {
+  const payload = safePayload(p);
+  return fixText(
+    String(
+      payload?.aspectRatio ||
+      payload?.aspect_ratio ||
+      payload?.visualPlan?.aspectRatio ||
+      ""
+    ).trim()
+  );
+}
+
+function safeVisualPreset(p) {
+  const payload = safePayload(p);
+  return fixText(
+    String(
+      payload?.visualPlan?.visualPreset ||
+      payload?.visualPreset ||
+      ""
+    ).trim()
+  );
+}
+
+function safeImagePrompt(p) {
+  const payload = safePayload(p);
+  return fixText(
+    String(payload?.imagePrompt || payload?.assetBrief?.imagePrompt || "").trim()
+  );
+}
+
+function safeVideoPrompt(p) {
+  const payload = safePayload(p);
+  return fixText(
+    String(payload?.videoPrompt || payload?.assetBrief?.videoPrompt || "").trim()
+  );
+}
+
+function safeVoiceoverText(p) {
+  const payload = safePayload(p);
+  return fixText(
+    String(payload?.voiceoverText || payload?.assetBrief?.voiceoverText || "").trim()
+  );
+}
+
+function safeNeededAssets(p) {
+  const payload = safePayload(p);
+  const arr = payload?.neededAssets || payload?.assetBrief?.neededAssets || [];
+  return Array.isArray(arr) ? arr.map((x) => String(x).trim()).filter(Boolean).slice(0, 12) : [];
+}
+
+function safeReelMeta(p) {
+  const payload = safePayload(p);
+  const rm = asObj(payload?.reelMeta);
+  return Object.keys(rm).length ? deepFix(rm) : null;
+}
+
 function normalizeStatus(x) {
   const s = fixText(String(x || "").trim()) || "pending";
   const allowed = new Set([
@@ -128,7 +192,7 @@ function buildN8nExtra({
   jobId = null,
   reason = "",
 }) {
-  return {
+  return deepFix({
     tenantId,
     proposalId: String(proposal?.id || ""),
     threadId: String(proposal?.thread_id || ""),
@@ -136,12 +200,20 @@ function buildN8nExtra({
     reason: reason || "",
     title: safeTitle(proposal),
     topic: safeTopic(proposal),
+    format: safeFormat(proposal),
+    aspectRatio: safeAspectRatio(proposal),
+    visualPreset: safeVisualPreset(proposal),
+    imagePrompt: safeImagePrompt(proposal),
+    videoPrompt: safeVideoPrompt(proposal),
+    voiceoverText: safeVoiceoverText(proposal),
+    neededAssets: safeNeededAssets(proposal),
+    reelMeta: safeReelMeta(proposal),
     payload: deepFix(proposal?.payload || {}),
     callback: {
       url: "/api/executions/callback",
       tokenHeader: "x-webhook-token",
     },
-  };
+  });
 }
 
 export function proposalsRoutes({ db, wsHub }) {
@@ -333,6 +405,14 @@ export function proposalsRoutes({ db, wsHub }) {
             threadId: p.thread_id,
             title: safeTitle(p),
             topic: safeTopic(p),
+            format: safeFormat(p),
+            aspectRatio: safeAspectRatio(p),
+            visualPreset: safeVisualPreset(p),
+            imagePrompt: safeImagePrompt(p),
+            videoPrompt: safeVideoPrompt(p),
+            voiceoverText: safeVoiceoverText(p),
+            neededAssets: safeNeededAssets(p),
+            reelMeta: safeReelMeta(p),
             payload: deepFix(p.payload),
           },
         });
@@ -461,6 +541,14 @@ export function proposalsRoutes({ db, wsHub }) {
           threadId: p2.thread_id,
           title: safeTitle(p2),
           topic: safeTopic(p2),
+          format: safeFormat(p2),
+          aspectRatio: safeAspectRatio(p2),
+          visualPreset: safeVisualPreset(p2),
+          imagePrompt: safeImagePrompt(p2),
+          videoPrompt: safeVideoPrompt(p2),
+          voiceoverText: safeVoiceoverText(p2),
+          neededAssets: safeNeededAssets(p2),
+          reelMeta: safeReelMeta(p2),
           payload: deepFix(p2.payload),
         },
       });

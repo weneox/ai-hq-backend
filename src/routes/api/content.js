@@ -1,18 +1,20 @@
-// src/routes/api/content.js (FINAL v2.1 — Draft -> Asset Generate -> Publish)
+// src/routes/api/content.js
+// FINAL v3.0 — Draft -> Asset/Video Generate -> Publish
 //
 // Endpoints:
 // - GET  /api/content?proposalId=uuid
 // - POST /api/content/:id/feedback { feedbackText, tenantId? }
 //      -> draft.regenerating + job + n8n content.revise
 // - POST /api/content/:id/approve  { tenantId? }
-//      -> asset.requested + job + n8n content.assets.generate
+//      -> asset.requested + job + n8n content.assets.generate OR content.video.generate
 //      (NOTE: does NOT set proposal=approved anymore)
 // - POST /api/content/:id/publish  { tenantId? }
 //      -> publish.requested + job + n8n content.publish
 //
 // Notes:
-// - Proposal moves to "approved" ONLY after assets are ready (callback side).
+// - Proposal moves to "approved" ONLY after assets/video are ready (callback side).
 // - Reject stays in proposals route.
+// - Reel/video flows are routed through content.video.generate.
 
 import express from "express";
 import crypto from "crypto";
@@ -39,6 +41,7 @@ import { pushBroadcastToCeo } from "../../services/pushBroadcast.js";
 import { notifyN8n } from "../../services/n8nNotify.js";
 
 /** ---------------- helpers ---------------- */
+
 function normalizeContentPack(x) {
   if (!x) return null;
   if (typeof x === "string") {
@@ -60,29 +63,150 @@ function pickTenantId(req) {
   );
 }
 
+function asObj(x) {
+  return x && typeof x === "object" && !Array.isArray(x) ? x : {};
+}
+
+function asArr(x) {
+  return Array.isArray(x) ? x : [];
+}
+
+function safeLower(x) {
+  return String(x || "").trim().toLowerCase();
+}
+
 function packType(pack) {
   if (!pack || typeof pack !== "object") return "";
-  return String(pack.post_type || pack.postType || pack.format || pack.type || "").toLowerCase();
+  return String(
+    pack.post_type ||
+      pack.postType ||
+      pack.format ||
+      pack.type ||
+      ""
+  ).toLowerCase();
+}
+
+function pickAspectRatio(pack) {
+  if (!pack || typeof pack !== "object") return "";
+  return String(
+    pack.aspectRatio ||
+      pack.aspect_ratio ||
+      pack?.visualPlan?.aspectRatio ||
+      ""
+  ).trim();
+}
+
+function pickVisualPreset(pack) {
+  if (!pack || typeof pack !== "object") return "";
+  return String(
+    pack?.visualPlan?.visualPreset ||
+      pack?.visualPreset ||
+      ""
+  ).trim();
+}
+
+function pickImagePrompt(pack) {
+  if (!pack || typeof pack !== "object") return "";
+  return fixText(
+    String(pack.imagePrompt || pack?.assetBrief?.imagePrompt || "").trim()
+  );
+}
+
+function pickVideoPrompt(pack) {
+  if (!pack || typeof pack !== "object") return "";
+  return fixText(
+    String(pack.videoPrompt || pack?.assetBrief?.videoPrompt || "").trim()
+  );
+}
+
+function pickVoiceoverText(pack) {
+  if (!pack || typeof pack !== "object") return "";
+  return fixText(
+    String(pack.voiceoverText || pack?.assetBrief?.voiceoverText || "").trim()
+  );
+}
+
+function pickNeededAssets(pack) {
+  if (!pack || typeof pack !== "object") return [];
+  const a = pack.neededAssets || pack?.assetBrief?.neededAssets || [];
+  return Array.isArray(a) ? a.map((x) => String(x).trim()).filter(Boolean).slice(0, 12) : [];
+}
+
+function pickReelMeta(pack) {
+  if (!pack || typeof pack !== "object") return null;
+  const rm = asObj(pack.reelMeta);
+  return Object.keys(rm).length ? deepFix(rm) : null;
+}
+
+function isReelPack(contentPack) {
+  return packType(contentPack) === "reel";
+}
+
+function pickAssetGenerationEvent(contentPack) {
+  return isReelPack(contentPack) ? "content.video.generate" : "content.assets.generate";
+}
+
+function pickAssetGenerationJobType(contentPack) {
+  return isReelPack(contentPack) ? "video.generate" : "asset.generate";
 }
 
 function pickFirstAssetUrl(contentPack) {
   if (!contentPack || typeof contentPack !== "object") return null;
 
   const direct =
-    contentPack.imageUrl ||
-    contentPack.image_url ||
     contentPack.videoUrl ||
     contentPack.video_url ||
+    contentPack.imageUrl ||
+    contentPack.image_url ||
+    contentPack.coverUrl ||
+    contentPack.cover_url ||
+    contentPack.thumbnailUrl ||
+    contentPack.thumbnail_url ||
+    null;
+
+  if (direct) return String(direct);
+
+  const assets = Array.isArray(contentPack.assets) ? contentPack.assets : [];
+  if (!assets.length) return null;
+
+  const preferredVideo = assets.find((a) => {
+    const kind = safeLower(a?.kind || a?.type || a?.mime || "");
+    return kind.includes("video");
+  });
+
+  const preferredImage = assets.find((a) => {
+    const kind = safeLower(a?.kind || a?.type || a?.mime || "");
+    const role = safeLower(a?.role || "");
+    return kind.includes("image") || role === "thumbnail" || role === "cover";
+  });
+
+  const chosen = preferredVideo || preferredImage || assets[0] || null;
+  if (!chosen) return null;
+
+  const u = chosen.url || chosen.secure_url || chosen.publicUrl || chosen.public_url || null;
+  return u ? String(u) : null;
+}
+
+function pickThumbnailUrl(contentPack) {
+  if (!contentPack || typeof contentPack !== "object") return null;
+
+  const direct =
+    contentPack.thumbnailUrl ||
+    contentPack.thumbnail_url ||
     contentPack.coverUrl ||
     contentPack.cover_url ||
     null;
+
   if (direct) return String(direct);
 
-  const a = Array.isArray(contentPack.assets) ? contentPack.assets : [];
-  const first = a[0] || null;
-  if (!first) return null;
+  const assets = Array.isArray(contentPack.assets) ? contentPack.assets : [];
+  const chosen =
+    assets.find((a) => safeLower(a?.role || "") === "thumbnail") ||
+    assets.find((a) => safeLower(a?.role || "") === "cover") ||
+    assets.find((a) => safeLower(a?.kind || a?.type || "") === "image") ||
+    null;
 
-  const u = first.url || first.secure_url || first.publicUrl || null;
+  const u = chosen?.url || chosen?.secure_url || chosen?.publicUrl || null;
   return u ? String(u) : null;
 }
 
@@ -112,10 +236,6 @@ function statusLc(x) {
 
 function isDraftReadyStatus(s) {
   const v = statusLc(s);
-
-  // ✅ important:
-  // UI / backend sometimes keeps proposal in_progress while content row is draft-ready.
-  // To avoid false reject on approve, allow in_progress here too.
   return (
     v === "draft.ready" ||
     v === "draft" ||
@@ -134,7 +254,74 @@ function isPublishRequestedStatus(s) {
   return v === "publish.requested" || v === "publish.queued" || v === "publish.running";
 }
 
+async function dbGetContentById(db, id) {
+  if (!isUuid(id)) return null;
+  const q = await db.query(
+    `select id, proposal_id, thread_id, job_id, status, content_pack, publish, last_feedback, created_at, updated_at
+     from content_items
+     where id = $1::uuid
+     limit 1`,
+    [id]
+  );
+  return q.rows?.[0] || null;
+}
+
+function buildAssetNotifyExtra({
+  tenantId,
+  proposal,
+  row,
+  jobId,
+  contentPack,
+}) {
+  return deepFix({
+    tenantId,
+    proposalId: String(proposal?.id || row?.proposal_id || ""),
+    threadId: String(proposal?.thread_id || row?.thread_id || ""),
+    jobId: jobId || null,
+    contentId: String(row?.id || ""),
+    postType: packType(contentPack),
+    format: packType(contentPack),
+    aspectRatio: pickAspectRatio(contentPack),
+    visualPreset: pickVisualPreset(contentPack),
+    imagePrompt: pickImagePrompt(contentPack),
+    videoPrompt: pickVideoPrompt(contentPack),
+    voiceoverText: pickVoiceoverText(contentPack),
+    neededAssets: pickNeededAssets(contentPack),
+    reelMeta: pickReelMeta(contentPack),
+    contentPack,
+    callback: { url: "/api/executions/callback", tokenHeader: "x-webhook-token" },
+  });
+}
+
+function buildPublishNotifyExtra({
+  tenantId,
+  proposal,
+  row,
+  jobId,
+  contentPack,
+  assetUrl,
+  caption,
+}) {
+  return deepFix({
+    tenantId,
+    proposalId: String(proposal?.id || row?.proposal_id || ""),
+    threadId: String(proposal?.thread_id || row?.thread_id || ""),
+    jobId: jobId || null,
+    contentId: String(row?.id || ""),
+    postType: packType(contentPack),
+    format: packType(contentPack),
+    aspectRatio: pickAspectRatio(contentPack),
+    visualPreset: pickVisualPreset(contentPack),
+    assetUrl,
+    thumbnailUrl: pickThumbnailUrl(contentPack),
+    caption,
+    contentPack,
+    callback: { url: "/api/executions/callback", tokenHeader: "x-webhook-token" },
+  });
+}
+
 /** ---------------- routes ---------------- */
+
 export function contentRoutes({ db, wsHub }) {
   const r = express.Router();
 
@@ -171,37 +358,83 @@ export function contentRoutes({ db, wsHub }) {
         const row = memPatchContentItem(id, { last_feedback: feedbackText, status: "draft.regenerating" });
         if (!row) return okJson(res, { ok: false, error: "content not found", dbDisabled: true });
 
+        const proposal = mem.proposals.get(row.proposal_id) || null;
+
+        const jobId = crypto.randomUUID();
+        mem.jobs.set(jobId, {
+          id: jobId,
+          proposal_id: row.proposal_id,
+          type: "draft.regen",
+          status: "queued",
+          input: {
+            contentId: row.id,
+            proposalId: row.proposal_id,
+            feedbackText,
+            tenantId,
+          },
+          output: {},
+          error: null,
+          created_at: nowIso(),
+          started_at: null,
+          finished_at: null,
+        });
+
+        memPatchContentItem(id, { job_id: jobId });
+
+        if (proposal) {
+          notifyN8n("content.revise", proposal, {
+            tenantId,
+            proposalId: String(proposal.id),
+            threadId: String(proposal.thread_id || proposal.threadId || ""),
+            jobId,
+            contentId: String(row.id),
+            feedbackText,
+            contentPack: normalizeContentPack(row.content_pack) || {},
+            callback: { url: "/api/executions/callback", tokenHeader: "x-webhook-token" },
+          });
+        }
+
         const notif = memCreateNotification({
           recipient: "ceo",
           type: "info",
           title: "Changes requested",
           body: "Draft yenidən hazırlanır…",
-          payload: { contentId: id, proposalId: row.proposal_id },
+          payload: { contentId: id, proposalId: row.proposal_id, jobId },
         });
 
-        wsHub?.broadcast?.({ type: "content.updated", content: row });
+        wsHub?.broadcast?.({ type: "content.updated", content: mem.contentItems.get(id) || row });
+        wsHub?.broadcast?.({ type: "execution.updated", execution: mem.jobs.get(jobId) });
         wsHub?.broadcast?.({ type: "notification.created", notification: notif });
 
-        memAudit("ceo", "content.feedback", "content", id, { proposalId: row.proposal_id });
+        memAudit("ceo", "content.feedback", "content", id, { proposalId: row.proposal_id, jobId });
 
-        return okJson(res, { ok: true, content: row, dbDisabled: true });
+        return okJson(res, { ok: true, content: mem.contentItems.get(id) || row, jobId, dbDisabled: true });
       }
 
       if (!isUuid(id)) return okJson(res, { ok: false, error: "contentId must be uuid" });
+
+      const current = await dbGetContentById(db, id);
+      if (!current) return okJson(res, { ok: false, error: "content not found" });
 
       const updated = await dbUpdateContentItem(db, id, {
         status: "draft.regenerating",
         last_feedback: feedbackText,
       });
-      if (!updated) return okJson(res, { ok: false, error: "content not found" });
 
-      const proposal = await dbGetProposalById(db, String(updated.proposal_id));
+      const proposal = await dbGetProposalById(db, String(current.proposal_id));
+      let job = null;
+
       if (proposal) {
-        const job = await dbCreateJob(db, {
+        job = await dbCreateJob(db, {
           proposalId: proposal.id,
           type: "draft.regen",
           status: "queued",
-          input: { contentId: updated.id, feedbackText },
+          input: {
+            contentId: updated.id,
+            proposalId: proposal.id,
+            feedbackText,
+            tenantId,
+          },
         });
 
         await dbUpdateContentItem(db, updated.id, { job_id: job?.id || updated.job_id });
@@ -213,6 +446,7 @@ export function contentRoutes({ db, wsHub }) {
           jobId: job?.id || null,
           contentId: String(updated.id),
           feedbackText,
+          contentPack: normalizeContentPack(updated.content_pack) || {},
           callback: { url: "/api/executions/callback", tokenHeader: "x-webhook-token" },
         });
 
@@ -224,28 +458,28 @@ export function contentRoutes({ db, wsHub }) {
         type: "info",
         title: "Changes requested",
         body: "Draft yenidən hazırlanır…",
-        payload: { contentId: id, proposalId: updated.proposal_id },
+        payload: { contentId: id, proposalId: updated.proposal_id, jobId: job?.id || null },
       });
 
-      wsHub?.broadcast?.({ type: "content.updated", content: updated });
+      wsHub?.broadcast?.({ type: "content.updated", content: await dbGetContentById(db, updated.id) });
       wsHub?.broadcast?.({ type: "notification.created", notification: notif });
 
       await pushBroadcastToCeo({
         db,
         title: "Draft yenilənir",
         body: "Rəy göndərildi — n8n draftı yenidən hazırlayır.",
-        data: { type: "draft.regen", contentId: id, proposalId: updated.proposal_id },
+        data: { type: "draft.regen", contentId: id, proposalId: updated.proposal_id, jobId: job?.id || null },
       });
 
-      await dbAudit(db, "ceo", "content.feedback", "content", id, { proposalId: updated.proposal_id });
+      await dbAudit(db, "ceo", "content.feedback", "content", id, { proposalId: updated.proposal_id, jobId: job?.id || null });
 
-      return okJson(res, { ok: true, content: updated });
+      return okJson(res, { ok: true, content: await dbGetContentById(db, updated.id), jobId: job?.id || null });
     } catch (e) {
       return okJson(res, { ok: false, error: "Error", details: { message: String(e?.message || e) } });
     }
   });
 
-  // POST /api/content/:id/approve  -> starts ASSET generation (NOT proposal approved)
+  // POST /api/content/:id/approve  -> starts ASSET/VIDEO generation (NOT proposal approved)
   r.post("/content/:id/approve", async (req, res) => {
     const id = String(req.params.id || "").trim();
     const tenantId = pickTenantId(req);
@@ -277,15 +511,29 @@ export function contentRoutes({ db, wsHub }) {
           });
         }
 
-        const jobId = crypto.randomUUID();
         const contentPack = normalizeContentPack(row.content_pack) || {};
+        const eventName = pickAssetGenerationEvent(contentPack);
+        const jobType = pickAssetGenerationJobType(contentPack);
+        const jobId = crypto.randomUUID();
 
         mem.jobs.set(jobId, {
           id: jobId,
           proposal_id: row.proposal_id,
-          type: "asset.generate",
+          type: jobType,
           status: "queued",
-          input: { contentId: id, contentPack, postType: packType(contentPack) },
+          input: {
+            contentId: id,
+            contentPack,
+            postType: packType(contentPack),
+            format: packType(contentPack),
+            aspectRatio: pickAspectRatio(contentPack),
+            visualPreset: pickVisualPreset(contentPack),
+            imagePrompt: pickImagePrompt(contentPack),
+            videoPrompt: pickVideoPrompt(contentPack),
+            voiceoverText: pickVoiceoverText(contentPack),
+            neededAssets: pickNeededAssets(contentPack),
+            reelMeta: pickReelMeta(contentPack),
+          },
           output: {},
           error: null,
           created_at: nowIso(),
@@ -300,39 +548,36 @@ export function contentRoutes({ db, wsHub }) {
 
         const p = mem.proposals.get(row.proposal_id) || null;
         if (p) {
-          notifyN8n("content.assets.generate", p, {
+          notifyN8n(eventName, p, buildAssetNotifyExtra({
             tenantId,
-            proposalId: String(p.id),
-            threadId: String(p.thread_id || p.threadId || ""),
+            proposal: p,
+            row: updated || row,
             jobId,
-            contentId: String(id),
-            postType: packType(contentPack),
             contentPack,
-            callback: { url: "/api/executions/callback", tokenHeader: "x-webhook-token" },
-          });
+          }));
         }
 
         const notif = memCreateNotification({
           recipient: "ceo",
           type: "info",
-          title: "Assets generating",
-          body: "Şəkil/video/karusel hazırlanır…",
-          payload: { contentId: id, proposalId: row.proposal_id, jobId },
+          title: isReelPack(contentPack) ? "Video generating" : "Assets generating",
+          body: isReelPack(contentPack) ? "Reel/video hazırlanır…" : "Şəkil/video/karusel hazırlanır…",
+          payload: { contentId: id, proposalId: row.proposal_id, jobId, jobType },
         });
 
         wsHub?.broadcast?.({ type: "content.updated", content: updated });
         wsHub?.broadcast?.({ type: "execution.updated", execution: mem.jobs.get(jobId) });
         wsHub?.broadcast?.({ type: "notification.created", notification: notif });
 
-        memAudit("ceo", "content.approve.assets", "content", id, { proposalId: row.proposal_id, jobId });
+        memAudit("ceo", "content.approve.assets", "content", id, { proposalId: row.proposal_id, jobId, jobType });
 
-        return okJson(res, { ok: true, content: updated, jobId, dbDisabled: true });
+        return okJson(res, { ok: true, content: updated, jobId, jobType, dbDisabled: true });
       }
 
       // ========== DB ==========
       if (!isUuid(id)) return okJson(res, { ok: false, error: "contentId must be uuid" });
 
-      const row = await dbUpdateContentItem(db, id, {});
+      const row = await dbGetContentById(db, id);
       if (!row) return okJson(res, { ok: false, error: "content not found" });
 
       const st = statusLc(row.status);
@@ -357,11 +602,26 @@ export function contentRoutes({ db, wsHub }) {
       if (!proposal) return okJson(res, { ok: false, error: "proposal not found for content" });
 
       const contentPack = normalizeContentPack(row.content_pack) || {};
+      const eventName = pickAssetGenerationEvent(contentPack);
+      const jobType = pickAssetGenerationJobType(contentPack);
+
       const job = await dbCreateJob(db, {
         proposalId: proposal.id,
-        type: "asset.generate",
+        type: jobType,
         status: "queued",
-        input: { contentId: row.id, contentPack, postType: packType(contentPack) },
+        input: {
+          contentId: row.id,
+          contentPack,
+          postType: packType(contentPack),
+          format: packType(contentPack),
+          aspectRatio: pickAspectRatio(contentPack),
+          visualPreset: pickVisualPreset(contentPack),
+          imagePrompt: pickImagePrompt(contentPack),
+          videoPrompt: pickVideoPrompt(contentPack),
+          voiceoverText: pickVoiceoverText(contentPack),
+          neededAssets: pickNeededAssets(contentPack),
+          reelMeta: pickReelMeta(contentPack),
+        },
       });
 
       const updated = await dbUpdateContentItem(db, row.id, {
@@ -369,42 +629,42 @@ export function contentRoutes({ db, wsHub }) {
         job_id: job?.id || row.job_id,
       });
 
-      notifyN8n("content.assets.generate", proposal, {
+      notifyN8n(eventName, proposal, buildAssetNotifyExtra({
         tenantId,
-        proposalId: String(proposal.id),
-        threadId: String(proposal.thread_id),
+        proposal,
+        row: updated || row,
         jobId: job?.id || null,
-        contentId: String(row.id),
-        postType: packType(contentPack),
         contentPack,
-        callback: { url: "/api/executions/callback", tokenHeader: "x-webhook-token" },
-      });
+      }));
 
       const notif = await dbCreateNotification(db, {
         recipient: "ceo",
         type: "info",
-        title: "Assets generating",
-        body: "Şəkil/video/karusel hazırlanır…",
-        payload: { contentId: row.id, proposalId: proposal.id, jobId: job?.id || null },
+        title: isReelPack(contentPack) ? "Video generating" : "Assets generating",
+        body: isReelPack(contentPack) ? "Reel/video hazırlanır…" : "Şəkil/video/karusel hazırlanır…",
+        payload: { contentId: row.id, proposalId: proposal.id, jobId: job?.id || null, jobType },
       });
 
-      wsHub?.broadcast?.({ type: "content.updated", content: updated });
+      wsHub?.broadcast?.({ type: "content.updated", content: await dbGetContentById(db, row.id) });
       wsHub?.broadcast?.({ type: "execution.updated", execution: job });
       wsHub?.broadcast?.({ type: "notification.created", notification: notif });
 
       await pushBroadcastToCeo({
         db,
-        title: "Asset hazırlanır",
-        body: "Approve edildi — vizual hazırlanır (n8n).",
-        data: { type: "asset.requested", contentId: row.id, proposalId: proposal.id, jobId: job?.id || null },
+        title: isReelPack(contentPack) ? "Video hazırlanır" : "Asset hazırlanır",
+        body: isReelPack(contentPack)
+          ? "Approve edildi — reel/video hazırlanır."
+          : "Approve edildi — vizual hazırlanır.",
+        data: { type: "asset.requested", contentId: row.id, proposalId: proposal.id, jobId: job?.id || null, jobType },
       });
 
       await dbAudit(db, "ceo", "content.approve.assets", "content", row.id, {
         proposalId: proposal.id,
         jobId: job?.id || null,
+        jobType,
       });
 
-      return okJson(res, { ok: true, content: updated, jobId: job?.id || null });
+      return okJson(res, { ok: true, content: await dbGetContentById(db, row.id), jobId: job?.id || null, jobType });
     } catch (e) {
       return okJson(res, { ok: false, error: "Error", details: { message: String(e?.message || e) } });
     }
@@ -432,7 +692,6 @@ export function contentRoutes({ db, wsHub }) {
           });
         }
 
-        const jobId = crypto.randomUUID();
         const contentPack = normalizeContentPack(row.content_pack) || {};
         const assetUrl = pickFirstAssetUrl(contentPack);
         const caption = buildCaption(contentPack);
@@ -441,12 +700,21 @@ export function contentRoutes({ db, wsHub }) {
           return okJson(res, { ok: false, error: "publish requires assetUrl (missing assets/url)", dbDisabled: true });
         }
 
+        const jobId = crypto.randomUUID();
         mem.jobs.set(jobId, {
           id: jobId,
           proposal_id: row.proposal_id,
           type: "publish",
           status: "queued",
-          input: { contentId: id, contentPack, assetUrl, caption },
+          input: {
+            contentId: id,
+            contentPack,
+            assetUrl,
+            thumbnailUrl: pickThumbnailUrl(contentPack),
+            caption,
+            format: packType(contentPack),
+            aspectRatio: pickAspectRatio(contentPack),
+          },
           output: {},
           error: null,
           created_at: nowIso(),
@@ -458,17 +726,15 @@ export function contentRoutes({ db, wsHub }) {
 
         const p = mem.proposals.get(row.proposal_id) || null;
         if (p) {
-          notifyN8n("content.publish", p, {
+          notifyN8n("content.publish", p, buildPublishNotifyExtra({
             tenantId,
-            proposalId: String(p.id),
-            threadId: String(p.thread_id || p.threadId || ""),
+            proposal: p,
+            row,
             jobId,
-            contentId: String(id),
+            contentPack,
             assetUrl,
             caption,
-            contentPack,
-            callback: { url: "/api/executions/callback", tokenHeader: "x-webhook-token" },
-          });
+          }));
         }
 
         const notif = memCreateNotification({
@@ -490,7 +756,7 @@ export function contentRoutes({ db, wsHub }) {
 
       if (!isUuid(id)) return okJson(res, { ok: false, error: "contentId must be uuid" });
 
-      const row = await dbUpdateContentItem(db, id, {});
+      const row = await dbGetContentById(db, id);
       if (!row) return okJson(res, { ok: false, error: "content not found" });
 
       const st = statusLc(row.status);
@@ -513,7 +779,15 @@ export function contentRoutes({ db, wsHub }) {
         proposalId: proposal.id,
         type: "publish",
         status: "queued",
-        input: { contentId: row.id, contentPack, assetUrl, caption },
+        input: {
+          contentId: row.id,
+          contentPack,
+          assetUrl,
+          thumbnailUrl: pickThumbnailUrl(contentPack),
+          caption,
+          format: packType(contentPack),
+          aspectRatio: pickAspectRatio(contentPack),
+        },
       });
 
       const updated = await dbUpdateContentItem(db, row.id, {
@@ -521,17 +795,15 @@ export function contentRoutes({ db, wsHub }) {
         job_id: job?.id || row.job_id,
       });
 
-      notifyN8n("content.publish", proposal, {
+      notifyN8n("content.publish", proposal, buildPublishNotifyExtra({
         tenantId,
-        proposalId: String(proposal.id),
-        threadId: String(proposal.thread_id),
+        proposal,
+        row: updated || row,
         jobId: job?.id || null,
-        contentId: String(row.id),
+        contentPack,
         assetUrl,
         caption,
-        contentPack,
-        callback: { url: "/api/executions/callback", tokenHeader: "x-webhook-token" },
-      });
+      }));
 
       const notif = await dbCreateNotification(db, {
         recipient: "ceo",
@@ -541,7 +813,7 @@ export function contentRoutes({ db, wsHub }) {
         payload: { contentId: row.id, proposalId: proposal.id, jobId: job?.id || null },
       });
 
-      wsHub?.broadcast?.({ type: "content.updated", content: updated });
+      wsHub?.broadcast?.({ type: "content.updated", content: await dbGetContentById(db, row.id) });
       wsHub?.broadcast?.({ type: "execution.updated", execution: job });
       wsHub?.broadcast?.({ type: "notification.created", notification: notif });
 

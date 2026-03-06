@@ -1,7 +1,4 @@
-// src/config.js (FINAL v2.6.1 — FIXED)
-// ✅ Adds PUBLIC_BASE_URL (needed for absoluteCallbackUrl -> n8n callback)
-// ✅ Keeps all your v2.6 fields unchanged
-// ✅ Adds PUBLIC_BASE_URL comment + safe default ("") so local dev works
+// src/config.js
 
 function s(v, d = "") {
   return String(v ?? d).trim();
@@ -34,11 +31,8 @@ export const cfg = {
   DATABASE_URL: s(process.env.DATABASE_URL, ""),
   WS_AUTH_TOKEN: s(process.env.WS_AUTH_TOKEN, ""),
 
-  // ✅ REQUIRED for building absolute callback URLs for n8n callbacks
-  // Example (Railway): https://ai-hq-backend-production.up.railway.app
-  PUBLIC_BASE_URL: s(process.env.PUBLIC_BASE_URL, ""), // ✅ NEW (FIX)
+  PUBLIC_BASE_URL: s(process.env.PUBLIC_BASE_URL, ""),
 
-  // If set => required for /api/debug/openai and /api/push/test
   DEBUG_API_TOKEN: s(process.env.DEBUG_API_TOKEN, ""),
 
   OPENAI_API_KEY: s(process.env.OPENAI_API_KEY, ""),
@@ -50,44 +44,37 @@ export const cfg = {
   OPENAI_DEBATE_AGENT_TOKENS: n(process.env.OPENAI_DEBATE_AGENT_TOKENS, 900),
   OPENAI_DEBATE_SYNTH_TOKENS: n(process.env.OPENAI_DEBATE_SYNTH_TOKENS, 1400),
 
-  // HQ -> n8n
-  // ✅ If you set this: "https://neoxcompany.app.n8n.cloud/webhook"
-  // we will route per-event to /aihq-approved, /aihq-publish, etc.
-  N8N_WEBHOOK_BASE: s(process.env.N8N_WEBHOOK_BASE, ""), // ✅ NEW
-  // ✅ Single URL fallback (works even if BASE not set)
+  // NEW: Runway
+  RUNWAY_API_KEY: s(process.env.RUNWAY_API_KEY, ""),
+  RUNWAY_VIDEO_MODEL: s(process.env.RUNWAY_VIDEO_MODEL, "gen4.5"),
+
+  N8N_WEBHOOK_BASE: s(process.env.N8N_WEBHOOK_BASE, ""),
   N8N_WEBHOOK_URL: s(process.env.N8N_WEBHOOK_URL, ""),
   N8N_WEBHOOK_TOKEN: s(process.env.N8N_WEBHOOK_TOKEN, ""),
   N8N_TIMEOUT_MS: n(process.env.N8N_TIMEOUT_MS, 10_000),
-  N8N_RETRIES: n(process.env.N8N_RETRIES, 2), // ✅ NEW
-  N8N_BACKOFF_MS: n(process.env.N8N_BACKOFF_MS, 500), // ✅ NEW
+  N8N_RETRIES: n(process.env.N8N_RETRIES, 2),
+  N8N_BACKOFF_MS: n(process.env.N8N_BACKOFF_MS, 500),
 
-  // n8n -> HQ callback
   N8N_CALLBACK_TOKEN: s(process.env.N8N_CALLBACK_TOKEN, ""),
 
-  // ✅ Telegram (DEFAULT OFF)
   TELEGRAM_ENABLED: b(process.env.TELEGRAM_ENABLED, false),
   TELEGRAM_BOT_TOKEN: s(process.env.TELEGRAM_BOT_TOKEN, ""),
   TELEGRAM_CHAT_ID: s(process.env.TELEGRAM_CHAT_ID, ""),
 
-  // ✅ Web Push
   PUSH_ENABLED: b(process.env.PUSH_ENABLED, true),
   VAPID_PUBLIC_KEY: s(process.env.VAPID_PUBLIC_KEY, ""),
   VAPID_PRIVATE_KEY: s(process.env.VAPID_PRIVATE_KEY, ""),
   VAPID_SUBJECT: s(process.env.VAPID_SUBJECT, "mailto:info@weneox.com"),
 
-  // ✅ SaaS defaults
   DEFAULT_TENANT_KEY: s(process.env.DEFAULT_TENANT_KEY, "neox"),
   DEFAULT_TIMEZONE: s(process.env.DEFAULT_TIMEZONE, "Asia/Baku"),
   DAILY_PUBLISH_HOUR_LOCAL: n(process.env.DAILY_PUBLISH_HOUR_LOCAL, 10),
   DAILY_PUBLISH_MINUTE_LOCAL: n(process.env.DAILY_PUBLISH_MINUTE_LOCAL, 0),
 
-  // ✅ NEW: tenant mode fallback if DB not present or tenant row missing
-  DEFAULT_MODE: mode(process.env.DEFAULT_MODE, "manual"), // "manual" | "auto"
+  DEFAULT_MODE: mode(process.env.DEFAULT_MODE, "manual"),
 
-  // ✅ Cron security
   CRON_SECRET: s(process.env.CRON_SECRET, ""),
 
-  // ✅ Meta / Instagram publish
   META_PAGE_ACCESS_TOKEN: s(process.env.META_PAGE_ACCESS_TOKEN, ""),
   META_PAGE_ID: s(process.env.META_PAGE_ID, "1034647199727587"),
   META_IG_USER_ID: s(process.env.META_IG_USER_ID, "17841473956986087"),

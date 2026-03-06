@@ -15,6 +15,10 @@ const ALLOWED_VISUAL_PRESETS = [
   "ai_core",
   "automation_device",
   "abstract_tech_scene",
+  "chatbot_operator",
+  "sales_flow_machine",
+  "support_ai_hub",
+  "workflow_engine",
 ];
 
 export function normalizeFormat(format) {
@@ -55,7 +59,7 @@ export function sanitizeVisualText(x, max = 260) {
       ""
     )
     .replace(
-      /\b(poster|campaign|advertisement|advertising|commercial|editorial|branded|marketing|social cover|cover design|thumbnail design)\b/gi,
+      /\b(poster|campaign|advertisement|advertising|commercial layout|editorial layout|branded layout|marketing layout|social cover|cover design|thumbnail design)\b/gi,
       ""
     )
     .replace(
@@ -110,7 +114,7 @@ export function detectTopicFamily(topic, hook, caption) {
   const t = lower([topic, hook, caption].filter(Boolean).join(" "));
 
   if (
-    /\b(chatbot|assistant|virtual assistant|voice assistant|customer support|support|receptionist|call handling|whatsapp|instagram dm|messenger|faq)\b/.test(
+    /\b(chatbot|assistant|virtual assistant|voice assistant|customer support|support|receptionist|call handling|whatsapp|instagram dm|messenger|faq|conversation|reply)\b/.test(
       t
     )
   ) {
@@ -147,7 +151,7 @@ export function detectTopicFamily(topic, hook, caption) {
     return "commerce_automation";
   }
   if (
-    /\b(logistics|routing|field operations|service routing|coordination|workflow|task routing|operations)\b/.test(
+    /\b(logistics|routing|field operations|service routing|coordination|workflow|task routing|operations|process)\b/.test(
       t
     )
   ) {
@@ -174,16 +178,16 @@ export function pickVisualPresetFromTopicFamily(topicFamily, currentPreset) {
   const p = String(currentPreset || "").trim();
   if (ALLOWED_VISUAL_PRESETS.includes(p)) return p;
 
-  if (topicFamily === "conversational_ai") return "robotic_unit";
-  if (topicFamily === "sales_automation") return "automation_device";
-  if (topicFamily === "hr_automation") return "automation_device";
+  if (topicFamily === "conversational_ai") return "chatbot_operator";
+  if (topicFamily === "sales_automation") return "sales_flow_machine";
+  if (topicFamily === "hr_automation") return "workflow_engine";
   if (topicFamily === "insight_automation") return "ai_core";
   if (topicFamily === "content_automation") return "automation_device";
-  if (topicFamily === "booking_automation") return "automation_device";
-  if (topicFamily === "commerce_automation") return "automation_device";
-  if (topicFamily === "ops_automation") return "automation_device";
+  if (topicFamily === "booking_automation") return "support_ai_hub";
+  if (topicFamily === "commerce_automation") return "sales_flow_machine";
+  if (topicFamily === "ops_automation") return "workflow_engine";
   if (topicFamily === "education_automation") return "abstract_tech_scene";
-  if (topicFamily === "real_estate_automation") return "automation_device";
+  if (topicFamily === "real_estate_automation") return "support_ai_hub";
   if (topicFamily === "future_ai") return "ai_core";
 
   return "abstract_tech_scene";
@@ -201,6 +205,66 @@ export function presetStyleBlock(preset) {
         "service-machine silhouette",
         "engineered metal surfaces",
         "subtle communication light arcs",
+      ],
+    };
+  }
+
+  if (preset === "chatbot_operator") {
+    return {
+      style:
+        "Premium conversational AI visual, elegant humanoid or device-like assistant presence, dark studio atmosphere, refined cyan edge light, premium industrial design, believable futuristic service aesthetic",
+      composition:
+        "One dominant assistant-like subject, premium center-right or right focal bias, calm open surrounding space, cinematic depth, no interface clutter",
+      elements: [
+        "assistant-like machine presence",
+        "communication light arcs",
+        "subtle signal particles",
+        "premium service intelligence motif",
+      ],
+    };
+  }
+
+  if (preset === "support_ai_hub") {
+    return {
+      style:
+        "Premium service orchestration hub visual, dark graphite environment, elegant communication energy routes, refined AI support atmosphere, believable futuristic business-tech realism",
+      composition:
+        "One dominant central support hub or communication core, clean surrounding negative space, premium depth layering, controlled glow and signal rhythm",
+      elements: [
+        "support hub",
+        "communication signal routes",
+        "service coordination energy",
+        "refined intelligent control center",
+      ],
+    };
+  }
+
+  if (preset === "sales_flow_machine") {
+    return {
+      style:
+        "Premium sales automation machine visual, engineered funnel-like technology object, dark studio environment, glass-metal precision detailing, refined luminous data movement",
+      composition:
+        "One dominant funnel or routing machine object, lower-right or center-right subject placement, premium spacious composition, controlled depth and material clarity",
+      elements: [
+        "sales routing machine",
+        "structured data capsules",
+        "conversion flow channels",
+        "precision automation rails",
+      ],
+    };
+  }
+
+  if (preset === "workflow_engine") {
+    return {
+      style:
+        "Premium workflow engine visual, industrial-grade orchestration module, deep graphite space, cyan-blue signal lines, elegant moving energy channels, believable system logic made physical",
+      composition:
+        "One dominant engine-like subject, right-side or central focal mass, clean calm support space, premium cinematic depth, no UI fragments",
+      elements: [
+        "workflow engine",
+        "orchestration rails",
+        "signal routes",
+        "precision system chambers",
       ],
     };
   }
@@ -253,8 +317,8 @@ export function topicFamilyElements(topicFamily) {
   const map = {
     conversational_ai: [
       "communication signal arcs",
-      "intelligent service presence",
-      "assistant-like machine behavior",
+      "assistant-like intelligence presence",
+      "service response energy",
     ],
     sales_automation: [
       "routing channels",
@@ -327,7 +391,7 @@ export function normalizeFrame(frame, idx, format) {
     subline: truncate(fixMojibake(f.subline || ""), 240),
     layout: sanitizeVisualText(f.layout || "", 260),
     visualElements: sanitizeVisualElements(asArr(f.visualElements)),
-    motion: truncate(fixMojibake(f.motion || ""), 160),
+    motion: truncate(fixMojibake(f.motion || ""), 180),
     durationSec: Number.isFinite(Number(f.durationSec)) ? Number(f.durationSec) : 0,
   };
 }
@@ -378,8 +442,15 @@ export function buildFallbackFrame({
       headline,
       subline,
       visualElements: uniqStrings([...presetPack.elements, ...topicEls]).slice(0, 6),
-      motion: format === "reel" ? "subtle push-in camera movement" : "",
-      durationSec: format === "reel" ? 2 : 0,
+      motion:
+        format === "reel"
+          ? idx === 1
+            ? "slow cinematic push-in"
+            : idx === total
+            ? "controlled resolving camera drift"
+            : "subtle orbital or parallax movement"
+          : "",
+      durationSec: format === "reel" ? (idx === 1 ? 4 : idx === total ? 3 : 3) : 0,
     },
     idx,
     format
@@ -464,7 +535,7 @@ export function ensureFrames(
       out = base;
     }
 
-    if (out.length > 6) out = out.slice(0, 6);
+    if (out.length > 4) out = out.slice(0, 4);
 
     return out.map((x, i) => ({
       ...x,
@@ -472,8 +543,12 @@ export function ensureFrames(
       frameType: "scene",
       durationSec:
         Number.isFinite(Number(x.durationSec)) && Number(x.durationSec) > 0
-          ? Number(x.durationSec)
-          : 2,
+          ? Math.max(2, Math.min(5, Number(x.durationSec)))
+          : i === 0
+          ? 4
+          : i === out.length - 1
+          ? 3
+          : 3,
     }));
   }
 
@@ -587,7 +662,7 @@ export function buildFallbackImagePrompt(payload) {
     "Prefer one dominant focal subject, not many competing objects.",
     "Use premium industrial materials, engineered surfaces, controlled reflections, refined atmosphere, and cinematic depth.",
     "Keep the left side cleaner and calmer, but do not bury it under fog, blur mass, or muddy black overlays.",
-    "Avoid poster layout, website hero look, dashboard look, app UI, floating interface cards, or software screen aesthetics.",
+    "Avoid poster layout, website hero look, dashboard look, app UI, floating interface cards, software screens, or UX mockup aesthetics.",
     "If a device appears, its display must remain abstract and unreadable, using only ambient gradients or non-readable luminous surfaces.",
     "No readable text, no letters, no words, no numbers, no labels, no logos, no symbols, no fake branding, no interface details.",
     aspectLine,
@@ -620,7 +695,7 @@ export function buildSlideVisualPrompt({
     format === "carousel"
       ? `Create a premium text-free futuristic technology scene for NEOX carousel slide ${f.index} of ${totalSlides}.`
       : format === "reel"
-      ? `Create a premium text-free futuristic technology scene for NEOX reel scene ${f.index} of ${totalSlides}.`
+      ? `Create a premium text-free cinematic technology scene for NEOX reel scene ${f.index} of ${totalSlides}.`
       : "Create a premium text-free futuristic technology scene for a NEOX social post.",
     p.topic ? `Topic context: ${p.topic}.` : "",
     `Visual preset: ${preset}.`,
@@ -638,11 +713,14 @@ export function buildSlideVisualPrompt({
     asArr(f.visualElements).length
       ? `Elements: ${asArr(f.visualElements).join(", ")}.`
       : `Elements: ${presetBlock.elements.join(", ")}.`,
-    "Scene only. Final readable text will be placed later by a separate render engine.",
+    f.motion ? `Camera / motion direction: ${sanitizeVisualText(f.motion, 160)}.` : "",
+    format === "reel"
+      ? "This must feel like one scene from a coherent premium commercial video with believable continuity and cinematic motion."
+      : "Scene only. Final readable text will be placed later by a separate render engine.",
     "Prefer one dominant focal subject and a minimal number of supporting elements.",
-    "Use premium industrial materials, refined depth separation, controlled glow, and elegant studio or high-tech atmosphere.",
+    "Use premium industrial materials, refined depth separation, controlled glow, elegant studio or high-tech atmosphere, and realistic cinematic lighting.",
     "Keep the left side calmer and more open without heavy blur wall, oversized fog, or muddy dark overlay.",
-    "Avoid website sections, landing pages, dashboard scenes, app screens, social template layout, poster composition, or interface details.",
+    "Avoid website sections, landing pages, dashboard scenes, app screens, social template layout, poster composition, UX shots, or interface details.",
     "If a screen or device appears, keep it abstract and unreadable with ambient light only.",
     "No readable text, no letters, no words, no numbers, no labels, no logos, no symbols, no fake branding, no UI.",
     aspectLine,
@@ -694,7 +772,11 @@ export function buildSlidesFromFrames(payload) {
       totalSlides,
       renderHints: buildRenderHints(f, format, idx, totalSlides),
       visualDirection: truncate(
-        [f.layout || "", asArr(f.visualElements).join(", "), f.motion ? `Motion mood: ${f.motion}` : ""]
+        [
+          f.layout || "",
+          asArr(f.visualElements).join(", "),
+          f.motion ? `Motion mood: ${f.motion}` : "",
+        ]
           .filter(Boolean)
           .join(" | "),
         400
@@ -714,6 +796,6 @@ export function normalizeNeededAssets(srcAssets, format) {
   const incoming = uniqStrings(asArr(srcAssets));
   if (incoming.length) return incoming.slice(0, 10);
 
-  if (format === "reel") return ["video", "image", "icons", "mockups"];
+  if (format === "reel") return ["video", "image", "thumbnail", "icons", "mockups"];
   return ["image", "icons", "mockups"];
 }

@@ -1,18 +1,18 @@
 // src/routes/api/media.js
 //
-// FINAL v2.0 — Together image route for premium tech-scene pipeline
+// FINAL v2.1 — Together image + Runway video routes
 //
 // Goals:
-// ✅ Accept prompt
-// ✅ Accept topic + visualPreset for stronger image direction
-// ✅ Normalize aspect ratio / width / height
-// ✅ Keep Together pipeline compatible with final togetherImage.js
-// ✅ Return useful debug/meta fields for n8n / backend inspection
+// ✅ Keep /media/image working
+// ✅ Mount /media/video/runway
+// ✅ Single media router entrypoint
+// ✅ Compatible with existing api/index.js -> mediaRoutes()
 
 import express from "express";
 import { okJson, clamp } from "../../utils/http.js";
 import { fixText } from "../../utils/textFix.js";
 import { togetherGenerateImage } from "../../services/togetherImage.js";
+import videoRouter from "./media/video.js";
 
 function clean(x) {
   return String(x || "").trim();
@@ -52,6 +52,10 @@ function positiveNum(v, fallback) {
 export function mediaRoutes() {
   const r = express.Router();
 
+  // =========================
+  // IMAGE
+  // POST /api/media/image
+  // =========================
   r.post("/media/image", async (req, res) => {
     const prompt = fixText(clean(req.body?.prompt));
     const topic = fixText(clean(req.body?.topic));
@@ -105,6 +109,12 @@ export function mediaRoutes() {
       });
     }
   });
+
+  // =========================
+  // VIDEO
+  // /api/media/video/runway
+  // =========================
+  r.use("/media", videoRouter);
 
   return r;
 }

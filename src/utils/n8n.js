@@ -1,5 +1,13 @@
 // src/utils/n8n.js
-// FINAL v2.0 — Enterprise grade (UTF-8 safe + structured JSON + exponential retry + idempotent + execution aware)
+// FINAL v3.0 — Enterprise grade
+// ✅ UTF-8 safe
+// ✅ structured JSON normalize
+// ✅ circular-safe stringify
+// ✅ exponential retry
+// ✅ Retry-After support
+// ✅ idempotency + correlation id
+// ✅ text/json response tolerant
+// ✅ n8n / Runway friendly diagnostics
 
 import crypto from "crypto";
 
@@ -35,7 +43,15 @@ function normalizeForJson(x) {
 
 function safeJsonStringify(obj) {
   try {
-    return JSON.stringify(normalizeForJson(obj ?? {}));
+    const seen = new WeakSet();
+
+    return JSON.stringify(normalizeForJson(obj ?? {}), (key, value) => {
+      if (typeof value === "object" && value !== null) {
+        if (seen.has(value)) return "[Circular]";
+        seen.add(value);
+      }
+      return value;
+    });
   } catch {
     return JSON.stringify({});
   }
@@ -57,6 +73,39 @@ function generateIdempotencyKey() {
   return crypto.randomBytes(16).toString("hex");
 }
 
+function parseRetryAfterMs(resp) {
+  try {
+    const raw = resp?.headers?.get?.("retry-after");
+    if (!raw) return 0;
+
+    const sec = Number(raw);
+    if (Number.isFinite(sec) && sec > 0) return sec * 1000;
+
+    const dt = new Date(raw).getTime();
+    if (Number.isFinite(dt)) {
+      const diff = dt - Date.now();
+      return diff > 0 ? diff : 0;
+    }
+
+    return 0;
+  } catch {
+    return 0;
+  }
+}
+
+function buildErrorMessage(json, text, fallback = "HTTP error") {
+  if (json && typeof json === "object") {
+    return (
+      json.error ||
+      json.message ||
+      json.details?.message ||
+      text ||
+      fallback
+    );
+  }
+  return text || fallback;
+}
+
 export async function postToN8n({
   url,
   token = "",
@@ -74,7 +123,11 @@ export async function postToN8n({
   const timeout = Math.max(1500, Number(timeoutMs) || 10_000);
 
   const idempotencyKey = generateIdempotencyKey();
-  const correlationId = requestId || crypto.randomUUID?.() || generateIdempotencyKey();
+  const correlationId =
+    requestId ||
+    (typeof crypto.randomUUID === "function" ? crypto.randomUUID() : generateIdempotencyKey());
+
+  const body = safeJsonStringify(payload);
 
   let lastErr = null;
 
@@ -85,15 +138,13 @@ export async function postToN8n({
     try {
       const headers = {
         "Content-Type": "application/json; charset=utf-8",
-        Accept: "application/json, text/plain;q=0.9, */*;q=0.8",
+        "Accept": "application/json, text/plain;q=0.9, */*;q=0.8",
         "x-idempotency-key": idempotencyKey,
         "x-correlation-id": correlationId,
       };
 
       if (token) headers["x-webhook-token"] = String(token).trim();
       if (executionId) headers["x-execution-id"] = String(executionId);
-
-      const body = safeJsonStringify(payload);
 
       const resp = await fetch(u, {
         method: "POST",
@@ -105,14 +156,17 @@ export async function postToN8n({
       const rawText = await resp.text().catch(() => "");
       const text = fixMojibake(rawText);
       const json = safeJsonParse(text);
+      const data = json ?? text;
 
       if (resp.ok) {
         return {
           ok: true,
           status: resp.status,
-          data: json ?? text,
+          data,
+          textPreview: typeof text === "string" ? text.slice(0, 300) : "",
           correlationId,
           idempotencyKey,
+          attempt,
         };
       }
 
@@ -121,13 +175,20 @@ export async function postToN8n({
       lastErr = {
         ok: false,
         status: resp.status,
-        error: json?.error || text || "HTTP error",
+        error: fixMojibake(buildErrorMessage(json, text, "HTTP error")),
+        data,
+        textPreview: typeof text === "string" ? text.slice(0, 300) : "",
         correlationId,
+        idempotencyKey,
+        attempt,
       };
 
       if (!retryable || attempt === maxAttempts) return lastErr;
 
-      const wait = baseBackoffMs * Math.pow(2, attempt - 1); // exponential
+      const retryAfterMs = parseRetryAfterMs(resp);
+      const expBackoff = Math.max(0, Number(baseBackoffMs) || 500) * Math.pow(2, attempt - 1);
+      const wait = Math.max(retryAfterMs, expBackoff);
+
       await sleep(wait);
     } catch (e) {
       const msg =
@@ -139,11 +200,13 @@ export async function postToN8n({
         ok: false,
         error: msg,
         correlationId,
+        idempotencyKey,
+        attempt,
       };
 
       if (attempt === maxAttempts) return lastErr;
 
-      const wait = baseBackoffMs * Math.pow(2, attempt - 1);
+      const wait = Math.max(0, Number(baseBackoffMs) || 500) * Math.pow(2, attempt - 1);
       await sleep(wait);
     } finally {
       clearTimeout(timer);
