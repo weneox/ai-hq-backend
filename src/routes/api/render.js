@@ -1,4 +1,15 @@
 // src/routes/api/render.js
+//
+// FINAL v2.0 — robust render route normalization
+//
+// Goals:
+// ✅ Accept slides from direct body, contentPack, payload, proposal.payload
+// ✅ Normalize format / aspectRatio correctly
+// ✅ Normalize bgImageUrl from multiple possible fields
+// ✅ Keep renderHints stable for renderer
+// ✅ Work cleanly with renderSlides.js final renderer
+// ✅ Return consistent render payload
+
 import express from "express";
 import crypto from "crypto";
 import fs from "fs";
@@ -18,89 +29,266 @@ function asArr(x) {
   return Array.isArray(x) ? x : [];
 }
 
+function clean(x) {
+  return String(x || "").trim();
+}
+
 function pickAspectRatioFromFormat(format) {
-  const f = String(format || "").trim().toLowerCase();
+  const f = clean(format).toLowerCase();
   if (f === "reel") return "9:16";
   if (f === "image") return "4:5";
   return "1:1";
 }
 
+function normalizeAspectRatio(v, format = "") {
+  const x = clean(v);
+  if (x === "1:1" || x === "4:5" || x === "9:16") return x;
+  return pickAspectRatioFromFormat(format);
+}
+
+function normalizeFormat(v) {
+  const f = clean(v).toLowerCase();
+  if (f === "image" || f === "carousel" || f === "reel") return f;
+  return "carousel";
+}
+
 function pickSlides(body) {
   const b = asObj(body);
 
-  const direct = asArr(b.slides);
-  if (direct.length) return direct;
+  const directSlides = asArr(b.slides);
+  if (directSlides.length) return directSlides;
 
   const contentPackSlides = asArr(asObj(b.contentPack).slides);
   if (contentPackSlides.length) return contentPackSlides;
 
-  const proposalSlides = asArr(asObj(asObj(b.proposal).payload).slides);
-  if (proposalSlides.length) return proposalSlides;
-
   const payloadSlides = asArr(asObj(b.payload).slides);
   if (payloadSlides.length) return payloadSlides;
+
+  const proposalPayloadSlides = asArr(asObj(asObj(b.proposal).payload).slides);
+  if (proposalPayloadSlides.length) return proposalPayloadSlides;
+
+  const resultSlides = asArr(asObj(b.result).slides);
+  if (resultSlides.length) return resultSlides;
+
+  const resultContentPackSlides = asArr(asObj(asObj(b.result).contentPack).slides);
+  if (resultContentPackSlides.length) return resultContentPackSlides;
 
   return [];
 }
 
-function normalizeSlides(rawSlides, body) {
+function pickTopLevelSources(body) {
   const b = asObj(body);
+
   const contentPack = asObj(b.contentPack);
   const payload = asObj(b.payload);
   const proposalPayload = asObj(asObj(b.proposal).payload);
+  const result = asObj(b.result);
+  const resultContentPack = asObj(result.contentPack);
 
-  const format =
-    String(
-      b.format ||
-        contentPack.format ||
-        payload.format ||
-        proposalPayload.format ||
-        "carousel"
-    )
-      .trim()
-      .toLowerCase();
+  return { b, contentPack, payload, proposalPayload, result, resultContentPack };
+}
 
-  const aspectRatio =
-    String(
-      b.aspectRatio ||
-        contentPack.aspectRatio ||
-        payload.aspectRatio ||
-        proposalPayload.aspectRatio ||
-        pickAspectRatioFromFormat(format)
-    ).trim() || pickAspectRatioFromFormat(format);
+function pickFormat(body) {
+  const { b, contentPack, payload, proposalPayload, result, resultContentPack } =
+    pickTopLevelSources(body);
+
+  return normalizeFormat(
+    b.format ||
+      contentPack.format ||
+      payload.format ||
+      proposalPayload.format ||
+      result.format ||
+      resultContentPack.format ||
+      "carousel"
+  );
+}
+
+function pickAspectRatio(body, format) {
+  const { b, contentPack, payload, proposalPayload, result, resultContentPack } =
+    pickTopLevelSources(body);
+
+  return normalizeAspectRatio(
+    b.aspectRatio ||
+      asObj(contentPack.visualPlan).aspectRatio ||
+      contentPack.aspectRatio ||
+      asObj(payload.visualPlan).aspectRatio ||
+      payload.aspectRatio ||
+      asObj(proposalPayload.visualPlan).aspectRatio ||
+      proposalPayload.aspectRatio ||
+      asObj(result.visualPlan).aspectRatio ||
+      result.aspectRatio ||
+      asObj(resultContentPack.visualPlan).aspectRatio ||
+      resultContentPack.aspectRatio ||
+      pickAspectRatioFromFormat(format),
+    format
+  );
+}
+
+function pickGlobalLogoText(body) {
+  const { b, contentPack, payload, proposalPayload, result, resultContentPack } =
+    pickTopLevelSources(body);
+
+  return clean(
+    b.logoText ||
+      contentPack.logoText ||
+      payload.logoText ||
+      proposalPayload.logoText ||
+      result.logoText ||
+      resultContentPack.logoText ||
+      "NEOX"
+  );
+}
+
+function pickGlobalBadge(body) {
+  const { b, contentPack, payload, proposalPayload, result, resultContentPack } =
+    pickTopLevelSources(body);
+
+  return clean(
+    b.badge ||
+      contentPack.badge ||
+      payload.badge ||
+      proposalPayload.badge ||
+      result.badge ||
+      resultContentPack.badge ||
+      "NEOX"
+  );
+}
+
+function pickGlobalCta(body) {
+  const { b, contentPack, payload, proposalPayload, result, resultContentPack } =
+    pickTopLevelSources(body);
+
+  return clean(
+    b.cta ||
+      contentPack.cta ||
+      payload.cta ||
+      proposalPayload.cta ||
+      result.cta ||
+      resultContentPack.cta ||
+      "Daha çox məlumat üçün bizimlə əlaqə saxlayın"
+  );
+}
+
+function pickGlobalTitleFallback(body) {
+  const { b, contentPack, payload, proposalPayload, result, resultContentPack } =
+    pickTopLevelSources(body);
+
+  return clean(
+    b.title ||
+      contentPack.topic ||
+      contentPack.title ||
+      payload.topic ||
+      payload.title ||
+      proposalPayload.topic ||
+      proposalPayload.title ||
+      result.topic ||
+      result.title ||
+      resultContentPack.topic ||
+      resultContentPack.title ||
+      "Untitled Slide"
+  );
+}
+
+function pickGlobalSubtitleFallback(body) {
+  const { b, contentPack, payload, proposalPayload, result, resultContentPack } =
+    pickTopLevelSources(body);
+
+  return clean(
+    b.subtitle ||
+      contentPack.hook ||
+      payload.hook ||
+      proposalPayload.hook ||
+      result.hook ||
+      resultContentPack.hook ||
+      ""
+  );
+}
+
+function pickBgImageUrl(slide) {
+  const s = asObj(slide);
+  const visualMeta = asObj(s.visualMeta);
+  const media = asObj(s.media);
+  const asset = asObj(s.asset);
+  const image = asObj(s.image);
+
+  return clean(
+    s.bgImageUrl ||
+      s.backgroundUrl ||
+      s.backgroundImageUrl ||
+      s.imageUrl ||
+      s.coverUrl ||
+      s.assetUrl ||
+      s.url ||
+      visualMeta.bgImageUrl ||
+      visualMeta.backgroundUrl ||
+      visualMeta.imageUrl ||
+      media.bgImageUrl ||
+      media.backgroundUrl ||
+      media.imageUrl ||
+      media.url ||
+      asset.url ||
+      image.url ||
+      ""
+  );
+}
+
+function normalizeRenderHints(slide) {
+  const s = asObj(slide);
+  const rh = asObj(s.renderHints);
+
+  return {
+    layoutFamily: clean(rh.layoutFamily || "editorial_left") || "editorial_left",
+    textPosition: clean(rh.textPosition || s.align || "left") || "left",
+    safeArea: clean(rh.safeArea || "left-heavy") || "left-heavy",
+    overlayStrength: clean(rh.overlayStrength || "medium") || "medium",
+    focalBias: clean(rh.focalBias || "right") || "right",
+  };
+}
+
+function normalizeSlides(rawSlides, body) {
+  const format = pickFormat(body);
+  const aspectRatio = pickAspectRatio(body, format);
+  const globalLogoText = pickGlobalLogoText(body);
+  const globalBadge = pickGlobalBadge(body);
+  const globalCta = pickGlobalCta(body);
+  const globalTitleFallback = pickGlobalTitleFallback(body);
+  const globalSubtitleFallback = pickGlobalSubtitleFallback(body);
+
+  const total = asArr(rawSlides).length;
 
   return asArr(rawSlides).map((slide, i) => {
     const s = asObj(slide);
+    const slideNumber = Number(s.slideNumber || s.index || i + 1) || i + 1;
+    const totalSlides = Number(s.totalSlides || total) || total;
 
     return {
       ...s,
-      slideNumber: Number(s.slideNumber || s.index || i + 1),
-      totalSlides: Number(s.totalSlides || rawSlides.length),
-      aspectRatio:
-        String(
-          s.aspectRatio ||
-            asObj(s.visualMeta).aspectRatio ||
-            aspectRatio
-        ).trim() || aspectRatio,
-      bgImageUrl: String(
-        s.bgImageUrl ||
-          s.backgroundUrl ||
-          s.imageUrl ||
-          s.assetUrl ||
-          ""
-      ).trim(),
-      renderHints: {
-        layoutFamily:
-          s?.renderHints?.layoutFamily || "editorial_left",
-        textPosition:
-          s?.renderHints?.textPosition || s.align || "left",
-        safeArea:
-          s?.renderHints?.safeArea || "left-heavy",
-        overlayStrength:
-          s?.renderHints?.overlayStrength || "medium",
-        focalBias:
-          s?.renderHints?.focalBias || "right",
-      },
+      title: clean(s.title || s.headline || s.text || globalTitleFallback || "Untitled Slide"),
+      subtitle: clean(
+        s.subtitle || s.subline || s.kicker || globalSubtitleFallback || ""
+      ),
+      cta: clean(s.cta || (slideNumber === totalSlides ? globalCta : "")),
+      badge: clean(
+        s.badge ||
+          (format === "reel"
+            ? "REEL"
+            : slideNumber === 1
+            ? globalBadge || "NEOX"
+            : slideNumber === totalSlides
+            ? "CTA"
+            : "AI HQ")
+      ),
+      logoText: clean(s.logoText || globalLogoText || "NEOX"),
+      align: clean(s.align || "left") || "left",
+      theme: clean(s.theme || "neox_dark") || "neox_dark",
+      slideNumber,
+      totalSlides,
+      aspectRatio: normalizeAspectRatio(
+        s.aspectRatio || asObj(s.visualMeta).aspectRatio || aspectRatio,
+        format
+      ),
+      bgImageUrl: pickBgImageUrl(s),
+      renderHints: normalizeRenderHints(s),
     };
   });
 }
@@ -110,10 +298,11 @@ export function renderRoutes() {
 
   r.post("/render/slides", async (req, res) => {
     const tenantId = fixText(
-      String(req.body?.tenantId || cfg.DEFAULT_TENANT_KEY || "default").trim()
+      clean(req.body?.tenantId || cfg.DEFAULT_TENANT_KEY || "default")
     );
 
     const rawSlides = pickSlides(req.body);
+
     if (!rawSlides.length) {
       return okJson(res, {
         ok: false,
@@ -131,6 +320,7 @@ export function renderRoutes() {
       }
 
       const slides = normalizeSlides(rawSlides, req.body);
+
       const renderId = crypto.randomUUID();
       const outDir = path.resolve(
         process.cwd(),
@@ -151,6 +341,8 @@ export function renderRoutes() {
       return okJson(res, {
         ok: true,
         renderId,
+        format: pickFormat(req.body),
+        aspectRatio: pickAspectRatio(req.body, pickFormat(req.body)),
         count: assets.length,
         assets,
       });
