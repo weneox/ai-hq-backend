@@ -80,6 +80,41 @@ CORE CREATIVE DIRECTION:
 - Avoid clutter.
 - The most important visual rule is: text-free technology scene with strong composition.
 
+VISUAL PRESET SYSTEM:
+You MUST choose a visual preset for the COVER visual and keep the rest of the visuals coherent with it.
+
+Allowed visualPreset values:
+- robotic_unit
+- ai_core
+- automation_device
+- abstract_tech_scene
+
+Preset meanings:
+
+1. robotic_unit
+- a premium robotic or semi-robotic object
+- elegant service-robot or intelligent machine form
+- premium industrial design
+- often dark studio scene
+- object should feel sculptural and high-end
+
+2. ai_core
+- an abstract AI core, neural core, energy nucleus, or intelligent central module
+- less literal product design
+- more atmospheric and iconic
+- controlled glow, layered depth, premium futuristic form
+- ideal for visionary / awareness themes
+
+3. automation_device
+- a premium engineered technology device, automation terminal, smart module, or control hardware
+- object should feel functional, intelligent, and product-grade
+- ideal for practical business automation themes
+
+4. abstract_tech_scene
+- a clean high-tech environment without needing a literal hero device
+- premium futuristic architecture, abstract light structures, engineered forms, elegant spatial depth
+- ideal when a more atmospheric and less product-centric scene is better
+
 VISUAL RULES:
 - Do NOT rely on AI-generated readable text inside images.
 - Background visuals must be text-free.
@@ -105,6 +140,18 @@ When writing assetBrief.imagePrompt and slides[].visualPrompt:
 - do not ask for social media cover design
 - do not ask for poster-like typography composition
 - do not ask for logos or labels inside the image
+- visual prompts must align with the chosen visualPreset
+
+PRESET SELECTION RULES:
+- Choose exactly one visualPreset for the draft.
+- visualPreset is REQUIRED.
+- The cover slide must follow the chosen visualPreset strongly.
+- Middle slides may become slightly simpler, but must remain visually coherent with the chosen preset.
+- If the topic is visionary, future-looking, or brand-awareness oriented, prefer ai_core or abstract_tech_scene.
+- If the topic is practical, operational, or business-process oriented, prefer automation_device.
+- If the topic benefits from a memorable physical or machine-like hero object, prefer robotic_unit.
+- Avoid changing visualPreset from slide to slide unless absolutely necessary.
+- Maintain one visual language across the whole set.
 
 Return STRICT JSON only.
 
@@ -124,6 +171,7 @@ JSON SCHEMA:
   "hashtags": ["#..."],
 
   "visualPlan": {
+    "visualPreset": "robotic_unit|ai_core|automation_device|abstract_tech_scene",
     "style": "string",
     "aspectRatio": "1:1|4:5|9:16",
     "composition": "string",
@@ -190,29 +238,36 @@ STRICT OUTPUT RULES:
 8. Every slides[].visualPrompt must describe a TEXT-FREE premium technology visual.
 9. Every slides[].visualPrompt must describe a scene, object, environment, or atmosphere only, not final typeset composition.
 10. visualPlan.textOnVisual must be an empty array.
-11. If FORMAT = image:
+11. visualPlan.visualPreset is REQUIRED and must be one of:
+   - robotic_unit
+   - ai_core
+   - automation_device
+   - abstract_tech_scene
+12. If FORMAT = image:
    - visualPlan.frames must contain exactly 1 item
    - slides[] must contain exactly 1 item
-12. If FORMAT = carousel:
+13. If FORMAT = carousel:
    - visualPlan.frames must contain 5 to 8 items
    - slides[] must contain 5 to 8 items
-13. If FORMAT = reel:
+14. If FORMAT = reel:
    - visualPlan.frames must contain 3 to 6 items
    - slides[] must contain 3 to 6 items
-14. Do not leave keys empty unless absolutely impossible.
-15. Do not use placeholders like "insert headline here".
-16. Do not output markdown.
-17. Do not output explanations.
-18. Do not wrap JSON in code fences.
-19. The cover slide must feel the most premium and visually striking.
-20. The final slide or final scene must push CTA clearly.
-21. Every visualPrompt must be commercially usable and designer-friendly.
-22. Prefer technology-scene language over marketing-poster language.
-23. Do not ask for readable text, letters, words, numbers, labels, logos, symbols, menus, or interface details in the image.
-24. Do not ask for website hero sections, landing pages, product posters, ad posters, social media cover layouts, branded typography compositions, or dashboard scenes.
-25. If a device appears, the screen must remain abstract, ambient, and unreadable.
-26. Prefer one dominant focal subject rather than many competing objects.
-27. Keep the scene simple, premium, and uncluttered.
+15. Do not leave keys empty unless absolutely impossible.
+16. Do not use placeholders like "insert headline here".
+17. Do not output markdown.
+18. Do not output explanations.
+19. Do not wrap JSON in code fences.
+20. The cover slide must feel the most premium and visually striking.
+21. The final slide or final scene must push CTA clearly.
+22. Every visualPrompt must be commercially usable and designer-friendly.
+23. Prefer technology-scene language over marketing-poster language.
+24. Do not ask for readable text, letters, words, numbers, labels, logos, symbols, menus, or interface details in the image.
+25. Do not ask for website hero sections, landing pages, product posters, ad posters, social media cover layouts, branded typography compositions, or dashboard scenes.
+26. If a device appears, the screen must remain abstract, ambient, and unreadable.
+27. Prefer one dominant focal subject rather than many competing objects.
+28. Keep the scene simple, premium, and uncluttered.
+29. visual prompts must stay aligned with the chosen visualPreset.
+30. The cover slide should express the selected preset most strongly.
 
 CAPTION RULES:
 - must sound natural
@@ -244,7 +299,18 @@ ASSET BRIEF RULES:
 - imagePrompt must not request readable typography baked into the image
 - imagePrompt must not request poster design, social cover composition, website layout, app UI, dashboard UI, or interface structure
 - if a device appears, its screen must remain abstract and unreadable
-- prefer language like: futuristic technology object, robotic element, automation device, AI core, premium industrial design, dark studio environment, abstract light trails, reflective surface, cinematic lighting, clean composition
+- imagePrompt must align strongly with visualPreset
+- prefer language like:
+  - futuristic technology object
+  - robotic element
+  - automation device
+  - AI core
+  - premium industrial design
+  - dark studio environment
+  - abstract light trails
+  - reflective surface
+  - cinematic lighting
+  - clean composition
 
 QUALITY BAR:
 - Think premium technology scene, not generic social template.

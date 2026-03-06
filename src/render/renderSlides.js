@@ -1,42 +1,14 @@
 // src/render/renderSlides.js
 //
-// FINAL v4.1 — hard-clean premium slide renderer
+// FINAL v5.0 — premium typography + composition renderer
 //
 // Goals:
-// ✅ Kill baked ghost text harder
-// ✅ Strong left text-safe zone
-// ✅ Bottom-right cleanup patch
-// ✅ Cleaner premium composition
-// ✅ Stable 1:1 / 4:5 / 9:16 output
-//
-// Input:
-// [
-//   {
-//     title,
-//     subtitle,
-//     cta,
-//     badge,
-//     align,
-//     theme,
-//     slideNumber,
-//     totalSlides,
-//     bgImageUrl,
-//     logoText,
-//     aspectRatio,
-//     renderHints: {
-//       layoutFamily,
-//       textPosition,
-//       safeArea,
-//       overlayStrength,
-//       focalBias
-//     }
-//   }
-// ]
-//
-// Output:
-// [
-//   { url, file, width, height, localPath }
-// ]
+// ✅ Keep clean source-image handling
+// ✅ Better premium title/subtitle hierarchy
+// ✅ Better topbar / badge / CTA styling
+// ✅ More luxurious spacing and composition
+// ✅ Stable 1:1 / 4:5 / 9:16 rendering
+// ✅ Keep scrub layers for dirty source images
 
 import fs from "fs";
 import path from "path";
@@ -126,28 +98,28 @@ function logoSizeByAspectRatio(ar) {
 function typeScaleByAspectRatio(ar, layoutFamily) {
   if (ar === "9:16") {
     return {
-      subtitle: layoutFamily === "cinematic_center" ? 28 : 26,
-      title: layoutFamily === "cinematic_center" ? 86 : 80,
-      cta: 19,
-      badge: 15,
-      counter: 18,
-    };
-  }
-  if (ar === "4:5") {
-    return {
       subtitle: layoutFamily === "cinematic_center" ? 26 : 24,
-      title: layoutFamily === "cinematic_center" ? 74 : 70,
+      title: layoutFamily === "cinematic_center" ? 92 : 84,
       cta: 18,
       badge: 14,
       counter: 17,
     };
   }
+  if (ar === "4:5") {
+    return {
+      subtitle: layoutFamily === "cinematic_center" ? 24 : 22,
+      title: layoutFamily === "cinematic_center" ? 80 : 72,
+      cta: 17,
+      badge: 13,
+      counter: 16,
+    };
+  }
   return {
-    subtitle: layoutFamily === "cinematic_center" ? 24 : 23,
-    title: layoutFamily === "cinematic_center" ? 68 : 64,
-    cta: 17,
-    badge: 14,
-    counter: 17,
+    subtitle: layoutFamily === "cinematic_center" ? 22 : 20,
+    title: layoutFamily === "cinematic_center" ? 72 : 64,
+    cta: 16,
+    badge: 13,
+    counter: 16,
   };
 }
 
@@ -156,25 +128,25 @@ function layoutMetrics({ textPosition, layoutFamily, aspectRatio }) {
   const isFourFive = aspectRatio === "4:5";
 
   let padX = 74;
-  let padTop = 68;
-  let padBottom = 60;
-  let copyMax = 420;
-  let copyMarginTop = 170;
+  let padTop = 66;
+  let padBottom = 58;
+  let copyMax = 430;
+  let copyMarginTop = 190;
 
   if (isFourFive) {
-    padX = 76;
-    padTop = 72;
-    padBottom = 62;
-    copyMax = 450;
-    copyMarginTop = 190;
+    padX = 78;
+    padTop = 70;
+    padBottom = 60;
+    copyMax = 460;
+    copyMarginTop = 210;
   }
 
   if (isVertical) {
     padX = 72;
-    padTop = 80;
+    padTop = 82;
     padBottom = 72;
-    copyMax = 520;
-    copyMarginTop = 275;
+    copyMax = 540;
+    copyMarginTop = 300;
   }
 
   const base = {
@@ -192,8 +164,8 @@ function layoutMetrics({ textPosition, layoutFamily, aspectRatio }) {
   if (layoutFamily === "cinematic_center" || textPosition === "center") {
     return {
       ...base,
-      copyMax: isVertical ? 720 : isFourFive ? 660 : 640,
-      copyMarginTop: isVertical ? 360 : isFourFive ? 240 : 205,
+      copyMax: isVertical ? 760 : isFourFive ? 700 : 660,
+      copyMarginTop: isVertical ? 360 : isFourFive ? 250 : 215,
       alignItems: "center",
       textAlign: "center",
       copyMarginLeft: "auto",
@@ -204,16 +176,16 @@ function layoutMetrics({ textPosition, layoutFamily, aspectRatio }) {
   if (layoutFamily === "luxury_top_left" || textPosition === "top-left") {
     return {
       ...base,
-      copyMax: isVertical ? 500 : 430,
-      copyMarginTop: isVertical ? 188 : isFourFive ? 116 : 110,
+      copyMax: isVertical ? 520 : 440,
+      copyMarginTop: isVertical ? 176 : isFourFive ? 112 : 102,
     };
   }
 
   if (layoutFamily === "dramatic_bottom_left" || textPosition === "bottom-left") {
     return {
       ...base,
-      copyMax: isVertical ? 520 : 450,
-      copyMarginTop: isVertical ? 1030 : isFourFive ? 900 : 780,
+      copyMax: isVertical ? 540 : 460,
+      copyMarginTop: isVertical ? 1050 : isFourFive ? 930 : 800,
     };
   }
 
@@ -227,37 +199,37 @@ function gradientByStrength(v, layoutFamily = "editorial_left") {
     if (v === "soft") {
       return `
         radial-gradient(78% 62% at 50% 46%, rgba(4,8,18,.18) 0%, rgba(4,8,18,.34) 52%, rgba(4,8,18,.64) 100%),
-        linear-gradient(180deg, rgba(4,8,18,.16) 0%, rgba(4,8,18,.08) 44%, rgba(4,8,18,.34) 100%)
+        linear-gradient(180deg, rgba(4,8,18,.14) 0%, rgba(4,8,18,.08) 44%, rgba(4,8,18,.30) 100%)
       `;
     }
     if (v === "strong") {
       return `
-        radial-gradient(78% 62% at 50% 46%, rgba(4,8,18,.30) 0%, rgba(4,8,18,.54) 52%, rgba(4,8,18,.82) 100%),
-        linear-gradient(180deg, rgba(4,8,18,.24) 0%, rgba(4,8,18,.10) 44%, rgba(4,8,18,.44) 100%)
+        radial-gradient(78% 62% at 50% 46%, rgba(4,8,18,.30) 0%, rgba(4,8,18,.56) 52%, rgba(4,8,18,.82) 100%),
+        linear-gradient(180deg, rgba(4,8,18,.22) 0%, rgba(4,8,18,.10) 44%, rgba(4,8,18,.42) 100%)
       `;
     }
     return `
       radial-gradient(78% 62% at 50% 46%, rgba(4,8,18,.24) 0%, rgba(4,8,18,.44) 52%, rgba(4,8,18,.72) 100%),
-      linear-gradient(180deg, rgba(4,8,18,.20) 0%, rgba(4,8,18,.08) 44%, rgba(4,8,18,.38) 100%)
+      linear-gradient(180deg, rgba(4,8,18,.18) 0%, rgba(4,8,18,.08) 44%, rgba(4,8,18,.36) 100%)
     `;
   }
 
   if (lf === "luxury_top_left") {
     if (v === "soft") {
       return `
-        linear-gradient(180deg, rgba(4,8,18,.58) 0%, rgba(4,8,18,.26) 34%, rgba(4,8,18,.12) 66%, rgba(4,8,18,.08) 100%),
-        linear-gradient(90deg, rgba(4,8,18,.60) 0%, rgba(4,8,18,.30) 34%, rgba(4,8,18,.10) 68%, rgba(4,8,18,.04) 100%)
+        linear-gradient(180deg, rgba(4,8,18,.56) 0%, rgba(4,8,18,.24) 34%, rgba(4,8,18,.12) 66%, rgba(4,8,18,.08) 100%),
+        linear-gradient(90deg, rgba(4,8,18,.58) 0%, rgba(4,8,18,.28) 34%, rgba(4,8,18,.10) 68%, rgba(4,8,18,.04) 100%)
       `;
     }
     if (v === "strong") {
       return `
-        linear-gradient(180deg, rgba(4,8,18,.84) 0%, rgba(4,8,18,.48) 34%, rgba(4,8,18,.18) 66%, rgba(4,8,18,.10) 100%),
-        linear-gradient(90deg, rgba(4,8,18,.86) 0%, rgba(4,8,18,.44) 34%, rgba(4,8,18,.16) 68%, rgba(4,8,18,.06) 100%)
+        linear-gradient(180deg, rgba(4,8,18,.84) 0%, rgba(4,8,18,.50) 34%, rgba(4,8,18,.18) 66%, rgba(4,8,18,.10) 100%),
+        linear-gradient(90deg, rgba(4,8,18,.86) 0%, rgba(4,8,18,.46) 34%, rgba(4,8,18,.16) 68%, rgba(4,8,18,.06) 100%)
       `;
     }
     return `
-      linear-gradient(180deg, rgba(4,8,18,.72) 0%, rgba(4,8,18,.36) 34%, rgba(4,8,18,.14) 66%, rgba(4,8,18,.09) 100%),
-      linear-gradient(90deg, rgba(4,8,18,.74) 0%, rgba(4,8,18,.36) 34%, rgba(4,8,18,.14) 68%, rgba(4,8,18,.05) 100%)
+      linear-gradient(180deg, rgba(4,8,18,.72) 0%, rgba(4,8,18,.38) 34%, rgba(4,8,18,.14) 66%, rgba(4,8,18,.09) 100%),
+      linear-gradient(90deg, rgba(4,8,18,.74) 0%, rgba(4,8,18,.38) 34%, rgba(4,8,18,.14) 68%, rgba(4,8,18,.05) 100%)
     `;
   }
 
@@ -270,31 +242,31 @@ function gradientByStrength(v, layoutFamily = "editorial_left") {
     }
     if (v === "strong") {
       return `
-        linear-gradient(0deg, rgba(4,8,18,.88) 0%, rgba(4,8,18,.48) 30%, rgba(4,8,18,.18) 64%, rgba(4,8,18,.08) 100%),
-        linear-gradient(90deg, rgba(4,8,18,.88) 0%, rgba(4,8,18,.42) 38%, rgba(4,8,18,.16) 70%, rgba(4,8,18,.08) 100%)
+        linear-gradient(0deg, rgba(4,8,18,.90) 0%, rgba(4,8,18,.50) 30%, rgba(4,8,18,.18) 64%, rgba(4,8,18,.08) 100%),
+        linear-gradient(90deg, rgba(4,8,18,.90) 0%, rgba(4,8,18,.44) 38%, rgba(4,8,18,.16) 70%, rgba(4,8,18,.08) 100%)
       `;
     }
     return `
-      linear-gradient(0deg, rgba(4,8,18,.78) 0%, rgba(4,8,18,.36) 30%, rgba(4,8,18,.14) 64%, rgba(4,8,18,.06) 100%),
-      linear-gradient(90deg, rgba(4,8,18,.78) 0%, rgba(4,8,18,.36) 38%, rgba(4,8,18,.14) 70%, rgba(4,8,18,.06) 100%)
+      linear-gradient(0deg, rgba(4,8,18,.80) 0%, rgba(4,8,18,.38) 30%, rgba(4,8,18,.14) 64%, rgba(4,8,18,.06) 100%),
+      linear-gradient(90deg, rgba(4,8,18,.80) 0%, rgba(4,8,18,.38) 38%, rgba(4,8,18,.14) 70%, rgba(4,8,18,.06) 100%)
     `;
   }
 
   if (v === "soft") {
     return `
       linear-gradient(90deg, rgba(6,10,18,.62) 0%, rgba(6,10,18,.30) 40%, rgba(6,10,18,.10) 72%, rgba(6,10,18,.04) 100%),
-      linear-gradient(180deg, rgba(4,8,18,.24) 0%, rgba(4,8,18,.08) 48%, rgba(4,8,18,.32) 100%)
+      linear-gradient(180deg, rgba(4,8,18,.22) 0%, rgba(4,8,18,.08) 48%, rgba(4,8,18,.30) 100%)
     `;
   }
   if (v === "strong") {
     return `
-      linear-gradient(90deg, rgba(4,8,18,.88) 0%, rgba(4,8,18,.60) 42%, rgba(4,8,18,.24) 72%, rgba(4,8,18,.10) 100%),
-      linear-gradient(180deg, rgba(4,8,18,.40) 0%, rgba(4,8,18,.10) 45%, rgba(4,8,18,.44) 100%)
+      linear-gradient(90deg, rgba(4,8,18,.90) 0%, rgba(4,8,18,.62) 42%, rgba(4,8,18,.24) 72%, rgba(4,8,18,.10) 100%),
+      linear-gradient(180deg, rgba(4,8,18,.38) 0%, rgba(4,8,18,.10) 45%, rgba(4,8,18,.42) 100%)
     `;
   }
   return `
-    linear-gradient(90deg, rgba(4,8,18,.78) 0%, rgba(4,8,18,.42) 42%, rgba(4,8,18,.16) 72%, rgba(4,8,18,.08) 100%),
-    linear-gradient(180deg, rgba(4,8,18,.30) 0%, rgba(4,8,18,.08) 45%, rgba(4,8,18,.36) 100%)
+    linear-gradient(90deg, rgba(4,8,18,.80) 0%, rgba(4,8,18,.44) 42%, rgba(4,8,18,.16) 72%, rgba(4,8,18,.08) 100%),
+    linear-gradient(180deg, rgba(4,8,18,.28) 0%, rgba(4,8,18,.08) 45%, rgba(4,8,18,.34) 100%)
   `;
 }
 
@@ -304,10 +276,10 @@ function leftPanelByLayout({ layoutFamily, aspectRatio, overlayStrength }) {
 
   const alpha =
     strength === "soft"
-      ? { solid: 0.68, fade: 0.18 }
+      ? { solid: 0.66, fade: 0.18 }
       : strength === "strong"
-      ? { solid: 0.90, fade: 0.28 }
-      : { solid: 0.82, fade: 0.22 };
+      ? { solid: 0.88, fade: 0.28 }
+      : { solid: 0.80, fade: 0.22 };
 
   let width = "42%";
   if (aspectRatio === "9:16") width = "50%";
@@ -345,10 +317,10 @@ function leftScrubByLayout({ safeArea, layoutFamily, overlayStrength }) {
 
   const alpha =
     strength === "soft"
-      ? { heavy: 0.58, medium: 0.22, blur: 20 }
+      ? { heavy: 0.56, medium: 0.22, blur: 20 }
       : strength === "strong"
-      ? { heavy: 0.88, medium: 0.38, blur: 30 }
-      : { heavy: 0.76, medium: 0.30, blur: 26 };
+      ? { heavy: 0.86, medium: 0.38, blur: 30 }
+      : { heavy: 0.74, medium: 0.30, blur: 26 };
 
   if (lf === "cinematic_center" || safe === "centered") {
     return {
@@ -401,10 +373,10 @@ function bottomRightPatch({ overlayStrength, aspectRatio }) {
 
   const alpha =
     strength === "soft"
-      ? { heavy: 0.34, medium: 0.16, blur: 16 }
+      ? { heavy: 0.30, medium: 0.14, blur: 16 }
       : strength === "strong"
-      ? { heavy: 0.56, medium: 0.24, blur: 24 }
-      : { heavy: 0.46, medium: 0.20, blur: 20 };
+      ? { heavy: 0.52, medium: 0.22, blur: 24 }
+      : { heavy: 0.42, medium: 0.18, blur: 20 };
 
   let inset = "72% 0% 0% 70%";
   if (aspectRatio === "4:5") inset = "76% 0% 0% 66%";
