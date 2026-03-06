@@ -698,55 +698,43 @@ function buildFallbackImagePrompt(payload) {
   const frames = asArr(visualPlan.frames);
   const first = asObj(frames[0]);
 
+  const aspectLine =
+    format === "reel"
+      ? "Vertical 9:16 composition for a premium reel cover."
+      : format === "carousel"
+      ? "Square 1:1 composition for a premium carousel cover."
+      : "Vertical 4:5 composition for a premium social post.";
+
   const lines = [
-    format === "carousel"
-      ? "Create a premium square campaign artwork background for the cover slide of a NEOX carousel."
-      : format === "reel"
-      ? "Create a premium vertical campaign artwork background for the opening frame of a NEOX reel."
-      : "Create a premium campaign artwork background for a NEOX social post.",
-    "NEOX is an AI automation and digital technology brand.",
+    "Premium commercial campaign artwork for NEOX, an AI automation and digital technology brand.",
     p.topic ? `Campaign topic: ${p.topic}.` : "",
-    p.hook ? `Core message direction: ${p.hook}.` : "",
-    "This image must be completely TEXT-FREE.",
-    "Absolutely do not render readable text, letters, words, numbers, logos, monograms, UI labels, fake buttons, fake menus, dashboards, browser windows, websites, landing pages, app screens, or navigation bars.",
-    "Do not create a website hero section.",
-    "Do not create a SaaS dashboard screenshot aesthetic.",
-    "Do not create an application interface shot.",
-    "Do not create a mobile app UI mockup.",
-    first.headline
-      ? `Visually support this message theme: ${first.headline}.`
-      : "",
+    p.hook ? `Message direction: ${p.hook}.` : "",
+    first.headline ? `Emotional support for message theme: ${first.headline}.` : "",
     first.subline ? `Secondary message direction: ${first.subline}.` : "",
     visualPlan.style
-      ? `Style: ${visualPlan.style}, expressed as premium advertising artwork rather than interface design.`
-      : "Style: premium, modern, cinematic, futuristic brand advertising artwork.",
+      ? `Style: ${visualPlan.style}.`
+      : "Style: premium, futuristic, cinematic, elegant, advertising-grade.",
     visualPlan.colorNotes
       ? `Color palette: ${visualPlan.colorNotes}.`
       : "Color palette: deep blue, cyan glow, graphite, subtle silver, premium contrast.",
     visualPlan.composition
       ? `Composition: ${visualPlan.composition}.`
-      : "Composition: strong focal subject, elegant negative space, polished premium ad direction.",
+      : "Composition: strong focal subject, elegant negative space, premium campaign balance.",
     first.layout
-      ? `Layout guidance: ${first.layout}.`
-      : "Layout guidance: maintain a clean typography-safe negative space area, but do not render any text.",
+      ? `Layout direction: ${first.layout}.`
+      : "Layout direction: maintain a clean text-safe area with premium visual balance.",
     asArr(first.visualElements).length
       ? `Visual elements: ${asArr(first.visualElements).join(", ")}.`
       : "",
-    format === "reel"
-      ? "Aspect ratio intent: 9:16 vertical."
-      : format === "carousel"
-      ? "Aspect ratio intent: 1:1 square."
-      : "Aspect ratio intent: 4:5 vertical social post.",
-    "Feel like a polished commercial key visual, editorial campaign artwork, cinematic tech ad, or luxury brand poster background.",
-    "The image should feel attractive, modern, premium, warm, and customer-friendly.",
-    "Avoid generic stock-photo aesthetics.",
-    "Avoid literal UI visualization.",
-    "Avoid anything that resembles a screenshot.",
-    "Use cinematic lighting, premium materials, depth, atmosphere, subtle glow, and elegant visual hierarchy.",
-    "No readable text. No symbols that look like text. No logo marks.",
+    "Text-free background visual only.",
+    "If a device appears, keep its screen abstract and unreadable using only ambient gradients, soft light waves, reflections, or glow.",
+    "Feel like polished commercial key art, editorial tech campaign artwork, or luxury brand poster background.",
+    "Use cinematic lighting, premium materials, depth, atmosphere, and controlled glow.",
+    "Keep the composition clean and commercially usable.",
+    aspectLine,
   ];
 
-  return truncate(lines.filter(Boolean).join(" "), 2400);
+  return truncate(lines.filter(Boolean).join(" "), 2200);
 }
 
 function buildSlideVisualPrompt({ payload, frame, totalSlides, format }) {
@@ -754,52 +742,43 @@ function buildSlideVisualPrompt({ payload, frame, totalSlides, format }) {
   const f = asObj(frame);
   const visualPlan = asObj(p.visualPlan);
 
+  const aspectLine =
+    format === "reel"
+      ? "Vertical 9:16 composition."
+      : format === "carousel"
+      ? "Square 1:1 composition."
+      : "Vertical 4:5 composition.";
+
   const lines = [
     format === "carousel"
-      ? `Create a premium square text-free campaign artwork background for carousel slide ${f.index} of ${totalSlides} for NEOX.`
+      ? `Premium text-free campaign artwork background for NEOX carousel slide ${f.index} of ${totalSlides}.`
       : format === "reel"
-      ? `Create a premium vertical text-free campaign artwork background for reel scene ${f.index} of ${totalSlides} for NEOX.`
-      : "Create a premium text-free campaign artwork background for a NEOX social post.",
-    "NEOX is an AI automation and digital technology brand.",
+      ? `Premium text-free campaign artwork background for NEOX reel scene ${f.index} of ${totalSlides}.`
+      : "Premium text-free campaign artwork background for a NEOX social post.",
     p.topic ? `Campaign topic: ${p.topic}.` : "",
-    f.headline
-      ? `The visual should emotionally support this message: ${f.headline}.`
-      : "",
-    f.subline ? `Secondary message direction: ${f.subline}.` : "",
-    "This image is background artwork only.",
-    "All final readable text will be added later by a separate render engine.",
-    "Absolutely do not render readable text, letters, words, numbers, icons that resemble letters, labels, logos, monograms, menu items, navigation bars, buttons, dashboards, browser windows, website sections, application screens, or interface mockups.",
-    "Do not make it look like a website hero section.",
-    "Do not make it look like a SaaS dashboard screen.",
-    "Do not make it look like a UI concept shot.",
-    "Do not make it look like an app promo screenshot.",
+    f.headline ? `Message mood: ${f.headline}.` : "",
+    f.subline ? `Secondary message mood: ${f.subline}.` : "",
     visualPlan.style
-      ? `Style: ${visualPlan.style}, interpreted as premium advertising artwork, not interface design.`
-      : "Style: premium futuristic brand advertising, cinematic, polished, elegant, visually rich.",
+      ? `Style: ${visualPlan.style}.`
+      : "Style: premium futuristic brand advertising, cinematic, polished, elegant.",
     visualPlan.colorNotes
       ? `Color palette: ${visualPlan.colorNotes}.`
       : "Color palette: deep blue, electric cyan, graphite, soft silver, controlled neon accents.",
     f.layout
       ? `Composition guidance: ${f.layout}.`
-      : "Composition: strong focal subject, clear negative space for later typography, premium poster-like structure.",
+      : "Composition guidance: strong focal subject, clear negative space, premium poster-like structure.",
     asArr(f.visualElements).length
       ? `Visual elements: ${asArr(f.visualElements).join(", ")}.`
       : "",
-    format === "reel"
-      ? "Aspect ratio intent: 9:16 vertical."
-      : format === "carousel"
-      ? "Aspect ratio intent: 1:1 square."
-      : "Aspect ratio intent: 4:5 vertical social post.",
+    "Background artwork only. Final readable text will be added later by a separate render engine.",
+    "If a screen or device appears, keep it abstract and unreadable with ambient light only.",
     "Feel like premium ad campaign artwork, cinematic editorial tech key art, or polished commercial poster background.",
-    "The image should feel welcoming, premium, modern, visually memorable, and commercially usable.",
-    "Avoid dry corporate visuals.",
-    "Avoid screenshots.",
-    "Avoid product UI demos.",
-    "Use elegant lighting, premium materials, atmosphere, depth, and negative space.",
-    "No readable text. No fake text. No logo glyphs.",
+    "Use elegant lighting, atmosphere, depth, subtle reflections, and premium materials.",
+    "Keep the composition clean, attractive, and commercially usable.",
+    aspectLine,
   ];
 
-  return truncate(lines.filter(Boolean).join(" "), 2400);
+  return truncate(lines.filter(Boolean).join(" "), 2200);
 }
 
 function buildRenderHints(frame, format, idx, totalSlides) {
