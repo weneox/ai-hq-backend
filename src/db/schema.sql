@@ -1,10 +1,10 @@
 -- src/db/schema.sql
--- AI HQ schema (upgrade-safe + FULL legacy fixes) — FINAL v7.4
--- ✅ Adds/ensures: notifications, jobs, audit_log, push_subscriptions, tenants, content_items
+-- AI HQ schema (upgrade-safe + FULL legacy fixes) — FINAL v7.5
+-- ✅ Adds/ensures: threads, messages, proposals, notifications, jobs, audit_log, push_subscriptions, tenants, content_items
 -- ✅ Keeps: legacy fixes (messages/proposals conversation_id + agent_key)
 -- ✅ FIX: proposals.status includes in_progress + published
--- ✅ FIX: content_items.status includes full draft -> asset -> publish lifecycle
--- ✅ Safe for production: no DROP TABLE
+-- ✅ FIX: content_items.status is FUTURE-PROOF (draft.* + asset.* + publish.* + exec statuses)
+-- ✅ Safe for production: NO DROP TABLE
 
 create extension if not exists pgcrypto;
 
@@ -63,6 +63,7 @@ alter table messages add column if not exists content text;
 alter table messages add column if not exists meta jsonb default '{}'::jsonb;
 alter table messages add column if not exists created_at timestamptz default now();
 
+-- drop legacy FK to conversation_id if exists
 do $$
 begin
   if exists (select 1 from pg_constraint where conname = 'messages_conversation_id_fkey') then
@@ -73,6 +74,7 @@ begin
   end if;
 end$$;
 
+-- drop NOT NULL on legacy conversation_id if exists
 do $$
 begin
   if exists (
@@ -102,6 +104,7 @@ begin
   end;
 end$$;
 
+-- ensure FK exists (idempotent)
 do $$
 begin
   if not exists (select 1 from pg_constraint where conname = 'messages_thread_id_fkey') then
@@ -143,6 +146,7 @@ alter table proposals add column if not exists created_at timestamptz default no
 alter table proposals add column if not exists decided_at timestamptz;
 alter table proposals add column if not exists decision_by text;
 
+-- drop legacy FK to conversation_id if exists
 do $$
 begin
   if exists (select 1 from pg_constraint where conname = 'proposals_conversation_id_fkey') then
@@ -153,6 +157,7 @@ begin
   end if;
 end$$;
 
+-- drop NOT NULL on legacy conversation_id if exists
 do $$
 begin
   if exists (
@@ -166,6 +171,7 @@ begin
   end if;
 end$$;
 
+-- legacy agent_key not-null fix (if exists)
 do $$
 begin
   if exists (
@@ -179,6 +185,7 @@ begin
   end if;
 end$$;
 
+-- backfill agent_key from agent if both exist
 do $$
 begin
   if exists (
@@ -201,6 +208,7 @@ begin
   end;
 end$$;
 
+-- ✅ IMPORTANT: status constraint includes in_progress + published
 do $$
 begin
   begin
@@ -372,7 +380,7 @@ create unique index if not exists uq_push_endpoint on push_subscriptions(endpoin
 create index if not exists idx_push_recipient on push_subscriptions(recipient, created_at desc);
 
 -- ============================================================
--- tenants
+-- tenants (NEOX default)
 -- ============================================================
 create table if not exists tenants (
   id uuid primary key default gen_random_uuid(),
@@ -409,7 +417,7 @@ exception when others then null;
 end$$;
 
 -- ============================================================
--- content_items
+-- content_items (DRAFT + ASSET + PUBLISH lifecycle)
 -- ============================================================
 create table if not exists content_items (
   id uuid primary key default gen_random_uuid(),
@@ -439,6 +447,7 @@ create table if not exists content_items (
   updated_at timestamptz not null default now()
 );
 
+-- Ensure columns exist in older deployments (idempotent)
 alter table content_items add column if not exists proposal_id uuid;
 alter table content_items add column if not exists thread_id uuid;
 alter table content_items add column if not exists job_id uuid;
@@ -463,6 +472,7 @@ alter table content_items add column if not exists publish jsonb default '{}'::j
 alter table content_items add column if not exists created_at timestamptz default now();
 alter table content_items add column if not exists updated_at timestamptz default now();
 
+-- defaults (best-effort)
 do $$
 begin
   begin
@@ -491,7 +501,7 @@ begin
   end;
 end$$;
 
--- ✅ FULL lifecycle statuses supported here
+-- ✅ FUTURE-PROOF status constraint (this is the key fix)
 do $$
 begin
   begin
@@ -503,31 +513,36 @@ begin
     alter table content_items
       add constraint content_items_status_check
       check (
-        status in (
-          'pending_approval',
+        -- Draft lifecycle
+        status like 'draft.%'
+
+        -- Asset generation lifecycle (support both singular/plural)
+        OR status like 'asset.%'
+        OR status like 'assets.%'
+        OR status like 'render.%'
+
+        -- Publish lifecycle
+        OR status like 'publish.%'
+        OR status in ('publishing','published')
+
+        -- Common generic states (some backends use these)
+        OR status in (
+          'pending',
+          'queued',
+          'running',
+          'in_progress',
+          'completed',
+          'failed',
           'approved',
           'rejected',
-          'publishing',
-          'published',
-          'failed',
-
-          'in_progress',
-
-          'asset.requested',
-          'asset.ready',
-          'asset.failed',
-
-          'publish.requested',
-          'publish.queued',
-          'publish.running',
-          'publish.failed'
+          'pending_approval'
         )
-        OR status like 'draft.%'
       );
   exception when others then null;
   end;
 end$$;
 
+-- FK (optional, idempotent)
 do $$
 begin
   if not exists (select 1 from pg_constraint where conname = 'content_items_proposal_id_fkey') then
@@ -558,11 +573,13 @@ begin
   end if;
 end$$;
 
+-- indexes
 create index if not exists idx_content_proposal_updated on content_items(proposal_id, updated_at desc);
 create index if not exists idx_content_status_updated on content_items(status, updated_at desc);
 create index if not exists idx_content_tenant_status on content_items(tenant_key, status, created_at desc);
 create index if not exists idx_content_schedule on content_items(status, schedule_at);
 
+-- auto updated_at trigger (best-effort)
 do $$
 begin
   if not exists (select 1 from pg_trigger where tgname = 'trg_content_items_updated_at') then
@@ -607,5 +624,6 @@ begin
     where body is not null and body ~ 'Ã.|Â.|â€|â€™|â€œ|â€�|â€“|â€”|â€¦';
   exception when others then null;
   end;
+
 exception when others then null;
 end$$;
