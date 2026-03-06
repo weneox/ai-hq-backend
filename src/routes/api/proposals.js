@@ -1,17 +1,30 @@
-// src/routes/api/proposals.js (FINAL — include latest content for Draft UI + fixes)
+// src/routes/api/proposals.js
 //
-// Key upgrades:
-// ✅ GET /api/proposals?status=... now returns latestContent {id,status,updated_at} (and optionally content_pack)
-//    Use: ?includeContent=1 and ?includePack=1
-// ✅ Fix missing memGetLatestContentByProposal import usage
-// ✅ Remove dynamic import in request-changes
-// ✅ Keep approve => in_progress (Drafting). Final approve is content/:id/approve
-// ✅ Auto mode hook removed (we’ll do later)
+// FINAL v2.0 — proposals routes for drafting flow + latest content support
+//
+// Flow:
+// pending -> approve -> in_progress (drafting) -> content draft generated
+// final content approve/publish handled elsewhere
+//
+// Goals:
+// ✅ GET /api/proposals?status=... supports latestContent
+// ✅ Approve => in_progress + create job + notify n8n
+// ✅ Reject => rejected
+// ✅ request-changes => return latest draft-like contentId
+// ✅ publish => return latest approved draft contentId
+// ✅ Stable DB + memory fallback
+// ✅ Better payload/title/topic passing to n8n
 
 import express from "express";
 import { cfg } from "../../config.js";
 
-import { okJson, clamp, isDbReady, isUuid, normalizeDecision } from "../../utils/http.js";
+import {
+  okJson,
+  clamp,
+  isDbReady,
+  isUuid,
+  normalizeDecision,
+} from "../../utils/http.js";
 import { deepFix, fixText } from "../../utils/textFix.js";
 
 import {
@@ -36,16 +49,99 @@ import {
 import { pushBroadcastToCeo } from "../../services/pushBroadcast.js";
 import { notifyN8n } from "../../services/n8nNotify.js";
 
+function asObj(x) {
+  return x && typeof x === "object" && !Array.isArray(x) ? x : {};
+}
+
+function safePayload(p) {
+  return asObj(p?.payload);
+}
+
 function safeTitle(p) {
-  const payload = p?.payload && typeof p.payload === "object" ? p.payload : {};
-  const t = payload?.title || payload?.name || payload?.summary || payload?.goal || p?.title || "";
+  const payload = safePayload(p);
+  const t =
+    payload?.topic ||
+    payload?.title ||
+    payload?.name ||
+    payload?.summary ||
+    payload?.goal ||
+    p?.title ||
+    "";
   return fixText(String(t || "").trim());
+}
+
+function safeTopic(p) {
+  const payload = safePayload(p);
+  return fixText(
+    String(payload?.topic || payload?.title || p?.title || "").trim()
+  );
 }
 
 function normalizeStatus(x) {
   const s = fixText(String(x || "").trim()) || "pending";
-  const allowed = new Set(["pending", "in_progress", "approved", "published", "rejected"]);
+  const allowed = new Set([
+    "pending",
+    "in_progress",
+    "approved",
+    "published",
+    "rejected",
+  ]);
   return allowed.has(s) ? s : "pending";
+}
+
+function mapLatestContent(row, includePack) {
+  if (!row?.content_id) return null;
+
+  return {
+    id: row.content_id,
+    status: row.content_status,
+    updated_at: row.content_updated_at,
+    last_feedback: row.content_last_feedback || null,
+    ...(includePack ? { content_pack: deepFix(row.content_pack) } : {}),
+  };
+}
+
+function mapProposalRow(row, includeContent, includePack) {
+  const p = {
+    id: row.id,
+    thread_id: row.thread_id,
+    agent: row.agent,
+    type: row.type,
+    status: row.status,
+    title: fixText(row.title),
+    payload: deepFix(row.payload),
+    created_at: row.created_at,
+    decided_at: row.decided_at,
+    decision_by: row.decision_by,
+  };
+
+  if (includeContent) {
+    p.latestContent = mapLatestContent(row, includePack);
+  }
+
+  return p;
+}
+
+function buildN8nExtra({
+  tenantId,
+  proposal,
+  jobId = null,
+  reason = "",
+}) {
+  return {
+    tenantId,
+    proposalId: String(proposal?.id || ""),
+    threadId: String(proposal?.thread_id || ""),
+    jobId: jobId || null,
+    reason: reason || "",
+    title: safeTitle(proposal),
+    topic: safeTopic(proposal),
+    payload: deepFix(proposal?.payload || {}),
+    callback: {
+      url: "/api/executions/callback",
+      tokenHeader: "x-webhook-token",
+    },
+  };
 }
 
 export function proposalsRoutes({ db, wsHub }) {
@@ -53,40 +149,49 @@ export function proposalsRoutes({ db, wsHub }) {
 
   // GET /api/proposals?status=pending|in_progress|approved|published|rejected
   // Optional:
-  // - includeContent=1  => adds latestContent {id,status,updated_at,last_feedback?}
-  // - includePack=1     => includes latestContent.content_pack (heavier payload)
+  // - includeContent=1
+  // - includePack=1
   r.get("/proposals", async (req, res) => {
     const status = normalizeStatus(req.query.status);
     const limit = clamp(req.query.limit ?? 50, 1, 200);
-
-    const includeContent = String(req.query.includeContent || "1") === "1"; // default ON for your UI
+    const includeContent = String(req.query.includeContent || "1") === "1";
     const includePack = String(req.query.includePack || "0") === "1";
 
     try {
-      // =============== MEMORY ===============
       if (!isDbReady(db)) {
-        const rows = memListProposals(status).slice(0, limit).map((p) => {
-          const out = { ...p };
-          if (includeContent) {
-            const c = memGetLatestContentByProposal(p.id);
-            out.latestContent = c
-              ? {
-                  id: c.id,
-                  status: c.status,
-                  updated_at: c.updated_at || c.created_at || null,
-                  last_feedback: c.last_feedback || null,
-                  ...(includePack ? { content_pack: deepFix(c.content_pack) } : {}),
-                }
-              : null;
-          }
-          return out;
-        });
+        const rows = memListProposals(status)
+          .slice(0, limit)
+          .map((p) => {
+            const out = {
+              ...p,
+              title: fixText(p.title),
+              payload: deepFix(p.payload),
+            };
 
-        return okJson(res, { ok: true, status, proposals: rows, dbDisabled: true });
+            if (includeContent) {
+              const c = memGetLatestContentByProposal(p.id);
+              out.latestContent = c
+                ? {
+                    id: c.id,
+                    status: c.status,
+                    updated_at: c.updated_at || c.created_at || null,
+                    last_feedback: c.last_feedback || null,
+                    ...(includePack ? { content_pack: deepFix(c.content_pack) } : {}),
+                  }
+                : null;
+            }
+
+            return out;
+          });
+
+        return okJson(res, {
+          ok: true,
+          status,
+          proposals: rows,
+          dbDisabled: true,
+        });
       }
 
-      // =============== DB ===============
-      // LATERAL join: pick latest content_item per proposal
       const q = await db.query(
         `
         select
@@ -125,67 +230,64 @@ export function proposalsRoutes({ db, wsHub }) {
         [status]
       );
 
-      const rows = (q.rows || []).map((row) => {
-        const p = {
-          id: row.id,
-          thread_id: row.thread_id,
-          agent: row.agent,
-          type: row.type,
-          status: row.status,
-          title: fixText(row.title),
-          payload: deepFix(row.payload),
-          created_at: row.created_at,
-          decided_at: row.decided_at,
-          decision_by: row.decision_by,
-        };
-
-        if (includeContent) {
-          p.latestContent = row.content_id
-            ? {
-                id: row.content_id,
-                status: row.content_status,
-                updated_at: row.content_updated_at,
-                last_feedback: row.content_last_feedback || null,
-                ...(includePack ? { content_pack: deepFix(row.content_pack) } : {}),
-              }
-            : null;
-        }
-
-        return p;
-      });
+      const rows = (q.rows || []).map((row) =>
+        mapProposalRow(row, includeContent, includePack)
+      );
 
       return okJson(res, { ok: true, status, proposals: rows });
     } catch (e) {
-      return okJson(res, { ok: false, error: "Error", details: { message: String(e?.message || e) } });
+      return okJson(res, {
+        ok: false,
+        error: "Error",
+        details: { message: String(e?.message || e) },
+      });
     }
   });
 
-  // POST /api/proposals/:id/decision  { decision:"approved"|"rejected", by?, reason?, tenantId? }
-  // IMPORTANT FLOW:
-  // - approved => proposal.status becomes in_progress (Drafting) + job + notify n8n proposal.approved
-  // - rejected => proposal.status becomes rejected
+  // POST /api/proposals/:id/decision
+  // body: { decision:"approved"|"rejected", by?, reason?, tenantId? }
   r.post("/proposals/:id/decision", async (req, res) => {
     const id = String(req.params.id || "").trim();
     const decision = normalizeDecision(req.body?.decision);
     const by = fixText(String(req.body?.by || "ceo").trim()) || "ceo";
     const reason = fixText(String(req.body?.reason || "").trim());
-    const tenantId = fixText(String(req.body?.tenantId || cfg.DEFAULT_TENANT_KEY || "default").trim()) || "default";
+    const tenantId =
+      fixText(
+        String(req.body?.tenantId || cfg.DEFAULT_TENANT_KEY || "default").trim()
+      ) || "default";
 
-    if (!id) return okJson(res, { ok: false, error: "proposalId required" });
+    if (!id) {
+      return okJson(res, { ok: false, error: "proposalId required" });
+    }
+
     if (decision !== "approved" && decision !== "rejected") {
-      return okJson(res, { ok: false, error: "decision must be approved|rejected" });
+      return okJson(res, {
+        ok: false,
+        error: "decision must be approved|rejected",
+      });
     }
 
     try {
       // ================= MEMORY =================
       if (!isDbReady(db)) {
         const p = mem.proposals.get(id);
-        if (!p) return okJson(res, { ok: false, error: "proposal not found", dbDisabled: true });
+        if (!p) {
+          return okJson(res, {
+            ok: false,
+            error: "proposal not found",
+            dbDisabled: true,
+          });
+        }
 
         if (decision === "rejected") {
           p.status = "rejected";
           p.decision_by = by;
           p.decided_at = new Date().toISOString();
+          p.payload = deepFix({
+            ...safePayload(p),
+            decision: "rejected",
+            reason,
+          });
 
           const notif = memCreateNotification({
             recipient: "ceo",
@@ -197,21 +299,42 @@ export function proposalsRoutes({ db, wsHub }) {
 
           wsHub?.broadcast?.({ type: "proposal.updated", proposal: p });
           wsHub?.broadcast?.({ type: "notification.created", notification: notif });
+
           memAudit(by, "proposal.reject", "proposal", p.id, { reason });
+
+          try {
+            notifyN8n("proposal.rejected", p, {
+              tenantId,
+              proposalId: String(p.id),
+              reason,
+              topic: safeTopic(p),
+              payload: deepFix(p.payload),
+            });
+          } catch {}
 
           return okJson(res, { ok: true, proposal: p, dbDisabled: true });
         }
 
-        // APPROVE => in_progress + job + notify n8n
         p.status = "in_progress";
         p.decision_by = by;
         p.decided_at = new Date().toISOString();
+        p.payload = deepFix({
+          ...safePayload(p),
+          decision: "approved",
+          reason,
+        });
 
         const job = memCreateJob({
           proposalId: p.id,
           type: "draft.generate",
           status: "queued",
-          input: { proposalId: p.id, threadId: p.thread_id, title: safeTitle(p), payload: p.payload },
+          input: {
+            proposalId: p.id,
+            threadId: p.thread_id,
+            title: safeTitle(p),
+            topic: safeTopic(p),
+            payload: deepFix(p.payload),
+          },
         });
 
         const notif = memCreateNotification({
@@ -228,23 +351,33 @@ export function proposalsRoutes({ db, wsHub }) {
 
         memAudit(by, "proposal.approve", "proposal", p.id, { reason });
 
-        notifyN8n("proposal.approved", p, {
-          tenantId,
-          proposalId: p.id,
-          threadId: p.thread_id,
-          jobId: job.id,
-          reason,
-          callback: { url: "/api/executions/callback", tokenHeader: "x-webhook-token" },
-        });
+        try {
+          notifyN8n(
+            "proposal.approved",
+            p,
+            buildN8nExtra({
+              tenantId,
+              proposal: p,
+              jobId: job.id,
+              reason,
+            })
+          );
+        } catch {}
 
-        return okJson(res, { ok: true, proposal: p, jobId: job.id, dbDisabled: true });
+        return okJson(res, {
+          ok: true,
+          proposal: p,
+          jobId: job.id,
+          dbDisabled: true,
+        });
       }
 
       // ================= DB =================
       const proposal = await dbGetProposalById(db, id);
-      if (!proposal) return okJson(res, { ok: false, error: "proposal not found" });
+      if (!proposal) {
+        return okJson(res, { ok: false, error: "proposal not found" });
+      }
 
-      // reject
       if (decision === "rejected") {
         const updated = await db.query(
           `update proposals
@@ -258,7 +391,9 @@ export function proposalsRoutes({ db, wsHub }) {
         );
 
         const p2 = updated.rows?.[0] || null;
-        if (!p2) return okJson(res, { ok: false, error: "update failed" });
+        if (!p2) {
+          return okJson(res, { ok: false, error: "update failed" });
+        }
 
         p2.title = fixText(p2.title);
         p2.payload = deepFix(p2.payload);
@@ -281,14 +416,23 @@ export function proposalsRoutes({ db, wsHub }) {
           data: { type: "proposal.rejected", proposalId: p2.id },
         });
 
-        await dbAudit(db, by, "proposal.reject", "proposal", String(p2.id), { reason });
+        await dbAudit(db, by, "proposal.reject", "proposal", String(p2.id), {
+          reason,
+        });
 
-        notifyN8n("proposal.rejected", p2, { tenantId, proposalId: String(p2.id), reason });
+        try {
+          notifyN8n("proposal.rejected", p2, {
+            tenantId,
+            proposalId: String(p2.id),
+            reason,
+            topic: safeTopic(p2),
+            payload: deepFix(p2.payload),
+          });
+        } catch {}
 
         return okJson(res, { ok: true, proposal: p2 });
       }
 
-      // approve => in_progress (Drafting)
       const updatedQ = await db.query(
         `update proposals
          set status = 'in_progress',
@@ -301,7 +445,9 @@ export function proposalsRoutes({ db, wsHub }) {
       );
 
       const p2 = updatedQ.rows?.[0] || null;
-      if (!p2) return okJson(res, { ok: false, error: "update failed" });
+      if (!p2) {
+        return okJson(res, { ok: false, error: "update failed" });
+      }
 
       p2.title = fixText(p2.title);
       p2.payload = deepFix(p2.payload);
@@ -310,7 +456,13 @@ export function proposalsRoutes({ db, wsHub }) {
         proposalId: p2.id,
         type: "draft.generate",
         status: "queued",
-        input: { proposalId: p2.id, threadId: p2.thread_id, title: safeTitle(p2), payload: p2.payload },
+        input: {
+          proposalId: p2.id,
+          threadId: p2.thread_id,
+          title: safeTitle(p2),
+          topic: safeTopic(p2),
+          payload: deepFix(p2.payload),
+        },
       });
 
       const notif = await dbCreateNotification(db, {
@@ -329,49 +481,90 @@ export function proposalsRoutes({ db, wsHub }) {
         db,
         title: "Drafting başladı",
         body: safeTitle(p2) || "Draft hazırlanır…",
-        data: { type: "proposal.in_progress", proposalId: p2.id, jobId: job?.id || null },
+        data: {
+          type: "proposal.in_progress",
+          proposalId: p2.id,
+          jobId: job?.id || null,
+        },
       });
 
-      await dbAudit(db, by, "proposal.approve", "proposal", String(p2.id), { reason });
-
-      notifyN8n("proposal.approved", p2, {
-        tenantId,
-        proposalId: String(p2.id),
-        threadId: String(p2.thread_id),
-        jobId: job?.id || null,
+      await dbAudit(db, by, "proposal.approve", "proposal", String(p2.id), {
         reason,
-        callback: { url: "/api/executions/callback", tokenHeader: "x-webhook-token" },
       });
 
-      return okJson(res, { ok: true, proposal: p2, jobId: job?.id || null });
+      try {
+        notifyN8n(
+          "proposal.approved",
+          p2,
+          buildN8nExtra({
+            tenantId,
+            proposal: p2,
+            jobId: job?.id || null,
+            reason,
+          })
+        );
+      } catch {}
+
+      return okJson(res, {
+        ok: true,
+        proposal: p2,
+        jobId: job?.id || null,
+      });
     } catch (e) {
-      return okJson(res, { ok: false, error: "Error", details: { message: String(e?.message || e) } });
+      return okJson(res, {
+        ok: false,
+        error: "Error",
+        details: { message: String(e?.message || e) },
+      });
     }
   });
 
-  // POST /api/proposals/:id/request-changes  { feedbackText }
-  // convenience: returns latest contentId for proposal (frontend will call /content/:id/feedback)
+  // POST /api/proposals/:id/request-changes
+  // body: { feedbackText }
   r.post("/proposals/:id/request-changes", async (req, res) => {
     const proposalId = String(req.params.id || "").trim();
     const feedbackText = fixText(String(req.body?.feedbackText || "").trim());
 
-    if (!proposalId) return okJson(res, { ok: false, error: "proposalId required" });
-    if (!feedbackText) return okJson(res, { ok: false, error: "feedbackText required" });
-    if (!isUuid(proposalId)) return okJson(res, { ok: false, error: "proposalId must be uuid" });
+    if (!proposalId) {
+      return okJson(res, { ok: false, error: "proposalId required" });
+    }
+    if (!feedbackText) {
+      return okJson(res, { ok: false, error: "feedbackText required" });
+    }
+    if (!isUuid(proposalId)) {
+      return okJson(res, { ok: false, error: "proposalId must be uuid" });
+    }
 
     try {
       if (!isDbReady(db)) {
         const content = memGetLatestContentByProposal(proposalId);
-        if (!content) return okJson(res, { ok: false, error: "no content for proposal", dbDisabled: true });
-        return okJson(res, { ok: true, contentId: content.id, dbDisabled: true });
+        if (!content) {
+          return okJson(res, {
+            ok: false,
+            error: "no content for proposal",
+            dbDisabled: true,
+          });
+        }
+
+        return okJson(res, {
+          ok: true,
+          contentId: content.id,
+          dbDisabled: true,
+        });
       }
 
       const content = await dbGetLatestDraftLikeByProposal(db, proposalId);
-      if (!content) return okJson(res, { ok: false, error: "no content for proposal" });
+      if (!content) {
+        return okJson(res, { ok: false, error: "no content for proposal" });
+      }
 
       return okJson(res, { ok: true, contentId: content.id });
     } catch (e) {
-      return okJson(res, { ok: false, error: "Error", details: { message: String(e?.message || e) } });
+      return okJson(res, {
+        ok: false,
+        error: "Error",
+        details: { message: String(e?.message || e) },
+      });
     }
   });
 
@@ -379,22 +572,47 @@ export function proposalsRoutes({ db, wsHub }) {
   // convenience: returns latest approved draft contentId for proposal
   r.post("/proposals/:id/publish", async (req, res) => {
     const proposalId = String(req.params.id || "").trim();
-    if (!proposalId) return okJson(res, { ok: false, error: "proposalId required" });
-    if (!isUuid(proposalId)) return okJson(res, { ok: false, error: "proposalId must be uuid" });
+
+    if (!proposalId) {
+      return okJson(res, { ok: false, error: "proposalId required" });
+    }
+    if (!isUuid(proposalId)) {
+      return okJson(res, { ok: false, error: "proposalId must be uuid" });
+    }
 
     try {
       if (!isDbReady(db)) {
         const c = memGetLatestContentByProposal(proposalId);
-        if (!c) return okJson(res, { ok: false, error: "no content for proposal", dbDisabled: true });
-        return okJson(res, { ok: true, contentId: c.id, dbDisabled: true });
+        if (!c) {
+          return okJson(res, {
+            ok: false,
+            error: "no content for proposal",
+            dbDisabled: true,
+          });
+        }
+
+        return okJson(res, {
+          ok: true,
+          contentId: c.id,
+          dbDisabled: true,
+        });
       }
 
       const c = await dbGetLatestApprovedDraftByProposal(db, proposalId);
-      if (!c) return okJson(res, { ok: false, error: "no draft.approved content found" });
+      if (!c) {
+        return okJson(res, {
+          ok: false,
+          error: "no draft.approved content found",
+        });
+      }
 
       return okJson(res, { ok: true, contentId: c.id });
     } catch (e) {
-      return okJson(res, { ok: false, error: "Error", details: { message: String(e?.message || e) } });
+      return okJson(res, {
+        ok: false,
+        error: "Error",
+        details: { message: String(e?.message || e) },
+      });
     }
   });
 
