@@ -1,20 +1,9 @@
 // src/routes/api/content.js
-// FINAL v3.0 — Draft -> Asset/Video Generate -> Publish
-//
-// Endpoints:
-// - GET  /api/content?proposalId=uuid
-// - POST /api/content/:id/feedback { feedbackText, tenantId? }
-//      -> draft.regenerating + job + n8n content.revise
-// - POST /api/content/:id/approve  { tenantId? }
-//      -> asset.requested + job + n8n content.assets.generate OR content.video.generate
-//      (NOTE: does NOT set proposal=approved anymore)
-// - POST /api/content/:id/publish  { tenantId? }
-//      -> publish.requested + job + n8n content.publish
-//
-// Notes:
-// - Proposal moves to "approved" ONLY after assets/video are ready (callback side).
-// - Reject stays in proposals route.
-// - Reel/video flows are routed through content.video.generate.
+// FINAL v3.2 — Draft -> Asset/Video Generate -> Publish
+// FIXES:
+// ✅ publish tolerant for approved/draft.approved rows when assetUrl exists
+// ✅ top-level asset fields added to n8n payload
+// ✅ publish can start from approved row even if legacy status mismatch
 
 import express from "express";
 import crypto from "crypto";
@@ -67,63 +56,38 @@ function asObj(x) {
   return x && typeof x === "object" && !Array.isArray(x) ? x : {};
 }
 
-function asArr(x) {
-  return Array.isArray(x) ? x : [];
-}
-
 function safeLower(x) {
   return String(x || "").trim().toLowerCase();
 }
 
 function packType(pack) {
   if (!pack || typeof pack !== "object") return "";
-  return String(
-    pack.post_type ||
-      pack.postType ||
-      pack.format ||
-      pack.type ||
-      ""
-  ).toLowerCase();
+  return String(pack.post_type || pack.postType || pack.format || pack.type || "").toLowerCase();
 }
 
 function pickAspectRatio(pack) {
   if (!pack || typeof pack !== "object") return "";
-  return String(
-    pack.aspectRatio ||
-      pack.aspect_ratio ||
-      pack?.visualPlan?.aspectRatio ||
-      ""
-  ).trim();
+  return String(pack.aspectRatio || pack.aspect_ratio || pack?.visualPlan?.aspectRatio || "").trim();
 }
 
 function pickVisualPreset(pack) {
   if (!pack || typeof pack !== "object") return "";
-  return String(
-    pack?.visualPlan?.visualPreset ||
-      pack?.visualPreset ||
-      ""
-  ).trim();
+  return String(pack?.visualPlan?.visualPreset || pack?.visualPreset || "").trim();
 }
 
 function pickImagePrompt(pack) {
   if (!pack || typeof pack !== "object") return "";
-  return fixText(
-    String(pack.imagePrompt || pack?.assetBrief?.imagePrompt || "").trim()
-  );
+  return fixText(String(pack.imagePrompt || pack?.assetBrief?.imagePrompt || "").trim());
 }
 
 function pickVideoPrompt(pack) {
   if (!pack || typeof pack !== "object") return "";
-  return fixText(
-    String(pack.videoPrompt || pack?.assetBrief?.videoPrompt || "").trim()
-  );
+  return fixText(String(pack.videoPrompt || pack?.assetBrief?.videoPrompt || "").trim());
 }
 
 function pickVoiceoverText(pack) {
   if (!pack || typeof pack !== "object") return "";
-  return fixText(
-    String(pack.voiceoverText || pack?.assetBrief?.voiceoverText || "").trim()
-  );
+  return fixText(String(pack.voiceoverText || pack?.assetBrief?.voiceoverText || "").trim());
 }
 
 function pickNeededAssets(pack) {
@@ -240,18 +204,32 @@ function isDraftReadyStatus(s) {
     v === "draft.ready" ||
     v === "draft" ||
     v === "in_progress" ||
+    v === "approved" ||
+    v === "draft.approved" ||
     v.startsWith("draft.")
   );
 }
 
 function isAssetReadyStatus(s) {
   const v = statusLc(s);
-  return v === "asset.ready" || v === "assets.ready" || v === "publish.ready";
+  return (
+    v === "asset.ready" ||
+    v === "assets.ready" ||
+    v === "publish.ready" ||
+    v === "approved" ||
+    v === "draft.approved"
+  );
 }
 
 function isPublishRequestedStatus(s) {
   const v = statusLc(s);
   return v === "publish.requested" || v === "publish.queued" || v === "publish.running";
+}
+
+function canPublishRow(row) {
+  const contentPack = normalizeContentPack(row?.content_pack) || {};
+  const assetUrl = pickFirstAssetUrl(contentPack);
+  return Boolean(assetUrl) && isAssetReadyStatus(row?.status);
 }
 
 async function dbGetContentById(db, id) {
@@ -302,6 +280,7 @@ function buildPublishNotifyExtra({
   assetUrl,
   caption,
 }) {
+  const thumbnailUrl = pickThumbnailUrl(contentPack);
   return deepFix({
     tenantId,
     proposalId: String(proposal?.id || row?.proposal_id || ""),
@@ -313,7 +292,10 @@ function buildPublishNotifyExtra({
     aspectRatio: pickAspectRatio(contentPack),
     visualPreset: pickVisualPreset(contentPack),
     assetUrl,
-    thumbnailUrl: pickThumbnailUrl(contentPack),
+    imageUrl: assetUrl,
+    videoUrl: assetUrl,
+    thumbnailUrl,
+    coverUrl: thumbnailUrl || assetUrl,
     caption,
     contentPack,
     callback: { url: "/api/executions/callback", tokenHeader: "x-webhook-token" },
@@ -325,7 +307,6 @@ function buildPublishNotifyExtra({
 export function contentRoutes({ db, wsHub }) {
   const r = express.Router();
 
-  // GET /api/content?proposalId=...
   r.get("/content", async (req, res) => {
     const proposalId = String(req.query.proposalId || "").trim();
     if (!proposalId) return okJson(res, { ok: false, error: "proposalId required" });
@@ -344,7 +325,6 @@ export function contentRoutes({ db, wsHub }) {
     }
   });
 
-  // POST /api/content/:id/feedback
   r.post("/content/:id/feedback", async (req, res) => {
     const id = String(req.params.id || "").trim();
     const tenantId = pickTenantId(req);
@@ -479,7 +459,6 @@ export function contentRoutes({ db, wsHub }) {
     }
   });
 
-  // POST /api/content/:id/approve  -> starts ASSET/VIDEO generation (NOT proposal approved)
   r.post("/content/:id/approve", async (req, res) => {
     const id = String(req.params.id || "").trim();
     const tenantId = pickTenantId(req);
@@ -487,7 +466,6 @@ export function contentRoutes({ db, wsHub }) {
     if (!id) return okJson(res, { ok: false, error: "contentId required" });
 
     try {
-      // ========== MEMORY ==========
       if (!isDbReady(db)) {
         const row = mem.contentItems.get(id) || null;
         if (!row) return okJson(res, { ok: false, error: "content not found", dbDisabled: true });
@@ -498,7 +476,7 @@ export function contentRoutes({ db, wsHub }) {
           return okJson(res, { ok: false, error: "publish already requested", status: row.status, dbDisabled: true });
         }
 
-        if (isAssetReadyStatus(st)) {
+        if (isAssetReadyStatus(st) && pickFirstAssetUrl(normalizeContentPack(row.content_pack) || {})) {
           return okJson(res, { ok: true, content: row, note: "asset already ready", dbDisabled: true });
         }
 
@@ -574,7 +552,6 @@ export function contentRoutes({ db, wsHub }) {
         return okJson(res, { ok: true, content: updated, jobId, jobType, dbDisabled: true });
       }
 
-      // ========== DB ==========
       if (!isUuid(id)) return okJson(res, { ok: false, error: "contentId must be uuid" });
 
       const row = await dbGetContentById(db, id);
@@ -586,7 +563,7 @@ export function contentRoutes({ db, wsHub }) {
         return okJson(res, { ok: false, error: "publish already requested", status: row.status });
       }
 
-      if (isAssetReadyStatus(st)) {
+      if (isAssetReadyStatus(st) && pickFirstAssetUrl(normalizeContentPack(row.content_pack) || {})) {
         return okJson(res, { ok: true, content: row, note: "asset already ready" });
       }
 
@@ -670,7 +647,6 @@ export function contentRoutes({ db, wsHub }) {
     }
   });
 
-  // POST /api/content/:id/publish  -> requires ASSET ready
   r.post("/content/:id/publish", async (req, res) => {
     const id = String(req.params.id || "").trim();
     const tenantId = pickTenantId(req);
@@ -682,17 +658,19 @@ export function contentRoutes({ db, wsHub }) {
         const row = mem.contentItems.get(id) || null;
         if (!row) return okJson(res, { ok: false, error: "content not found", dbDisabled: true });
 
+        const contentPack = normalizeContentPack(row.content_pack) || {};
         const st = statusLc(row.status);
-        if (!isAssetReadyStatus(st)) {
+
+        if (!canPublishRow(row)) {
           return okJson(res, {
             ok: false,
             error: "content must be asset.ready before publish",
             status: row.status,
+            hasAssetUrl: !!pickFirstAssetUrl(contentPack),
             dbDisabled: true,
           });
         }
 
-        const contentPack = normalizeContentPack(row.content_pack) || {};
         const assetUrl = pickFirstAssetUrl(contentPack);
         const caption = buildCaption(contentPack);
 
@@ -749,9 +727,9 @@ export function contentRoutes({ db, wsHub }) {
         wsHub?.broadcast?.({ type: "execution.updated", execution: mem.jobs.get(jobId) });
         wsHub?.broadcast?.({ type: "notification.created", notification: notif });
 
-        memAudit("ceo", "content.publish", "content", id, { proposalId: row.proposal_id, jobId });
+        memAudit("ceo", "content.publish", "content", id, { proposalId: row.proposal_id, jobId, status: st });
 
-        return okJson(res, { ok: true, jobId, dbDisabled: true });
+        return okJson(res, { ok: true, jobId, contentId: id, dbDisabled: true });
       }
 
       if (!isUuid(id)) return okJson(res, { ok: false, error: "contentId must be uuid" });
@@ -759,15 +737,19 @@ export function contentRoutes({ db, wsHub }) {
       const row = await dbGetContentById(db, id);
       if (!row) return okJson(res, { ok: false, error: "content not found" });
 
-      const st = statusLc(row.status);
-      if (!isAssetReadyStatus(st)) {
-        return okJson(res, { ok: false, error: "content must be asset.ready before publish", status: row.status });
+      const contentPack = normalizeContentPack(row.content_pack) || {};
+      if (!canPublishRow(row)) {
+        return okJson(res, {
+          ok: false,
+          error: "content must be asset.ready before publish",
+          status: row.status,
+          hasAssetUrl: !!pickFirstAssetUrl(contentPack),
+        });
       }
 
       const proposal = await dbGetProposalById(db, String(row.proposal_id));
       if (!proposal) return okJson(res, { ok: false, error: "proposal not found for content" });
 
-      const contentPack = normalizeContentPack(row.content_pack) || {};
       const assetUrl = pickFirstAssetUrl(contentPack);
       const caption = buildCaption(contentPack);
 
@@ -827,6 +809,7 @@ export function contentRoutes({ db, wsHub }) {
       await dbAudit(db, "ceo", "content.publish", "content", row.id, {
         proposalId: proposal.id,
         jobId: job?.id || null,
+        status: row.status,
       });
 
       return okJson(res, { ok: true, jobId: job?.id || null, contentId: row.id });

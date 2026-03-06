@@ -1,3 +1,6 @@
+// src/routes/api/executions.js
+// FINAL v3.1 — FIXED callback merge + publish/asset status consistency
+
 import express from "express";
 import { cfg } from "../../config.js";
 
@@ -513,7 +516,6 @@ export function executionsRoutes({ db, wsHub }) {
         finished_at,
       };
 
-      // ================= MEMORY =================
       if (!isDbReady(db)) {
         const job = mem.jobs.get(jobId);
         if (!job) return okJson(res, { ok: false, error: "job not found", dbDisabled: true });
@@ -531,7 +533,6 @@ export function executionsRoutes({ db, wsHub }) {
 
         let contentRow = null;
 
-        // draft callback
         if (proposalId && incomingPack && isDraftJobType(jt)) {
           contentRow = memUpsertContentItem({
             proposalId,
@@ -544,7 +545,6 @@ export function executionsRoutes({ db, wsHub }) {
           wsHub?.broadcast?.({ type: "content.updated", content: contentRow });
         }
 
-        // asset / video callback
         if (proposalId && isAssetJobType(jt)) {
           const target =
             contentIdFromInput
@@ -571,7 +571,6 @@ export function executionsRoutes({ db, wsHub }) {
           }
         }
 
-        // publish callback
         if (proposalId && isPublishJobType(jt)) {
           const latest =
             contentIdFromInput
@@ -620,7 +619,6 @@ export function executionsRoutes({ db, wsHub }) {
         return okJson(res, { ok: true, jobId, status, dbDisabled: true });
       }
 
-      // ================= DB =================
       const jobRow = await dbUpdateJob(db, jobId, patch);
       if (!jobRow) return okJson(res, { ok: false, error: "job not found" });
 
@@ -635,7 +633,6 @@ export function executionsRoutes({ db, wsHub }) {
 
       let contentRow = null;
 
-      // draft callback
       if (proposalId && incomingPack && isDraftJobType(jt)) {
         contentRow = await dbUpsertDraftFromCallback(db, {
           proposalId,
@@ -646,7 +643,6 @@ export function executionsRoutes({ db, wsHub }) {
         });
       }
 
-      // asset / video callback
       if (proposalId && isAssetJobType(jt)) {
         const contentId = pickContentId(result, jobInput);
         const rowToUpdate = await resolveDbContentRowForUpdate(db, proposalId, contentId);
@@ -674,7 +670,6 @@ export function executionsRoutes({ db, wsHub }) {
         }
       }
 
-      // publish callback
       if (proposalId && isPublishJobType(jt)) {
         const contentId = pickContentId(result, jobInput);
         const rowToUpdate =
@@ -747,7 +742,6 @@ export function executionsRoutes({ db, wsHub }) {
 
       await dbAudit(db, "n8n", "execution.callback", "job", jobId, { status, jobType: jt });
 
-      // auto mode hook — only after draft ready
       try {
         if (proposalId && contentRow?.status === "draft.ready") {
           const mode = await getTenantMode({ db, tenantId });
