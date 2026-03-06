@@ -4,6 +4,7 @@ Context:
 - This is a single-day content idea.
 - The draft will be reviewed by the CEO in AI HQ.
 - Output must be detailed and production-ready.
+- The output will later be used for asset generation, so visual instructions must be concrete and practical.
 
 DATE: {{today}}
 TENANT: {{tenantId}}
@@ -21,9 +22,24 @@ Allowed formats:
 - carousel
 - reel
 
-If FORMAT = image → produce single-frame content.
-If FORMAT = carousel → produce 5–8 slides.
-If FORMAT = reel → produce 3–6 scenes.
+If FORMAT = image:
+- produce a single-frame visual concept
+- include one strong headline
+- include minimal text
+- visual must feel like a premium tech advertisement
+
+If FORMAT = carousel:
+- produce 5 to 8 slides
+- first slide must be a strong hook / cover
+- middle slides must provide value, transformation, process, proof, or benefits
+- last slide must contain a clear CTA
+- every slide must have practical visual guidance
+
+If FORMAT = reel:
+- produce 3 to 6 scenes
+- include motion notes
+- include approximate duration
+- scenes must feel producible as short-form social video
 
 Brand:
 NEOX is an AI automation and digital technology company.
@@ -39,6 +55,7 @@ Content must:
 - feel futuristic
 - highlight AI, automation, business efficiency
 - look like a high-end tech brand
+- be practical for real production use
 
 Audience:
 - startup founders
@@ -91,43 +108,56 @@ JSON SCHEMA:
   "reviewQuestionsForCEO": ["string"]
 }
 
-Rules:
+STRICT OUTPUT RULES:
 
-Caption:
+1. assetBrief.imagePrompt is REQUIRED.
+2. assetBrief.imagePrompt must NEVER be empty.
+3. assetBrief.imagePrompt must be a real production-ready visual generation prompt in English.
+4. assetBrief.imagePrompt must describe:
+   - brand style
+   - composition
+   - lighting
+   - mood
+   - color palette
+   - subject matter
+   - layout hierarchy
+   - aspect ratio intent
+   - premium advertising quality
+5. If FORMAT = carousel:
+   - assetBrief.imagePrompt must describe the COVER SLIDE visual first
+   - visualPlan.frames must contain 5 to 8 items
+6. If FORMAT = image:
+   - visualPlan.frames must contain exactly 1 main frame entry
+7. If FORMAT = reel:
+   - assetBrief.imagePrompt should describe the opening hero frame / thumbnail style
+8. Do not leave any key empty unless absolutely impossible.
+9. Do not use placeholders like "insert headline here".
+10. Do not output markdown.
+11. Do not output explanations.
+
+Caption rules:
 - must sound natural
 - must not sound robotic
 - structure: hook → value → CTA
 - max 1200 characters
 
-Hashtags:
+Hashtag rules:
 - between 8 and 18
 - mix Azerbaijani and English
 - include #AI #Automation #Neox
 
-Carousel rules:
-- 5 to 8 slides
-- first slide must be a strong hook
-- last slide must contain CTA
+Visual plan rules:
+- clearly specify where logo appears
+- clearly specify where headline appears
+- clearly specify hierarchy and layout guidance
+- be directly usable by designers
 
-Reel rules:
-- 3 to 6 scenes
-- include motion
-- include approximate duration
-
-Image rules:
-- single strong visual
-- bold headline
-- minimal text
-
-Visual plan must clearly specify:
-- where logo appears
-- where headline appears
-- layout guidance
-- visual hierarchy
-
-Asset brief must be practical:
-- usable for designers
-- usable for AI image tools
+Asset brief rules:
+- must be practical
+- must be usable by AI image tools
+- must be usable by designers
+- imagePrompt must be high quality, descriptive, and concrete
+- imagePrompt language must be English even if the rest of the draft is Azerbaijani
 
 Return JSON only.
 No explanation.

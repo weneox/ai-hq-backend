@@ -1,23 +1,25 @@
-// src/kernel/debateEngine.js (FINAL v3.8 — strict usecases + UTF fix + safer JSON + meta_comment plain text + TEMPLATE VARS)
+// src/kernel/debateEngine.js (FINAL v4.0 — enforced content draft normalization + guaranteed imagePrompt)
 //
-// ✅ NEW in v3.8:
-// - Supports template vars in prompts: {{format}}, {{tenantId}}, {{today}}, {{threadId}}, {{mode}}
-// - runDebate accepts { tenantId, threadId, formatHint } and passes vars into getGlobalPolicy/getUsecasePrompt
+// Goals:
+// - Keep existing debate flow
+// - Force draft payload normalization
+// - Guarantee assetBrief.imagePrompt for content drafts
+// - Make output stable for n8n / asset generation
 //
-// Modes:
-// - "answer" (default): normal text answer
-// - "proposal": proposal JSON
-// - "draft": content draft JSON via prompts/usecases/content.draft.txt
-// - "revise": revise draft JSON via prompts/usecases/content.revise.txt
-// - "publish": publish pack JSON via prompts/usecases/content.publish.txt
-// - "trend": trend brief JSON via prompts/usecases/trend.research.txt
-// - "meta_comment": IG comment reply (PLAIN TEXT) via prompts/usecases/meta.comment_reply.txt
+// Supported modes:
+// - answer
+// - proposal
+// - draft
+// - revise
+// - publish
+// - trend
+// - meta_comment
 
 import OpenAI from "openai";
 import { cfg } from "../config.js";
 import { getGlobalPolicy, getUsecasePrompt } from "../prompts/index.js";
 
-export const DEBATE_ENGINE_VERSION = "final-v3.8";
+export const DEBATE_ENGINE_VERSION = "final-v4.0";
 console.log(`[debateEngine] LOADED ${DEBATE_ENGINE_VERSION}`);
 
 const DEFAULT_AGENTS = ["orion", "nova", "atlas", "echo"];
@@ -64,12 +66,37 @@ function sDeep(x) {
   return "";
 }
 
-// ✅ Mojibake repair (UTF-8 stored/decoded as latin1 -> "gÃ¼nlÃ¼k")
+function asObj(x) {
+  return x && typeof x === "object" && !Array.isArray(x) ? x : {};
+}
+
+function asArr(x) {
+  return Array.isArray(x) ? x : [];
+}
+
+function uniqStrings(arr = []) {
+  const seen = new Set();
+  const out = [];
+  for (const item of arr) {
+    const v = String(item || "").trim();
+    if (!v) continue;
+    const k = v.toLowerCase();
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(v);
+  }
+  return out;
+}
+
+function truncate(s0, n) {
+  const t = String(s0 || "").trim();
+  if (t.length <= n) return t;
+  return t.slice(0, Math.max(0, n - 1)).trim() + "…";
+}
+
 function fixMojibake(input) {
   const t = String(input || "");
   if (!t) return t;
-
-  // only attempt if typical broken markers appear
   if (!/[ÃÂ]|â€™|â€œ|â€�|â€“|â€”|â€¦/.test(t)) return t;
 
   try {
@@ -133,7 +160,6 @@ function extractText(resp) {
     if (joined) return fixMojibake(joined);
   }
 
-  // last resort deep scan
   try {
     const seen = new Set();
     const parts = [];
@@ -338,7 +364,6 @@ function modeExpectsJson(mode) {
   return ["proposal", "draft", "trend", "publish", "revise"].includes(m0);
 }
 
-// ✅ Build system prompt with vars usable in templates
 function buildSynthesisSystem({ mode, vars }) {
   const global = getGlobalPolicy(vars);
   const usecase = pickUsecaseFromMode(mode);
@@ -387,6 +412,290 @@ Rules:
   const respFix = await withTimeout(openai.responses.create(repairReq), timeoutMs, "OpenAI timeout (json-repair)");
   const fixed = fixMojibake(extractText(respFix));
   return extractJsonFromText(fixed);
+}
+
+function pickAspectRatio(format) {
+  const f = String(format || "").trim().toLowerCase();
+  if (f === "reel") return "9:16";
+  if (f === "image") return "4:5";
+  return "1:1";
+}
+
+function normalizeFrame(frame, idx, format) {
+  const f = asObj(frame);
+  const typeByFormat = format === "reel" ? "scene" : idx === 1 ? "cover" : "slide";
+
+  return {
+    index: Number(f.index || idx),
+    frameType: String(f.frameType || typeByFormat),
+    headline: truncate(fixMojibake(f.headline || ""), 140),
+    subline: truncate(fixMojibake(f.subline || ""), 240),
+    layout: truncate(fixMojibake(f.layout || ""), 260),
+    visualElements: uniqStrings(asArr(f.visualElements)).slice(0, 8),
+    motion: truncate(fixMojibake(f.motion || ""), 160),
+    durationSec: Number.isFinite(Number(f.durationSec)) ? Number(f.durationSec) : 0,
+  };
+}
+
+function ensureFrames(frames, format, cta = "") {
+  let out = asArr(frames).map((f, i) => normalizeFrame(f, i + 1, format)).filter((x) => x.headline || x.subline || x.layout);
+
+  if (format === "image") {
+    if (!out.length) {
+      out = [
+        {
+          index: 1,
+          frameType: "cover",
+          headline: "NEOX",
+          subline: "AI və avtomatlaşdırma həlləri",
+          layout: "Headline center-left, subline below, logo bottom-right, premium tech composition",
+          visualElements: ["neon grid", "abstract automation interface"],
+          motion: "",
+          durationSec: 0,
+        },
+      ];
+    }
+    return [out[0]];
+  }
+
+  if (format === "carousel") {
+    if (out.length < 5) {
+      const base = [...out];
+      while (base.length < 5) {
+        const idx = base.length + 1;
+        base.push(
+          normalizeFrame(
+            {
+              index: idx,
+              frameType: idx === 1 ? "cover" : idx === 5 ? "slide" : "slide",
+              headline: idx === 1 ? "NEOX" : idx === 5 ? "İndi əlaqə saxlayın" : `Slide ${idx}`,
+              subline: idx === 5 ? cta || "Daha çox məlumat üçün bizimlə əlaqə saxlayın" : "",
+              layout: "Clean premium carousel layout, strong hierarchy, logo bottom-right",
+              visualElements: ["tech UI", "data lines"],
+              motion: "",
+              durationSec: 0,
+            },
+            idx,
+            format
+          )
+        );
+      }
+      out = base;
+    }
+
+    if (out.length > 8) out = out.slice(0, 8);
+
+    const last = out[out.length - 1];
+    if (last && !String(last.subline || "").trim() && cta) {
+      last.subline = truncate(cta, 220);
+    }
+
+    if (last && !/cta|əlaqə|discover|start|başla|indi/i.test(`${last.headline} ${last.subline}`) && cta) {
+      last.subline = truncate(cta, 220);
+    }
+
+    return out.map((x, i) => ({
+      ...x,
+      index: i + 1,
+      frameType: i === 0 ? "cover" : "slide",
+    }));
+  }
+
+  if (format === "reel") {
+    if (out.length < 3) {
+      const base = [...out];
+      while (base.length < 3) {
+        const idx = base.length + 1;
+        base.push(
+          normalizeFrame(
+            {
+              index: idx,
+              frameType: "scene",
+              headline: idx === 1 ? "NEOX" : `Scene ${idx}`,
+              subline: idx === 3 ? cta || "Bizimlə əlaqə saxlayın" : "",
+              layout: "Vertical short-form video scene with strong center focus",
+              visualElements: ["motion graphics", "tech overlays"],
+              motion: "subtle camera move",
+              durationSec: 2,
+            },
+            idx,
+            format
+          )
+        );
+      }
+      out = base;
+    }
+
+    if (out.length > 6) out = out.slice(0, 6);
+
+    return out.map((x, i) => ({
+      ...x,
+      index: i + 1,
+      frameType: "scene",
+      durationSec: Number.isFinite(Number(x.durationSec)) && Number(x.durationSec) > 0 ? Number(x.durationSec) : 2,
+    }));
+  }
+
+  return out;
+}
+
+function buildFallbackImagePrompt(payload) {
+  const p = asObj(payload);
+  const format = String(p.format || "image").trim().toLowerCase();
+  const visualPlan = asObj(p.visualPlan);
+  const frames = asArr(visualPlan.frames);
+  const first = asObj(frames[0]);
+
+  const lines = [
+    format === "carousel"
+      ? "Create a premium futuristic carousel cover image for NEOX, an AI automation and digital technology company."
+      : format === "reel"
+      ? "Create a premium futuristic vertical hero frame / thumbnail for a NEOX short-form reel about AI automation and business efficiency."
+      : "Create a premium futuristic advertising image for NEOX, an AI automation and digital technology company.",
+    p.topic ? `Topic: ${p.topic}.` : "",
+    p.hook ? `Hook: ${p.hook}.` : "",
+    first.headline ? `Headline on visual: ${first.headline}.` : "",
+    first.subline ? `Supporting subline: ${first.subline}.` : "",
+    visualPlan.style ? `Style: ${visualPlan.style}.` : "Style: premium, modern, futuristic, high-end tech brand.",
+    visualPlan.colorNotes
+      ? `Color palette: ${visualPlan.colorNotes}.`
+      : "Color palette: deep blue, neon cyan, dark graphite, subtle premium glow.",
+    visualPlan.composition
+      ? `Composition: ${visualPlan.composition}.`
+      : "Composition: strong visual hierarchy, clean premium layout, balanced typography zones, brand-focused.",
+    first.layout ? `Layout guidance: ${first.layout}.` : "",
+    asArr(first.visualElements).length ? `Visual elements: ${asArr(first.visualElements).join(", ")}.` : "",
+    format === "reel"
+      ? "Aspect ratio intent: 9:16 vertical."
+      : format === "carousel"
+      ? "Aspect ratio intent: 1:1 square."
+      : "Aspect ratio intent: 4:5 social post.",
+    "Logo area must be clearly reserved.",
+    "Modern premium advertising visual, cinematic lighting, polished surfaces, elegant contrast, highly detailed, professional brand campaign quality.",
+    "No clutter, no cheap stock-photo feel, no low-quality text rendering.",
+  ];
+
+  return lines.filter(Boolean).join(" ");
+}
+
+function normalizeContentDraftPayload(rawPayload, vars = {}) {
+  const src = asObj(rawPayload);
+  const format = String(src.format || vars.format || "image").trim().toLowerCase();
+  const language = String(src.language || "az").trim().toLowerCase() || "az";
+  const tenantKey = String(src.tenantKey || vars.tenantId || "default").trim() || "default";
+
+  const visualPlanSrc = asObj(src.visualPlan);
+  const normalizedFrames = ensureFrames(visualPlanSrc.frames, format, src.cta || "");
+
+  const visualPlan = {
+    style: truncate(fixMojibake(visualPlanSrc.style || "premium, modern, futuristic, high-end tech advertising"), 200),
+    aspectRatio: String(visualPlanSrc.aspectRatio || pickAspectRatio(format)),
+    composition: truncate(
+      fixMojibake(
+        visualPlanSrc.composition ||
+          "clean premium composition, strong hierarchy, clear headline zone, clear logo zone, polished tech-forward layout"
+      ),
+      260
+    ),
+    colorNotes: truncate(
+      fixMojibake(
+        visualPlanSrc.colorNotes ||
+          "deep blue, neon cyan, graphite, subtle silver highlights, premium high-tech contrast"
+      ),
+      240
+    ),
+    textOnVisual: uniqStrings(asArr(visualPlanSrc.textOnVisual)).slice(0, 12),
+    frames: normalizedFrames,
+  };
+
+  const assetBriefSrc = asObj(src.assetBrief);
+  const neededAssets = uniqStrings(assetBriefSrc.neededAssets || (format === "reel" ? ["video", "icons", "mockups"] : ["image", "icons", "mockups"]));
+  const brollIdeas = uniqStrings(assetBriefSrc.brollIdeas).slice(0, 10);
+  const imagePrompt = truncate(
+    fixMojibake(assetBriefSrc.imagePrompt || "").trim() || buildFallbackImagePrompt({ ...src, visualPlan, format }),
+    2400
+  );
+
+  const payload = {
+    type: "content_draft",
+    tenantKey,
+    language,
+    format,
+    topic: truncate(fixMojibake(src.topic || src.title || "NEOX content draft"), 180),
+    goal: ["lead", "awareness", "trust", "offer"].includes(String(src.goal || "").trim()) ? String(src.goal).trim() : "awareness",
+    targetAudience: truncate(
+      fixMojibake(src.targetAudience || "startup founders, SMEs, tech founders, entrepreneurs, business owners interested in automation"),
+      220
+    ),
+    hook: truncate(fixMojibake(src.hook || ""), 220),
+    caption: truncate(fixMojibake(src.caption || ""), 1200),
+    cta: truncate(fixMojibake(src.cta || "Daha çox məlumat üçün bizimlə əlaqə saxlayın"), 180),
+    hashtags: uniqStrings(asArr(src.hashtags)).slice(0, 18),
+    visualPlan,
+    assetBrief: {
+      neededAssets,
+      imagePrompt,
+      brollIdeas,
+    },
+    complianceNotes: uniqStrings(asArr(src.complianceNotes)).slice(0, 10),
+    reviewQuestionsForCEO: uniqStrings(asArr(src.reviewQuestionsForCEO)).slice(0, 8),
+  };
+
+  if (!payload.hashtags.some((x) => x.toLowerCase() === "#ai")) payload.hashtags.push("#AI");
+  if (!payload.hashtags.some((x) => x.toLowerCase() === "#automation")) payload.hashtags.push("#Automation");
+  if (!payload.hashtags.some((x) => x.toLowerCase() === "#neox")) payload.hashtags.push("#Neox");
+
+  payload.hashtags = uniqStrings(payload.hashtags).slice(0, 18);
+
+  if (!payload.reviewQuestionsForCEO.length) {
+    payload.reviewQuestionsForCEO = [
+      "Bu mövzu bu günkü prioritetə uyğundurmu?",
+      "Vizual istiqamət premium NEOX brendinə uyğundurmu?",
+      "CTA daha sərt olmalıdır, yoxsa daha yumşaq?",
+    ];
+  }
+
+  if (!payload.complianceNotes.length) {
+    payload.complianceNotes = [
+      "Brend tonu premium və peşəkar qalmalıdır.",
+      "Həddindən artıq şişirdilmiş nəticə vəd edilməməlidir.",
+      "Vizualda oxunaqlılıq və aydın hierarchy qorunmalıdır.",
+    ];
+  }
+
+  return payload;
+}
+
+function normalizeDraftProposalObject(obj, vars = {}) {
+  const src = asObj(obj);
+
+  if (src.type === "content_draft" || src.format || src.visualPlan || src.assetBrief) {
+    const payload = normalizeContentDraftPayload(src, vars);
+    return {
+      type: "draft",
+      title: truncate(payload.topic || "Draft", 120),
+      payload,
+    };
+  }
+
+  if (src.type && src.payload && typeof src.payload === "object") {
+    const t = String(src.type || "").trim().toLowerCase();
+    if (t === "draft") {
+      const payload = normalizeContentDraftPayload(src.payload, vars);
+      return {
+        type: "draft",
+        title: truncate(src.title || payload.topic || "Draft", 120),
+        payload,
+      };
+    }
+  }
+
+  const payload = normalizeContentDraftPayload(src.payload || src, vars);
+  return {
+    type: "draft",
+    title: truncate(src.title || payload.topic || "Draft", 120),
+    payload,
+  };
 }
 
 async function synthesizeFinal({ openai, message, agentNotes, mode, timeoutMs, vars }) {
@@ -445,6 +754,11 @@ ${notesText || "(empty)"}
   if (normMode === "proposal") {
     if (!obj || typeof obj !== "object") obj = null;
     return { finalAnswer: outText, proposal: obj };
+  }
+
+  if (normMode === "draft") {
+    const proposal = normalizeDraftProposalObject(obj || { raw: outText }, vars);
+    return { finalAnswer: outText, proposal };
   }
 
   if (obj && typeof obj === "object") {
@@ -514,7 +828,6 @@ export async function runDebate({
     notesSoFar = agentNotes.map((n) => `[${n.agentId}] ${n.text}`).join("\n\n");
   }
 
-  // ✅ Vars available to templates (content.draft.txt etc)
   const vars = {
     tenantId: String(tenantId || "default"),
     threadId: String(threadId || ""),
