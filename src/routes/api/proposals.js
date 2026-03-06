@@ -1,20 +1,13 @@
 // src/routes/api/proposals.js
 //
-// FINAL v3.0 — proposals routes for drafting flow + latest content support
+// FINAL v3.1 — FIXED published tab / derived ui status
 //
-// Flow:
-// pending -> approve -> in_progress (drafting) -> content draft generated
-// final content approve/publish handled elsewhere
-//
-// Goals:
-// ✅ GET /api/proposals?status=... supports latest content
-// ✅ Approve => in_progress + create job + notify n8n
-// ✅ Reject => rejected
-// ✅ request-changes => return latest draft-like contentId
-// ✅ publish => return latest approved draft contentId
-// ✅ Stable DB + memory fallback
-// ✅ Better payload/title/topic passing to n8n
-// ✅ Reel / Runway aware extra payload
+// Fix:
+// ✅ GET /api/proposals?status=published no longer depends only on proposals.status
+// ✅ Derived UI status now uses latestContent.status + publish permalink too
+// ✅ Approved / Published tabs work even if proposal.status is not yet updated
+// ✅ Memory + DB fallback both aligned
+// ✅ includeContent + includePack preserved
 
 import express from "express";
 import { cfg } from "../../config.js";
@@ -81,7 +74,11 @@ function safeTopic(p) {
 function safeFormat(p) {
   const payload = safePayload(p);
   return fixText(
-    String(payload?.format || payload?.postType || payload?.post_type || "").trim().toLowerCase()
+    String(
+      payload?.format || payload?.postType || payload?.post_type || ""
+    )
+      .trim()
+      .toLowerCase()
   );
 }
 
@@ -90,9 +87,9 @@ function safeAspectRatio(p) {
   return fixText(
     String(
       payload?.aspectRatio ||
-      payload?.aspect_ratio ||
-      payload?.visualPlan?.aspectRatio ||
-      ""
+        payload?.aspect_ratio ||
+        payload?.visualPlan?.aspectRatio ||
+        ""
     ).trim()
   );
 }
@@ -100,11 +97,7 @@ function safeAspectRatio(p) {
 function safeVisualPreset(p) {
   const payload = safePayload(p);
   return fixText(
-    String(
-      payload?.visualPlan?.visualPreset ||
-      payload?.visualPreset ||
-      ""
-    ).trim()
+    String(payload?.visualPlan?.visualPreset || payload?.visualPreset || "").trim()
   );
 }
 
@@ -132,7 +125,9 @@ function safeVoiceoverText(p) {
 function safeNeededAssets(p) {
   const payload = safePayload(p);
   const arr = payload?.neededAssets || payload?.assetBrief?.neededAssets || [];
-  return Array.isArray(arr) ? arr.map((x) => String(x).trim()).filter(Boolean).slice(0, 12) : [];
+  return Array.isArray(arr)
+    ? arr.map((x) => String(x).trim()).filter(Boolean).slice(0, 12)
+    : [];
 }
 
 function safeReelMeta(p) {
@@ -141,26 +136,107 @@ function safeReelMeta(p) {
   return Object.keys(rm).length ? deepFix(rm) : null;
 }
 
-function normalizeStatus(x) {
-  const s = fixText(String(x || "").trim()) || "pending";
+function normalizeRequestedStatus(x) {
+  const s = fixText(String(x || "").trim()).toLowerCase() || "draft";
   const allowed = new Set([
+    "draft",
     "pending",
     "in_progress",
     "approved",
     "published",
     "rejected",
   ]);
-  return allowed.has(s) ? s : "pending";
+  return allowed.has(s) ? s : "draft";
+}
+
+function lc(x) {
+  return String(x || "").trim().toLowerCase();
+}
+
+function parseMaybeJson(x) {
+  if (!x) return null;
+  if (typeof x === "object") return x;
+  if (typeof x === "string") {
+    try {
+      const o = JSON.parse(x);
+      return o && typeof o === "object" ? o : null;
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+function hasPublishLink(latestContent) {
+  if (!latestContent) return false;
+
+  const publish = parseMaybeJson(latestContent.publish) || latestContent.publish || null;
+  const contentPack =
+    parseMaybeJson(latestContent.content_pack) || latestContent.content_pack || null;
+
+  return !!(
+    latestContent?.permalink ||
+    publish?.permalink ||
+    contentPack?.permalink ||
+    contentPack?.publish?.permalink
+  );
+}
+
+function deriveUiStatusFromProposalAndContent(proposal, latestContent) {
+  const pStatus = lc(proposal?.status);
+  const cStatus = lc(latestContent?.status);
+  const publishedByLink = hasPublishLink(latestContent);
+
+  // published
+  if (
+    pStatus === "published" ||
+    cStatus === "published" ||
+    cStatus === "posted" ||
+    cStatus === "live" ||
+    cStatus === "publish.done" ||
+    cStatus === "publish.completed" ||
+    publishedByLink
+  ) {
+    return "published";
+  }
+
+  // rejected
+  if (pStatus === "rejected") {
+    return "rejected";
+  }
+
+  // approved
+  if (
+    pStatus === "approved" ||
+    cStatus === "approved" ||
+    cStatus === "asset.ready" ||
+    cStatus === "assets.ready" ||
+    cStatus === "publish.ready" ||
+    cStatus === "ready"
+  ) {
+    return "approved";
+  }
+
+  // everything else belongs to draft pipeline
+  return "draft";
+}
+
+function matchesRequestedUiStatus(requestedStatus, proposal, latestContent) {
+  const uiStatus = deriveUiStatusFromProposalAndContent(proposal, latestContent);
+  return uiStatus === requestedStatus;
 }
 
 function mapLatestContent(row, includePack) {
   if (!row?.content_id) return null;
+
+  const publishObj = deepFix(row.content_publish || null);
 
   return {
     id: row.content_id,
     status: row.content_status,
     updated_at: row.content_updated_at,
     last_feedback: row.content_last_feedback || null,
+    publish: publishObj,
     ...(includePack ? { content_pack: deepFix(row.content_pack) } : {}),
   };
 }
@@ -181,6 +257,9 @@ function mapProposalRow(row, includeContent, includePack) {
 
   if (includeContent) {
     p.latestContent = mapLatestContent(row, includePack);
+    p.uiStatus = deriveUiStatusFromProposalAndContent(p, p.latestContent);
+  } else {
+    p.uiStatus = deriveUiStatusFromProposalAndContent(p, null);
   }
 
   return p;
@@ -219,20 +298,25 @@ function buildN8nExtra({
 export function proposalsRoutes({ db, wsHub }) {
   const r = express.Router();
 
-  // GET /api/proposals?status=pending|in_progress|approved|published|rejected
-  // Optional:
-  // - includeContent=1
-  // - includePack=1
+  // GET /api/proposals?status=draft|pending|in_progress|approved|published|rejected
+  // UI-facing behavior:
+  // - draft / pending / in_progress => draft pipeline
+  // - approved => approved UI bucket
+  // - published => published UI bucket
+  // - rejected => rejected UI bucket
   r.get("/proposals", async (req, res) => {
-    const status = normalizeStatus(req.query.status);
+    const rawStatus = normalizeRequestedStatus(req.query.status);
+    const uiStatus =
+      rawStatus === "pending" || rawStatus === "in_progress" ? "draft" : rawStatus;
+
     const limit = clamp(req.query.limit ?? 50, 1, 200);
     const includeContent = String(req.query.includeContent || "1") === "1";
     const includePack = String(req.query.includePack || "0") === "1";
 
     try {
+      // ================= MEMORY =================
       if (!isDbReady(db)) {
-        const rows = memListProposals(status)
-          .slice(0, limit)
+        const all = memListProposals()
           .map((p) => {
             const out = {
               ...p,
@@ -240,73 +324,95 @@ export function proposalsRoutes({ db, wsHub }) {
               payload: deepFix(p.payload),
             };
 
+            let latestContent = null;
             if (includeContent) {
               const c = memGetLatestContentByProposal(p.id);
-              out.latestContent = c
+              latestContent = c
                 ? {
                     id: c.id,
                     status: c.status,
                     updated_at: c.updated_at || c.created_at || null,
                     last_feedback: c.last_feedback || null,
+                    publish: deepFix(c.publish || null),
                     ...(includePack ? { content_pack: deepFix(c.content_pack) } : {}),
                   }
                 : null;
+
+              out.latestContent = latestContent;
             }
 
+            out.uiStatus = deriveUiStatusFromProposalAndContent(out, latestContent);
             return out;
-          });
+          })
+          .filter((p) => matchesRequestedUiStatus(uiStatus, p, p.latestContent))
+          .sort((a, b) => {
+            const am = Date.parse(a?.created_at || 0) || 0;
+            const bm = Date.parse(b?.created_at || 0) || 0;
+            return bm - am;
+          })
+          .slice(0, limit);
 
         return okJson(res, {
           ok: true,
-          status,
-          proposals: rows,
+          status: uiStatus,
+          proposals: all,
           dbDisabled: true,
         });
       }
 
+      // ================= DB =================
+      // Intentionally fetch recent rows + latest content, then derive UI status in JS.
+      // This avoids missing "published" items when only content_items got updated.
       const q = await db.query(
         `
         select
-          p.id, p.thread_id, p.agent, p.type, p.status, p.title, p.payload,
-          p.created_at, p.decided_at, p.decision_by,
-          ${
-            includeContent
-              ? `
+          p.id,
+          p.thread_id,
+          p.agent,
+          p.type,
+          p.status,
+          p.title,
+          p.payload,
+          p.created_at,
+          p.decided_at,
+          p.decision_by,
           c.id as content_id,
           c.status as content_status,
           c.updated_at as content_updated_at,
           c.last_feedback as content_last_feedback,
+          c.publish as content_publish,
           ${includePack ? "c.content_pack as content_pack," : ""}
-          `
-              : ""
-          }
           1 as _dummy
         from proposals p
-        ${
-          includeContent
-            ? `
         left join lateral (
-          select id, status, content_pack, last_feedback, updated_at, created_at
+          select
+            id,
+            status,
+            content_pack,
+            publish,
+            last_feedback,
+            updated_at,
+            created_at
           from content_items
           where proposal_id = p.id
           order by updated_at desc nulls last, created_at desc
           limit 1
         ) c on true
-        `
-            : ""
-        }
-        where p.status = $1::text
         order by p.created_at desc
-        limit ${Number(limit)}
-        `,
-        [status]
+        limit ${Number(Math.max(limit * 6, 200))}
+        `
       );
 
-      const rows = (q.rows || []).map((row) =>
-        mapProposalRow(row, includeContent, includePack)
-      );
+      const rows = (q.rows || [])
+        .map((row) => mapProposalRow(row, includeContent, includePack))
+        .filter((p) => matchesRequestedUiStatus(uiStatus, p, p.latestContent))
+        .slice(0, limit);
 
-      return okJson(res, { ok: true, status, proposals: rows });
+      return okJson(res, {
+        ok: true,
+        status: uiStatus,
+        proposals: rows,
+      });
     } catch (e) {
       return okJson(res, {
         ok: false,
@@ -608,7 +714,6 @@ export function proposalsRoutes({ db, wsHub }) {
   });
 
   // POST /api/proposals/:id/request-changes
-  // body: { feedbackText }
   r.post("/proposals/:id/request-changes", async (req, res) => {
     const proposalId = String(req.params.id || "").trim();
     const feedbackText = fixText(String(req.body?.feedbackText || "").trim());
@@ -657,7 +762,6 @@ export function proposalsRoutes({ db, wsHub }) {
   });
 
   // POST /api/proposals/:id/publish
-  // convenience: returns latest approved draft contentId for proposal
   r.post("/proposals/:id/publish", async (req, res) => {
     const proposalId = String(req.params.id || "").trim();
 
