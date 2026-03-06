@@ -4,17 +4,22 @@ import { okJson, clamp } from "../../utils/http.js";
 import { fixText } from "../../utils/textFix.js";
 import { togetherGenerateImage } from "../../services/togetherImage.js";
 
+function normalizeAspectRatio(x) {
+  const v = String(x || "").trim();
+  if (v === "9:16" || v === "4:5" || v === "1:1") return v;
+  return "1:1";
+}
+
 function pickDimsFromAspectRatio(aspectRatio) {
-  const ar = String(aspectRatio || "").trim();
+  const ar = normalizeAspectRatio(aspectRatio);
   if (ar === "9:16") return { width: 1080, height: 1920 };
   if (ar === "4:5") return { width: 1080, height: 1350 };
   return { width: 1080, height: 1080 };
 }
 
-function normalizeAspectRatio(x) {
-  const v = String(x || "").trim();
-  if (v === "9:16" || v === "4:5" || v === "1:1") return v;
-  return "1:1";
+function positiveNum(v, fallback) {
+  const n = Number(v);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
 }
 
 export function mediaRoutes() {
@@ -26,10 +31,8 @@ export function mediaRoutes() {
     const aspectRatio = normalizeAspectRatio(req.body?.aspectRatio || "1:1");
     const dims = pickDimsFromAspectRatio(aspectRatio);
 
-    const width =
-      Number(req.body?.width) > 0 ? Number(req.body.width) : dims.width;
-    const height =
-      Number(req.body?.height) > 0 ? Number(req.body.height) : dims.height;
+    const width = positiveNum(req.body?.width, dims.width);
+    const height = positiveNum(req.body?.height, dims.height);
 
     if (!prompt) {
       return okJson(res, { ok: false, error: "prompt required" });
@@ -55,8 +58,10 @@ export function mediaRoutes() {
     } catch (e) {
       return okJson(res, {
         ok: false,
-        error: "Error",
-        details: { message: String(e?.message || e) },
+        error: "image_generation_failed",
+        details: {
+          message: String(e?.message || e),
+        },
       });
     }
   });

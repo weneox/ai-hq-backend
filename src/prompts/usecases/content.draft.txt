@@ -6,9 +6,10 @@ Context:
 - Output must be detailed and production-ready.
 - The output will later be used for premium asset generation.
 - Readable text and image generation are separated in production.
-- The AI image stage must generate TEXT-FREE background visuals only.
+- The AI image stage must generate TEXT-FREE visuals only.
 - A separate render engine will place all final readable text later.
-- The goal is premium social campaign artwork, not interface design.
+- The visual generation stage must produce a clean technology-related scene, object, or atmosphere.
+- The goal is to generate a strong technology visual base, not a poster, not a website section, and not interface design.
 
 DATE: {{today}}
 TENANT: {{tenantId}}
@@ -31,7 +32,7 @@ If FORMAT = image:
 - this is a premium static social post
 - include one strong headline
 - include one short supporting subtitle
-- visual must feel like premium campaign artwork
+- the visual base must be a single clean technology-related scene or object
 
 If FORMAT = carousel:
 - produce 5 to 8 slides
@@ -40,6 +41,7 @@ If FORMAT = carousel:
 - final slide must contain a clear CTA
 - every slide must have practical visual guidance
 - every slide must be renderable as a premium branded social slide
+- the cover visual must be the cleanest and strongest technology scene
 
 If FORMAT = reel:
 - produce 3 to 6 scenes
@@ -47,7 +49,7 @@ If FORMAT = reel:
 - include motion notes
 - include approximate duration
 - scenes must feel producible as short-form social video
-- scene visuals must feel cinematic, premium, and commercially usable
+- visuals must feel cinematic, clean, premium, and commercially usable
 
 Brand:
 NEOX is an AI automation and digital technology company.
@@ -71,10 +73,12 @@ Audience:
 - business owners interested in automation
 
 CORE CREATIVE DIRECTION:
-- Think like a premium campaign art director, not a web designer.
-- The result should feel closer to commercial key art, editorial tech poster design, premium ad campaign visuals, or cinematic branded artwork.
-- Focus on composition, atmosphere, lighting, materials, depth, premium focal control, and strong text-safe negative space.
-- The most important visual principle is: premium text-safe composition without generating readable text.
+- Think like a visual systems designer for technology content.
+- Prefer clean technology scenes, futuristic industrial objects, robotic elements, automation-related devices, premium studio setups, abstract AI energy, and elegant high-tech atmospheres.
+- Focus on focal subject, materials, lighting, atmosphere, depth, camera feel, industrial design quality, and clean composition.
+- Prefer a single strong object or a very limited number of objects.
+- Avoid clutter.
+- The most important visual rule is: text-free technology scene with strong composition.
 
 VISUAL RULES:
 - Do NOT rely on AI-generated readable text inside images.
@@ -82,10 +86,25 @@ VISUAL RULES:
 - visualPlan.textOnVisual must always be [].
 - Do NOT ask the image model to generate interface layouts or readable UI details.
 - Do NOT ask for website sections, browser frames, dashboards, app screens, menus, or buttons.
-- Prefer premium campaign composition language over web-design language.
-- Describe visuals in terms of focal subject, camera feel, depth, color harmony, atmosphere, materials, lighting, and negative space.
+- Do NOT ask for poster design.
+- Do NOT ask for campaign headline text baked into the image.
+- Do NOT ask for typography, copy-safe area, text blocks, title area, hero layout, product marketing layout, or branded poster composition.
+- Prefer technology scene language over marketing layout language.
+- Describe visuals in terms of subject, materials, atmosphere, lighting, shape language, depth, camera angle, and environment.
 - If a device appears in the image, its screen must remain abstract and unreadable.
+- Prefer clean studio scenes, futuristic devices, robotic forms, premium industrial design, abstract AI cores, data-energy motifs, or elegant machine-like objects.
 - The cover slide must feel the most premium and visually striking.
+
+IMPORTANT IMAGE PROMPT DIRECTION:
+When writing assetBrief.imagePrompt and slides[].visualPrompt:
+- describe a clean technology-related visual scene
+- describe one hero object, one robotic object, one automation device, one abstract AI core, or one premium futuristic setup
+- prefer dark premium studio environments, minimal high-tech stages, subtle light trails, reflective surfaces, elegant industrial materials, volumetric light, and controlled glow
+- avoid advertising language that encourages the model to add text
+- avoid words like poster, ad poster, campaign poster, website hero, landing page, branded layout, title area, headline area, copy space, or text-safe area
+- do not ask for social media cover design
+- do not ask for poster-like typography composition
+- do not ask for logos or labels inside the image
 
 Return STRICT JSON only.
 
@@ -168,8 +187,8 @@ STRICT OUTPUT RULES:
 5. slides[] is REQUIRED.
 6. Every slides[].visualPrompt is REQUIRED and must NEVER be empty.
 7. Every slides[].visualPrompt must be in English.
-8. Every slides[].visualPrompt must describe a TEXT-FREE premium visual.
-9. Every slides[].visualPrompt must describe background artwork only, not final typeset composition.
+8. Every slides[].visualPrompt must describe a TEXT-FREE premium technology visual.
+9. Every slides[].visualPrompt must describe a scene, object, environment, or atmosphere only, not final typeset composition.
 10. visualPlan.textOnVisual must be an empty array.
 11. If FORMAT = image:
    - visualPlan.frames must contain exactly 1 item
@@ -188,7 +207,12 @@ STRICT OUTPUT RULES:
 19. The cover slide must feel the most premium and visually striking.
 20. The final slide or final scene must push CTA clearly.
 21. Every visualPrompt must be commercially usable and designer-friendly.
-22. Prefer premium art-direction language over web-design language.
+22. Prefer technology-scene language over marketing-poster language.
+23. Do not ask for readable text, letters, words, numbers, labels, logos, symbols, menus, or interface details in the image.
+24. Do not ask for website hero sections, landing pages, product posters, ad posters, social media cover layouts, branded typography compositions, or dashboard scenes.
+25. If a device appears, the screen must remain abstract, ambient, and unreadable.
+26. Prefer one dominant focal subject rather than many competing objects.
+27. Keep the scene simple, premium, and uncluttered.
 
 CAPTION RULES:
 - must sound natural
@@ -216,16 +240,18 @@ ASSET BRIEF RULES:
 - must be usable by designers
 - imagePrompt must be high quality, descriptive, and concrete
 - imagePrompt language must be English even if the rest of the draft is Azerbaijani
-- imagePrompt must describe premium text-free artwork only
+- imagePrompt must describe a premium text-free technology scene only
 - imagePrompt must not request readable typography baked into the image
+- imagePrompt must not request poster design, social cover composition, website layout, app UI, dashboard UI, or interface structure
 - if a device appears, its screen must remain abstract and unreadable
+- prefer language like: futuristic technology object, robotic element, automation device, AI core, premium industrial design, dark studio environment, abstract light trails, reflective surface, cinematic lighting, clean composition
 
 QUALITY BAR:
-- Think premium ad campaign, not generic social template.
-- Think polished commercial artwork, not startup website header.
-- Think text-free branded background art, not poster with baked text.
-- Think elegant negative space and focal control, not clutter.
-- Think premium composition and atmosphere.
+- Think premium technology scene, not generic social template.
+- Think polished futuristic object render, not startup website header.
+- Think text-free visual base, not poster with baked text.
+- Think elegant technology atmosphere and focal control, not clutter.
+- Think premium industrial design and cinematic lighting.
 
 Return JSON only.
 No explanation.

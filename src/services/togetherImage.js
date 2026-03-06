@@ -1,4 +1,13 @@
 // src/services/togetherImage.js
+//
+// FINAL v3.0 — tech-scene-first Together image generation
+//
+// Goals:
+// ✅ Stop poster / ad / hero / website associations
+// ✅ Push model toward clean technology scene generation
+// ✅ Prefer one strong object / robotic / automation / AI-related subject
+// ✅ Keep output text-free
+// ✅ Reduce baked typography / fake UI / fake branding risk
 
 function clean(s) {
   return String(s || "")
@@ -52,18 +61,47 @@ function stripForbiddenTerms(input) {
     /\bscreen capture\b/gi,
     /\bfigma mockup\b/gi,
     /\bdribbble shot\b/gi,
+
+    /\bposter\b/gi,
+    /\bcampaign\b/gi,
+    /\badvertisement\b/gi,
+    /\badvertising\b/gi,
+    /\bcommercial\b/gi,
+    /\bkey art\b/gi,
+    /\beditorial\b/gi,
+    /\bbranded\b/gi,
+    /\bbrand visual\b/gi,
+    /\bmarketing\b/gi,
+    /\bproduct marketing\b/gi,
+    /\bsocial cover\b/gi,
+    /\bcarousel cover\b/gi,
+    /\bthumbnail design\b/gi,
+
     /\breadable text\b/gi,
     /\btypography\b/gi,
     /\bletters\b/gi,
     /\bwords\b/gi,
     /\bnumbers\b/gi,
     /\blogo\b/gi,
+    /\blogomark\b/gi,
     /\bmonogram\b/gi,
     /\bwatermark\b/gi,
+    /\bsignature\b/gi,
+    /\blabel\b/gi,
+    /\blabels\b/gi,
     /\bsubtitle\b/gi,
     /\bheadline\b/gi,
     /\bcaption\b/gi,
     /\bcopy\b/gi,
+    /\bcopy-safe\b/gi,
+    /\bcopy safe\b/gi,
+    /\btext-safe\b/gi,
+    /\btext safe\b/gi,
+    /\btitle area\b/gi,
+    /\bheadline area\b/gi,
+    /\bcopy area\b/gi,
+    /\btext area\b/gi,
+    /\bnegative space\b/gi,
   ];
 
   for (const re of patterns) t = t.replace(re, " ");
@@ -76,20 +114,20 @@ function normalizeCorePrompt(prompt) {
   const raw = clean(prompt);
   const stripped = stripForbiddenTerms(raw);
 
-  if (stripped) return truncate(stripped, 1400);
+  if (stripped) return truncate(stripped, 1100);
 
-  return "premium futuristic campaign artwork, elegant tech atmosphere, strong focal subject, cinematic lighting, polished materials, clean negative space";
+  return "minimal futuristic technology object in a dark studio, premium industrial design, controlled blue cyan lighting, clean composition";
 }
 
 function aspectRatioDirection(aspectRatio) {
   const ar = String(aspectRatio || "").trim();
   if (ar === "9:16") {
-    return "Vertical 9:16 composition, premium social video cover framing, strong upper/mid focal subject, generous text-safe negative space.";
+    return "Vertical 9:16 framing. Clean technology scene. One dominant focal subject. Strong upper or central composition.";
   }
   if (ar === "4:5") {
-    return "Vertical 4:5 composition, premium social campaign poster framing, balanced focal subject with elegant text-safe negative space.";
+    return "Vertical 4:5 framing. Clean technology scene. One dominant focal subject. Balanced composition.";
   }
-  return "Square 1:1 composition, premium carousel cover framing, strong visual center with clean text-safe negative space.";
+  return "Square 1:1 framing. Clean technology scene. One dominant focal subject. Stable centered or slightly offset composition.";
 }
 
 function buildPositivePrompt({ prompt, aspectRatio }) {
@@ -97,54 +135,65 @@ function buildPositivePrompt({ prompt, aspectRatio }) {
   const arLine = aspectRatioDirection(aspectRatio);
 
   return clean(`
-Premium commercial campaign artwork for a high-end AI automation and digital technology brand.
-Text-free background visual only.
+Create a text-free futuristic technology scene.
+
 ${core}
 
-Art direction:
-- polished advertising-grade composition
-- cinematic premium lighting
-- modern futuristic atmosphere
-- elegant depth and premium materials
-- visually memorable but clean
-- strong focal subject
-- controlled glow, not cluttered
-- clear text-safe negative space for later overlay
-- commercial key-art quality
-- editorial tech poster mood, not interface design
+Visual direction:
+- one dominant technology-related focal subject
+- premium industrial design object, robotic element, automation device, AI core, or elegant machine-like form
+- dark minimal studio environment
+- graphite, black metal, glass, premium engineered materials
+- subtle cyan and blue lighting
+- soft reflections
+- cinematic depth
+- controlled glow
+- clean uncluttered composition
+- minimal number of objects
+- no decorative poster layout
 
 Device rule:
-- if a phone, tablet, or screen appears, keep the screen abstract, ambient, and unreadable
-- use only soft gradients, light waves, reflections, or abstract glow on screens
+- if a screen, phone, panel, monitor, or device appears, keep it abstract and unreadable
+- use only ambient gradients, reflections, glow, or abstract light waves on screens
 - no interface details
 
-Composition rule:
-- prioritize one main focal subject
-- keep the layout clean and premium
-- avoid busy multi-object clutter
-- leave breathing room for later typography placement
+Scene rule:
+- prefer object rendering, studio scene, premium product-like technology object, robotic form, automation hardware, abstract AI machinery, or futuristic engineered device
+- avoid busy scenes
+- avoid crowded multi-object compositions
+- avoid graphic design layout
+- avoid poster-like arrangement
 
 ${arLine}
 
-Absolute requirement:
-- no readable text inside the image
-- no fake branding inside the image
-- no UI-like composition
+Absolute requirements:
+- no readable text
+- no letters
+- no words
+- no numbers
+- no symbols
+- no logo
+- no label
+- no fake branding
+- no interface
+- no website-like composition
+- no app-like composition
   `);
 }
 
 function buildNegativePrompt() {
   return clean(`
-readable text, letters, words, numbers, typography, captions, subtitles, labels,
-logo, logomark, monogram, watermark, signature,
+text, readable text, letters, words, numbers, typography, subtitles, labels,
+logo, logomark, monogram, watermark, signature, branding, fake brand text,
 website, web page, landing page, homepage, hero section, browser window, browser chrome,
 dashboard, admin panel, analytics screen, saas ui, ui design, user interface, interface mockup,
-mobile app, app screen, app ui, phone ui, tablet ui,
+mobile app, app screen, app ui, phone ui, tablet ui, software screen,
 navigation bar, navbar, menu, header, footer, button, cta button, search bar,
 widget grid, card ui, chart ui, graph ui,
-fake brand text, fake product text, fake labels, fake buttons,
+poster, campaign poster, ad poster, social media cover, thumbnail layout,
 screenshot, screen capture, figma mockup, dribbble shot,
-busy layout, clutter, cheap template look, startup homepage look, blurry text
+fake labels, fake buttons, fake interface, startup homepage look,
+busy layout, clutter, crowded composition, cheap template look, blurry text
   `);
 }
 
@@ -173,6 +222,7 @@ export async function togetherGenerateImage({
     response_format: "url",
   };
 
+  // ideogram üçün width/height göndərmirik
   if (!/ideogram/i.test(model)) {
     if (Number(width) > 0) body.width = Number(width);
     if (Number(height) > 0) body.height = Number(height);

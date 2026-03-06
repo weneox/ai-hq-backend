@@ -1,32 +1,24 @@
 // src/kernel/debateEngine.js
 //
-// FINAL v6.1 — premium campaign-safe draft normalization
+// FINAL v7.0 — tech-scene-first draft normalization
 //
 // Goals:
 // - Keep existing debate flow
-// - Normalize content drafts for premium render pipeline
+// - Normalize content drafts for render pipeline
 // - Guarantee:
 //   - payload.assetBrief.imagePrompt
 //   - payload.slides[]
 //   - each slides[].visualPrompt
-// - Strongly prevent website / dashboard / fake text visual prompts
+// - Push image generation toward clean technology scenes
+// - Strongly reduce fake text / poster / UI / website associations
 // - Support n8n asset generation + separate render engine
-// - Add better layout-family guidance for renderer / asset generation
-//
-// Supported modes:
-// - answer
-// - proposal
-// - draft
-// - revise
-// - publish
-// - trend
-// - meta_comment
+// - Keep renderHints for deterministic layout
 
 import OpenAI from "openai";
 import { cfg } from "../config.js";
 import { getGlobalPolicy, getUsecasePrompt } from "../prompts/index.js";
 
-export const DEBATE_ENGINE_VERSION = "final-v6.1";
+export const DEBATE_ENGINE_VERSION = "final-v7.0";
 console.log(`[debateEngine] LOADED ${DEBATE_ENGINE_VERSION}`);
 
 const DEFAULT_AGENTS = ["orion", "nova", "atlas", "echo"];
@@ -489,6 +481,8 @@ function sanitizeVisualText(x, max = 260) {
     .replace(/\b(website|landing page|web page|homepage|site hero|hero section)\b/gi, "")
     .replace(/\b(dashboard|admin panel|analytics panel|saas ui|ui screen|app screen|app ui|browser window)\b/gi, "")
     .replace(/\b(mockup of a website|interface mockup|ui mockup|screen mockup)\b/gi, "")
+    .replace(/\b(poster|campaign|advertisement|advertising|commercial|editorial|branded|marketing)\b/gi, "")
+    .replace(/\b(copy-safe|copy safe|text-safe|text safe|headline area|title area|copy area|negative space)\b/gi, "")
     .replace(/\s{2,}/g, " ")
     .trim();
 
@@ -501,7 +495,7 @@ function sanitizeVisualElements(arr = []) {
     "landing page",
     "dashboard",
     "ui",
-    "screen",
+    "screen ui",
     "browser",
     "navbar",
     "menu",
@@ -509,6 +503,13 @@ function sanitizeVisualElements(arr = []) {
     "interface",
     "app screen",
     "admin panel",
+    "poster",
+    "campaign",
+    "advertising",
+    "marketing layout",
+    "copy-safe",
+    "headline area",
+    "title area",
   ];
 
   const out = [];
@@ -541,9 +542,7 @@ function normalizeFrame(frame, idx, format) {
 function ensureFrames(frames, format, cta = "") {
   let out = asArr(frames)
     .map((f, i) => normalizeFrame(f, i + 1, format))
-    .filter(
-      (x) => x.headline || x.subline || x.layout || x.visualElements.length
-    );
+    .filter((x) => x.headline || x.subline || x.layout || x.visualElements.length);
 
   if (format === "image") {
     if (!out.length) {
@@ -552,15 +551,13 @@ function ensureFrames(frames, format, cta = "") {
           index: 1,
           frameType: "cover",
           headline: "AI ilə biznesinizi gücləndirin",
-          subline:
-            "NEOX avtomatlaşdırma həlləri ilə sürət və səmərəlilik qazanın",
-          layout:
-            "Editorial composition with clean negative space on left, main visual subject offset to right, premium poster balance",
+          subline: "NEOX avtomatlaşdırma həlləri ilə sürət və səmərəlilik qazanın",
+          layout: "clean technology scene with one strong object, subject slightly offset, minimal studio balance",
           visualElements: [
-            "premium futuristic subject",
-            "subtle data glow",
-            "dark gradient atmosphere",
-            "elegant tech mood",
+            "futuristic technology object",
+            "subtle blue light",
+            "dark premium studio",
+            "clean engineered materials",
           ],
           motion: "",
           durationSec: 0,
@@ -590,12 +587,12 @@ function ensureFrames(frames, format, cta = "") {
                 idx === 5
                   ? cta || "Daha çox məlumat üçün NEOX komandası ilə əlaqə saxlayın"
                   : "AI və avtomatlaşdırma ilə daha sürətli və ağıllı işləyin",
-              layout:
-                "Premium campaign composition with clear negative space, focal subject offset, elegant ad-like balance",
+              layout: "clean technology scene, single focal subject, minimal studio composition",
               visualElements: [
-                "cinematic tech glow",
-                "premium abstract automation forms",
-                "futuristic brand atmosphere",
+                "futuristic device",
+                "abstract automation form",
+                "controlled cyan glow",
+                "premium industrial surface",
               ],
               motion: "",
               durationSec: 0,
@@ -632,12 +629,12 @@ function ensureFrames(frames, format, cta = "") {
                 idx === 3
                   ? cta || "Bizimlə əlaqə saxlayın"
                   : "AI ilə daha ağıllı iş axınları",
-              layout:
-                "Vertical cinematic composition with strong focal subject and clean negative space for later typography",
+              layout: "vertical technology scene with one dominant object and cinematic depth",
               visualElements: [
-                "vertical motion energy",
-                "premium tech subject",
-                "cinematic glow",
+                "vertical tech object",
+                "robotic detail",
+                "soft light trails",
+                "controlled glow",
               ],
               motion: "subtle push-in camera movement",
               durationSec: 2,
@@ -700,37 +697,38 @@ function buildFallbackImagePrompt(payload) {
 
   const aspectLine =
     format === "reel"
-      ? "Vertical 9:16 composition for a premium reel cover."
+      ? "Vertical 9:16 framing."
       : format === "carousel"
-      ? "Square 1:1 composition for a premium carousel cover."
-      : "Vertical 4:5 composition for a premium social post.";
+      ? "Square 1:1 framing."
+      : "Vertical 4:5 framing.";
 
   const lines = [
-    "Premium commercial campaign artwork for NEOX, an AI automation and digital technology brand.",
-    p.topic ? `Campaign topic: ${p.topic}.` : "",
-    p.hook ? `Message direction: ${p.hook}.` : "",
-    first.headline ? `Emotional support for message theme: ${first.headline}.` : "",
-    first.subline ? `Secondary message direction: ${first.subline}.` : "",
+    "Create a text-free futuristic technology scene for NEOX, an AI automation and digital technology brand.",
+    p.topic ? `Topic mood: ${p.topic}.` : "",
+    p.hook ? `Message mood reference: ${p.hook}.` : "",
+    first.headline ? `Visual emotion support: ${first.headline}.` : "",
+    first.subline ? `Secondary mood reference: ${first.subline}.` : "",
     visualPlan.style
-      ? `Style: ${visualPlan.style}.`
-      : "Style: premium, futuristic, cinematic, elegant, advertising-grade.",
+      ? `Style direction: ${sanitizeVisualText(visualPlan.style, 180)}.`
+      : "Style direction: clean futuristic technology scene, premium industrial design, dark studio atmosphere.",
     visualPlan.colorNotes
-      ? `Color palette: ${visualPlan.colorNotes}.`
-      : "Color palette: deep blue, cyan glow, graphite, subtle silver, premium contrast.",
+      ? `Color palette: ${sanitizeVisualText(visualPlan.colorNotes, 180)}.`
+      : "Color palette: deep blue, cyan glow, graphite, subtle silver, dark premium contrast.",
     visualPlan.composition
-      ? `Composition: ${visualPlan.composition}.`
-      : "Composition: strong focal subject, elegant negative space, premium campaign balance.",
+      ? `Composition: ${sanitizeVisualText(visualPlan.composition, 220)}.`
+      : "Composition: one strong focal subject, minimal surrounding elements, calm premium balance.",
     first.layout
-      ? `Layout direction: ${first.layout}.`
-      : "Layout direction: maintain a clean text-safe area with premium visual balance.",
+      ? `Layout feel: ${sanitizeVisualText(first.layout, 180)}.`
+      : "Layout feel: clean studio setup with a dominant technology-related object.",
     asArr(first.visualElements).length
-      ? `Visual elements: ${asArr(first.visualElements).join(", ")}.`
+      ? `Elements: ${asArr(first.visualElements).join(", ")}.`
       : "",
-    "Text-free background visual only.",
-    "If a device appears, keep its screen abstract and unreadable using only ambient gradients, soft light waves, reflections, or glow.",
-    "Feel like polished commercial key art, editorial tech campaign artwork, or luxury brand poster background.",
-    "Use cinematic lighting, premium materials, depth, atmosphere, and controlled glow.",
-    "Keep the composition clean and commercially usable.",
+    "Prefer one dominant technology-related object, robotic element, automation device, AI core, or elegant engineered machine-like form.",
+    "Dark minimal studio environment.",
+    "Premium industrial materials such as graphite, black metal, glass, brushed surfaces, or engineered composite textures.",
+    "If a device appears, keep its screen abstract and unreadable using only ambient gradients, reflections, glow, or soft light waves.",
+    "Use controlled blue and cyan lighting, subtle reflections, cinematic depth, and clean uncluttered composition.",
+    "No readable text, no letters, no words, no numbers, no logos, no labels, no symbols, no interface details.",
     aspectLine,
   ];
 
@@ -744,37 +742,38 @@ function buildSlideVisualPrompt({ payload, frame, totalSlides, format }) {
 
   const aspectLine =
     format === "reel"
-      ? "Vertical 9:16 composition."
+      ? "Vertical 9:16 framing."
       : format === "carousel"
-      ? "Square 1:1 composition."
-      : "Vertical 4:5 composition.";
+      ? "Square 1:1 framing."
+      : "Vertical 4:5 framing.";
 
   const lines = [
     format === "carousel"
-      ? `Premium text-free campaign artwork background for NEOX carousel slide ${f.index} of ${totalSlides}.`
+      ? `Create a text-free futuristic technology scene for NEOX carousel slide ${f.index} of ${totalSlides}.`
       : format === "reel"
-      ? `Premium text-free campaign artwork background for NEOX reel scene ${f.index} of ${totalSlides}.`
-      : "Premium text-free campaign artwork background for a NEOX social post.",
-    p.topic ? `Campaign topic: ${p.topic}.` : "",
-    f.headline ? `Message mood: ${f.headline}.` : "",
-    f.subline ? `Secondary message mood: ${f.subline}.` : "",
+      ? `Create a text-free futuristic technology scene for NEOX reel scene ${f.index} of ${totalSlides}.`
+      : "Create a text-free futuristic technology scene for a NEOX social post.",
+    p.topic ? `Topic mood: ${p.topic}.` : "",
+    f.headline ? `Message mood reference: ${f.headline}.` : "",
+    f.subline ? `Secondary mood reference: ${f.subline}.` : "",
     visualPlan.style
-      ? `Style: ${visualPlan.style}.`
-      : "Style: premium futuristic brand advertising, cinematic, polished, elegant.",
+      ? `Style direction: ${sanitizeVisualText(visualPlan.style, 180)}.`
+      : "Style direction: clean futuristic technology scene, premium industrial design, dark studio atmosphere.",
     visualPlan.colorNotes
-      ? `Color palette: ${visualPlan.colorNotes}.`
-      : "Color palette: deep blue, electric cyan, graphite, soft silver, controlled neon accents.",
+      ? `Color palette: ${sanitizeVisualText(visualPlan.colorNotes, 180)}.`
+      : "Color palette: deep blue, electric cyan, graphite, soft silver, controlled glow.",
     f.layout
-      ? `Composition guidance: ${f.layout}.`
-      : "Composition guidance: strong focal subject, clear negative space, premium poster-like structure.",
+      ? `Composition feel: ${sanitizeVisualText(f.layout, 180)}.`
+      : "Composition feel: one strong focal subject, calm minimal arrangement, premium studio setup.",
     asArr(f.visualElements).length
-      ? `Visual elements: ${asArr(f.visualElements).join(", ")}.`
+      ? `Elements: ${asArr(f.visualElements).join(", ")}.`
       : "",
-    "Background artwork only. Final readable text will be added later by a separate render engine.",
+    "Scene only. Final readable text will be added later by a separate render engine.",
+    "Prefer one dominant technology object, robotic element, automation device, AI core, or elegant futuristic machine-like form.",
+    "Dark minimal studio environment with premium industrial materials.",
     "If a screen or device appears, keep it abstract and unreadable with ambient light only.",
-    "Feel like premium ad campaign artwork, cinematic editorial tech key art, or polished commercial poster background.",
-    "Use elegant lighting, atmosphere, depth, subtle reflections, and premium materials.",
-    "Keep the composition clean, attractive, and commercially usable.",
+    "Use controlled blue or cyan lighting, soft reflections, subtle light trails, cinematic depth, and clean uncluttered composition.",
+    "No readable text, no letters, no words, no numbers, no logos, no labels, no symbols, no interface details.",
     aspectLine,
   ];
 
@@ -904,7 +903,7 @@ function normalizeContentDraftPayload(rawPayload, vars = {}) {
     style: truncate(
       fixMojibake(
         visualPlanSrc.style ||
-          "premium, cinematic, modern, futuristic, high-end brand advertising"
+          "clean futuristic technology scene, premium industrial design, dark studio atmosphere"
       ),
       200
     ),
@@ -912,14 +911,14 @@ function normalizeContentDraftPayload(rawPayload, vars = {}) {
     composition: truncate(
       fixMojibake(
         visualPlanSrc.composition ||
-          "clean premium composition, strong hierarchy, clear negative space, polished campaign balance, premium poster-like visual direction"
+          "one strong focal subject, simple premium arrangement, clean studio balance"
       ),
       260
     ),
     colorNotes: truncate(
       fixMojibake(
         visualPlanSrc.colorNotes ||
-          "deep blue, neon cyan, graphite, subtle silver highlights, premium high-tech contrast"
+          "deep blue, cyan highlights, graphite, subtle silver reflections, premium high-tech contrast"
       ),
       240
     ),
@@ -978,10 +977,7 @@ function normalizeContentDraftPayload(rawPayload, vars = {}) {
     slides: [],
     assetBrief,
     complianceNotes: uniqStrings(asArr(src.complianceNotes)).slice(0, 10),
-    reviewQuestionsForCEO: uniqStrings(asArr(src.reviewQuestionsForCEO)).slice(
-      0,
-      8
-    ),
+    reviewQuestionsForCEO: uniqStrings(asArr(src.reviewQuestionsForCEO)).slice(0, 8),
   };
 
   if (!payload.hashtags.some((x) => x.toLowerCase() === "#ai"))
@@ -1032,7 +1028,7 @@ function normalizeContentDraftPayload(rawPayload, vars = {}) {
           focalBias: "right",
         },
         visualDirection:
-          "Editorial premium composition with strong focal subject offset to right and clean negative space",
+          "Clean technology scene with one dominant object and a calm premium studio setup",
         visualPrompt: assetBrief.imagePrompt,
       },
     ];
