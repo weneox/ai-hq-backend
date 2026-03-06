@@ -5,7 +5,7 @@ Context:
 - The draft will be reviewed by the CEO in AI HQ.
 - Output must be detailed and production-ready.
 - The output will later be used for premium asset generation.
-- IMPORTANT: visuals and text layout are separated in production.
+- IMPORTANT: visuals and readable text are separated in production.
 - The AI image model will generate TEXT-FREE background visuals only.
 - A separate render engine will place all readable text later.
 
@@ -30,7 +30,7 @@ If FORMAT = image:
 - this is a premium static social post
 - include one strong headline
 - include one short supporting subtitle
-- visual must feel like a premium tech advertisement
+- visual must feel like a premium campaign poster, not a website
 
 If FORMAT = carousel:
 - produce 5 to 8 slides
@@ -39,6 +39,7 @@ If FORMAT = carousel:
 - final slide must contain a clear CTA
 - every slide must have practical visual guidance
 - every slide must be renderable as a premium branded social slide
+- visuals must feel like premium campaign artwork, not a landing page
 
 If FORMAT = reel:
 - produce 3 to 6 scenes
@@ -56,12 +57,17 @@ Brand tone:
 - intelligent
 - innovation-focused
 - confident but not arrogant
+- appealing
+- clean
+- visually memorable
 
 Content must:
 - feel futuristic
 - highlight AI, automation, business efficiency
 - look like a high-end tech brand
 - be practical for real production use
+- feel attractive and polished for real social audiences
+- not feel overly corporate, stiff, or cold
 
 Audience:
 - startup founders
@@ -73,9 +79,12 @@ Audience:
 CRITICAL VISUAL RULES:
 - Do NOT rely on AI-generated readable text inside images.
 - Background visuals must be text-free.
-- Do NOT describe fake website navigation bars, fake UI menus, or fake readable text in image prompts.
-- Image prompts must describe premium composition, subject, lighting, mood, materials, camera feel, and reserved text zones.
+- Do NOT describe fake website navigation bars, fake UI menus, fake dashboards, fake buttons, fake mobile app screens, or fake readable text in image prompts.
+- Do NOT ask for landing page hero sections, web headers, desktop interfaces, browser windows, admin dashboards, or app mockups unless explicitly needed.
+- Image prompts must describe premium composition, subject, lighting, materials, atmosphere, and reserved copy space.
 - The final readable text will be added later by a render engine.
+- Visuals should feel like premium ad campaign artwork, editorial tech posters, cinematic brand visuals, or polished commercial key art.
+- Visuals should feel customer-friendly and attractive, not dry or bureaucratic.
 
 Return STRICT JSON only.
 
@@ -157,7 +166,7 @@ STRICT OUTPUT RULES:
 6. Every slides[].visualPrompt is REQUIRED and must NEVER be empty.
 7. Every slides[].visualPrompt must be in English.
 8. Every slides[].visualPrompt must describe a TEXT-FREE premium visual.
-9. Do NOT ask the image model to render readable text, buttons, website menus, or UI navigation.
+9. Do NOT ask the image model to render readable text, letters, words, numbers, UI labels, menu labels, navigation bars, dashboard widgets, website sections, browser chrome, or app screens.
 10. Instead, mention reserved headline area / reserved copy space / clean text zone.
 11. If FORMAT = image:
    - visualPlan.frames must contain exactly 1 item
