@@ -1,6 +1,6 @@
 // src/render/renderSlides.js
 //
-// FINAL v2.0 — premium branded slide renderer
+// FINAL v3.0 — premium multi-layout slide renderer
 //
 // Input:
 // [
@@ -15,7 +15,14 @@
 //     totalSlides,
 //     bgImageUrl,
 //     logoText,
-//     renderHints: { textPosition, safeArea, overlayStrength }
+//     aspectRatio, // optional: "1:1" | "4:5" | "9:16"
+//     renderHints: {
+//       layoutFamily,     // editorial_left | cinematic_center | luxury_top_left | dramatic_bottom_left
+//       textPosition,     // left | center | top-left | bottom-left
+//       safeArea,         // left-heavy | centered | top-left | bottom-left
+//       overlayStrength,  // soft | medium | strong
+//       focalBias         // right | center | lower-right | upper-right
+//     }
 //   }
 // ]
 //
@@ -27,7 +34,7 @@
 // Notes:
 // - Renderer adds all readable text itself
 // - AI-generated image should be text-free
-// - Designed for premium square carousel first
+// - Supports square carousel, 4:5 social post, 9:16 reel frame
 
 import fs from "fs";
 import path from "path";
@@ -59,11 +66,107 @@ function normalizeOverlayStrength(v) {
 
 function normalizeTextPosition(v) {
   const x = String(v || "").toLowerCase();
-  if (x === "center") return "center";
+  if (["center", "top-left", "bottom-left", "left"].includes(x)) return x;
   return "left";
 }
 
-function gradientByStrength(v) {
+function normalizeSafeArea(v) {
+  const x = String(v || "").toLowerCase();
+  if (["left-heavy", "centered", "top-left", "bottom-left"].includes(x)) return x;
+  return "left-heavy";
+}
+
+function normalizeLayoutFamily(v) {
+  const x = String(v || "").toLowerCase();
+  if (
+    ["editorial_left", "cinematic_center", "luxury_top_left", "dramatic_bottom_left"].includes(
+      x
+    )
+  ) {
+    return x;
+  }
+  return "editorial_left";
+}
+
+function normalizeFocalBias(v) {
+  const x = String(v || "").toLowerCase();
+  if (["right", "center", "lower-right", "upper-right"].includes(x)) return x;
+  return "right";
+}
+
+function normalizeAspectRatio(v) {
+  const x = String(v || "").trim();
+  if (x === "4:5" || x === "9:16" || x === "1:1") return x;
+  return "1:1";
+}
+
+function dimsByAspectRatio(v) {
+  const ar = normalizeAspectRatio(v);
+  if (ar === "4:5") return { width: 1080, height: 1350 };
+  if (ar === "9:16") return { width: 1080, height: 1920 };
+  return { width: 1080, height: 1080 };
+}
+
+function gradientByStrength(v, layoutFamily = "editorial_left") {
+  const lf = normalizeLayoutFamily(layoutFamily);
+
+  if (lf === "cinematic_center") {
+    if (v === "soft") {
+      return `
+        radial-gradient(78% 62% at 50% 46%, rgba(4,8,18,.18) 0%, rgba(4,8,18,.34) 52%, rgba(4,8,18,.62) 100%),
+        linear-gradient(180deg, rgba(4,8,18,.18) 0%, rgba(4,8,18,.10) 44%, rgba(4,8,18,.42) 100%)
+      `;
+    }
+    if (v === "strong") {
+      return `
+        radial-gradient(78% 62% at 50% 46%, rgba(4,8,18,.34) 0%, rgba(4,8,18,.56) 52%, rgba(4,8,18,.82) 100%),
+        linear-gradient(180deg, rgba(4,8,18,.28) 0%, rgba(4,8,18,.12) 44%, rgba(4,8,18,.54) 100%)
+      `;
+    }
+    return `
+      radial-gradient(78% 62% at 50% 46%, rgba(4,8,18,.26) 0%, rgba(4,8,18,.46) 52%, rgba(4,8,18,.72) 100%),
+      linear-gradient(180deg, rgba(4,8,18,.22) 0%, rgba(4,8,18,.10) 44%, rgba(4,8,18,.46) 100%)
+    `;
+  }
+
+  if (lf === "luxury_top_left") {
+    if (v === "soft") {
+      return `
+        linear-gradient(180deg, rgba(4,8,18,.56) 0%, rgba(4,8,18,.26) 32%, rgba(4,8,18,.12) 66%, rgba(4,8,18,.10) 100%),
+        linear-gradient(90deg, rgba(4,8,18,.54) 0%, rgba(4,8,18,.28) 36%, rgba(4,8,18,.10) 70%, rgba(4,8,18,.04) 100%)
+      `;
+    }
+    if (v === "strong") {
+      return `
+        linear-gradient(180deg, rgba(4,8,18,.82) 0%, rgba(4,8,18,.46) 32%, rgba(4,8,18,.20) 66%, rgba(4,8,18,.14) 100%),
+        linear-gradient(90deg, rgba(4,8,18,.80) 0%, rgba(4,8,18,.42) 36%, rgba(4,8,18,.16) 70%, rgba(4,8,18,.08) 100%)
+      `;
+    }
+    return `
+      linear-gradient(180deg, rgba(4,8,18,.72) 0%, rgba(4,8,18,.36) 32%, rgba(4,8,18,.16) 66%, rgba(4,8,18,.12) 100%),
+      linear-gradient(90deg, rgba(4,8,18,.70) 0%, rgba(4,8,18,.34) 36%, rgba(4,8,18,.14) 70%, rgba(4,8,18,.06) 100%)
+    `;
+  }
+
+  if (lf === "dramatic_bottom_left") {
+    if (v === "soft") {
+      return `
+        linear-gradient(0deg, rgba(4,8,18,.60) 0%, rgba(4,8,18,.26) 30%, rgba(4,8,18,.10) 64%, rgba(4,8,18,.04) 100%),
+        linear-gradient(90deg, rgba(4,8,18,.58) 0%, rgba(4,8,18,.26) 38%, rgba(4,8,18,.10) 70%, rgba(4,8,18,.04) 100%)
+      `;
+    }
+    if (v === "strong") {
+      return `
+        linear-gradient(0deg, rgba(4,8,18,.86) 0%, rgba(4,8,18,.46) 30%, rgba(4,8,18,.18) 64%, rgba(4,8,18,.08) 100%),
+        linear-gradient(90deg, rgba(4,8,18,.82) 0%, rgba(4,8,18,.40) 38%, rgba(4,8,18,.16) 70%, rgba(4,8,18,.08) 100%)
+      `;
+    }
+    return `
+      linear-gradient(0deg, rgba(4,8,18,.76) 0%, rgba(4,8,18,.36) 30%, rgba(4,8,18,.14) 64%, rgba(4,8,18,.06) 100%),
+      linear-gradient(90deg, rgba(4,8,18,.72) 0%, rgba(4,8,18,.34) 38%, rgba(4,8,18,.14) 70%, rgba(4,8,18,.06) 100%)
+    `;
+  }
+
   if (v === "soft") {
     return `
       linear-gradient(90deg, rgba(6,10,18,.58) 0%, rgba(6,10,18,.28) 42%, rgba(6,10,18,.10) 70%, rgba(6,10,18,.04) 100%),
@@ -82,6 +185,119 @@ function gradientByStrength(v) {
   `;
 }
 
+function backgroundPositionByFocalBias(v) {
+  const x = normalizeFocalBias(v);
+  if (x === "center") return "center center";
+  if (x === "lower-right") return "68% 66%";
+  if (x === "upper-right") return "68% 34%";
+  return "72% center";
+}
+
+function logoSizeByAspectRatio(ar) {
+  if (ar === "9:16") return { dot: 14, text: 22, gap: 13 };
+  if (ar === "4:5") return { dot: 13, text: 21, gap: 12 };
+  return { dot: 12, text: 20, gap: 12 };
+}
+
+function typeScaleByAspectRatio(ar, layoutFamily) {
+  if (ar === "9:16") {
+    return {
+      subtitle: layoutFamily === "cinematic_center" ? 30 : 29,
+      title: layoutFamily === "cinematic_center" ? 94 : 88,
+      cta: 20,
+      badge: 16,
+      counter: 18,
+    };
+  }
+  if (ar === "4:5") {
+    return {
+      subtitle: layoutFamily === "cinematic_center" ? 29 : 27,
+      title: layoutFamily === "cinematic_center" ? 86 : 80,
+      cta: 19,
+      badge: 15,
+      counter: 18,
+    };
+  }
+  return {
+    subtitle: layoutFamily === "cinematic_center" ? 28 : 28,
+    title: layoutFamily === "cinematic_center" ? 80 : 78,
+    cta: 18,
+    badge: 15,
+    counter: 18,
+  };
+}
+
+function layoutMetrics({ width, height, textPosition, layoutFamily, aspectRatio }) {
+  const isVertical = aspectRatio === "9:16";
+  const isFourFive = aspectRatio === "4:5";
+
+  let padX = 74;
+  let padTop = 72;
+  let padBottom = 64;
+  let copyMax = 580;
+  let copyMarginTop = 126;
+
+  if (isFourFive) {
+    padX = 76;
+    padTop = 74;
+    padBottom = 66;
+    copyMax = 600;
+    copyMarginTop = 150;
+  }
+
+  if (isVertical) {
+    padX = 72;
+    padTop = 82;
+    padBottom = 76;
+    copyMax = 720;
+    copyMarginTop = 230;
+  }
+
+  const base = {
+    padX,
+    padTop,
+    padBottom,
+    copyMax,
+    copyMarginTop,
+    alignItems: "flex-start",
+    textAlign: "left",
+    copyMarginLeft: "0",
+    copyMarginRight: "0",
+    justifyCopy: "flex-start",
+  };
+
+  if (layoutFamily === "cinematic_center" || textPosition === "center") {
+    return {
+      ...base,
+      copyMax: isVertical ? 820 : isFourFive ? 760 : 760,
+      copyMarginTop: isVertical ? 350 : isFourFive ? 210 : 172,
+      alignItems: "center",
+      textAlign: "center",
+      copyMarginLeft: "auto",
+      copyMarginRight: "auto",
+      justifyCopy: "center",
+    };
+  }
+
+  if (layoutFamily === "luxury_top_left" || textPosition === "top-left") {
+    return {
+      ...base,
+      copyMax: isVertical ? 640 : 560,
+      copyMarginTop: isVertical ? 190 : isFourFive ? 112 : 106,
+    };
+  }
+
+  if (layoutFamily === "dramatic_bottom_left" || textPosition === "bottom-left") {
+    return {
+      ...base,
+      copyMax: isVertical ? 680 : 580,
+      copyMarginTop: isVertical ? 760 : isFourFive ? 760 : 660,
+    };
+  }
+
+  return base;
+}
+
 function buildPageHtml(slide, idx, total) {
   const title = esc(safeText(slide.title || "Untitled Slide", 120));
   const subtitle = esc(safeText(slide.subtitle || "", 180));
@@ -89,43 +305,92 @@ function buildPageHtml(slide, idx, total) {
   const badge = esc(safeText(slide.badge || "NEOX", 24));
   const logoText = esc(safeText(slide.logoText || "NEOX", 18));
   const bgImageUrl = String(slide.bgImageUrl || "").trim();
-  const textPosition = normalizeTextPosition(slide?.renderHints?.textPosition || slide.align || "left");
-  const overlayStrength = normalizeOverlayStrength(slide?.renderHints?.overlayStrength || "medium");
+
+  const aspectRatio = normalizeAspectRatio(slide.aspectRatio || "1:1");
+  const dims = dimsByAspectRatio(aspectRatio);
+
+  const layoutFamily = normalizeLayoutFamily(slide?.renderHints?.layoutFamily);
+  const textPosition = normalizeTextPosition(
+    slide?.renderHints?.textPosition || slide.align || "left"
+  );
+  const safeArea = normalizeSafeArea(slide?.renderHints?.safeArea || "left-heavy");
+  const overlayStrength = normalizeOverlayStrength(
+    slide?.renderHints?.overlayStrength || "medium"
+  );
+  const focalBias = normalizeFocalBias(slide?.renderHints?.focalBias || "right");
 
   const bgLayer = bgImageUrl
     ? `
-      <div class="bg-image" style="background-image:url('${esc(bgImageUrl)}')"></div>
-      <div class="bg-dim"></div>
+      <div class="bg-image"
+        style="
+          background-image:url('${esc(bgImageUrl)}');
+          background-position:${backgroundPositionByFocalBias(focalBias)};
+        "
+      ></div>
+      <div class="bg-dim bg-dim-${idx}"></div>
     `
     : `
       <div class="bg-fallback"></div>
+      <div class="bg-dim bg-dim-${idx}"></div>
     `;
 
+  const metrics = layoutMetrics({
+    width: dims.width,
+    height: dims.height,
+    textPosition,
+    layoutFamily,
+    aspectRatio,
+  });
+
+  const scale = typeScaleByAspectRatio(aspectRatio, layoutFamily);
+  const logoScale = logoSizeByAspectRatio(aspectRatio);
+
   return `
-  <section class="page ${textPosition === "center" ? "centered" : "lefted"}">
-    <div class="card">
+  <section
+    class="page aspect-${aspectRatio.replace(":", "-")} layout-${layoutFamily} textpos-${textPosition} safe-${safeArea}"
+    style="width:${dims.width}px;height:${dims.height}px;"
+  >
+    <div class="card" style="width:${dims.width}px;height:${dims.height}px;">
       ${bgLayer}
       <div class="brand-glow brand-glow-a"></div>
       <div class="brand-glow brand-glow-b"></div>
       <div class="noise"></div>
 
-      <div class="content">
+      <div
+        class="content"
+        style="
+          padding:${metrics.padTop}px ${metrics.padX}px ${metrics.padBottom}px;
+          align-items:${metrics.alignItems};
+          text-align:${metrics.textAlign};
+        "
+      >
         <div class="topbar">
-          <div class="brand">
-            <span class="brand-mark"></span>
-            <span class="brand-text">${logoText}</span>
+          <div class="brand" style="gap:${logoScale.gap}px;">
+            <span
+              class="brand-mark"
+              style="width:${logoScale.dot}px;height:${logoScale.dot}px;"
+            ></span>
+            <span class="brand-text" style="font-size:${logoScale.text}px;">${logoText}</span>
           </div>
-          <div class="badge">${badge}</div>
+          <div class="badge" style="font-size:${scale.badge}px;">${badge}</div>
         </div>
 
-        <div class="copy">
-          ${subtitle ? `<div class="subtitle">${subtitle}</div>` : ""}
-          <h1>${title}</h1>
+        <div
+          class="copy"
+          style="
+            max-width:${metrics.copyMax}px;
+            margin-top:${metrics.copyMarginTop}px;
+            margin-left:${metrics.copyMarginLeft};
+            margin-right:${metrics.copyMarginRight};
+          "
+        >
+          ${subtitle ? `<div class="subtitle" style="font-size:${scale.subtitle}px;">${subtitle}</div>` : ""}
+          <h1 style="font-size:${scale.title}px;">${title}</h1>
         </div>
 
         <div class="footer">
-          <div class="cta">${cta}</div>
-          <div class="counter"><span class="num">${idx + 1}</span> / ${total}</div>
+          <div class="cta" style="font-size:${scale.cta}px;">${cta}</div>
+          <div class="counter" style="font-size:${scale.counter}px;"><span class="num">${idx + 1}</span> / ${total}</div>
         </div>
       </div>
     </div>
@@ -134,20 +399,25 @@ function buildPageHtml(slide, idx, total) {
 }
 
 function buildHtml({ slides }) {
-  const pageCss = slides
-    .map((slide, idx) => {
-      const overlayStrength = normalizeOverlayStrength(slide?.renderHints?.overlayStrength || "medium");
-      return `
-        .page-${idx} .bg-dim{
-          background: ${gradientByStrength(overlayStrength)};
-        }
-      `;
-    })
-    .join("\n");
-
   const pages = slides
     .map((slide, idx) => {
-      return `<div class="page-wrap page-${idx}">${buildPageHtml(slide, idx, slides.length)}</div>`;
+      const aspectRatio = normalizeAspectRatio(slide.aspectRatio || "1:1");
+      const dims = dimsByAspectRatio(aspectRatio);
+      const overlayStrength = normalizeOverlayStrength(
+        slide?.renderHints?.overlayStrength || "medium"
+      );
+      const layoutFamily = normalizeLayoutFamily(slide?.renderHints?.layoutFamily);
+
+      return `
+        <div class="page-wrap page-${idx}" style="width:${dims.width}px;height:${dims.height}px;">
+          <style>
+            .page-${idx} .bg-dim-${idx}{
+              background:${gradientByStrength(overlayStrength, layoutFamily)};
+            }
+          </style>
+          ${buildPageHtml(slide, idx, slides.length)}
+        </div>
+      `;
     })
     .join("\n");
 
@@ -155,7 +425,7 @@ function buildHtml({ slides }) {
 <html>
 <head>
 <meta charset="utf-8" />
-<meta name="viewport" content="width=1080,height=1080" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
@@ -168,23 +438,17 @@ function buildHtml({ slides }) {
   }
 
   .page-wrap {
-    width: 1080px;
-    height: 1080px;
     overflow: hidden;
     position: relative;
   }
 
   .page {
-    width: 1080px;
-    height: 1080px;
     position: relative;
     display: flex;
   }
 
   .card {
     position: relative;
-    width: 1080px;
-    height: 1080px;
     overflow: hidden;
     background: #070b14;
   }
@@ -200,9 +464,8 @@ function buildHtml({ slides }) {
 
   .bg-image {
     background-size: cover;
-    background-position: center center;
-    transform: scale(1.02);
-    filter: saturate(1.03) contrast(1.02);
+    transform: scale(1.03);
+    filter: saturate(1.04) contrast(1.03);
   }
 
   .bg-fallback {
@@ -242,29 +505,26 @@ function buildHtml({ slides }) {
   .content {
     position: relative;
     z-index: 4;
-    width: 100%;
-    height: 100%;
-    padding: 72px 74px;
     box-sizing: border-box;
     display: flex;
     flex-direction: column;
+    width: 100%;
+    height: 100%;
   }
 
   .topbar {
     display: flex;
     justify-content: space-between;
     align-items: center;
+    gap: 22px;
   }
 
   .brand {
     display: inline-flex;
     align-items: center;
-    gap: 12px;
   }
 
   .brand-mark {
-    width: 12px;
-    height: 12px;
     border-radius: 999px;
     background: linear-gradient(135deg, #00F5D2 0%, #61AFFF 45%, #8B5CFF 100%);
     box-shadow: 0 0 24px rgba(0,245,210,.35);
@@ -273,14 +533,12 @@ function buildHtml({ slides }) {
 
   .brand-text {
     color: rgba(255,255,255,.92);
-    font-size: 20px;
     font-weight: 800;
     letter-spacing: .16em;
   }
 
   .badge {
     color: rgba(255,255,255,.9);
-    font-size: 15px;
     font-weight: 700;
     letter-spacing: .08em;
     padding: 12px 18px;
@@ -291,54 +549,25 @@ function buildHtml({ slides }) {
   }
 
   .copy {
-    margin-top: 126px;
-    max-width: 580px;
-  }
-
-  .centered .copy {
-    margin-top: 172px;
-    max-width: 760px;
-    margin-left: auto;
-    margin-right: auto;
-    text-align: center;
-  }
-
-  .lefted .copy {
-    text-align: left;
+    position: relative;
   }
 
   .subtitle {
     color: rgba(190,220,255,.92);
-    font-size: 28px;
     line-height: 1.28;
     font-weight: 500;
-    max-width: 560px;
     margin-bottom: 18px;
     text-wrap: balance;
-  }
-
-  .centered .subtitle {
-    max-width: 760px;
-    margin-left: auto;
-    margin-right: auto;
   }
 
   h1 {
     margin: 0;
     color: #fff;
-    font-size: 78px;
     line-height: 0.98;
     letter-spacing: -0.04em;
     font-weight: 900;
     text-wrap: balance;
-    max-width: 640px;
     text-shadow: 0 10px 30px rgba(0,0,0,.16);
-  }
-
-  .centered h1 {
-    max-width: 800px;
-    margin-left: auto;
-    margin-right: auto;
   }
 
   .footer {
@@ -352,7 +581,6 @@ function buildHtml({ slides }) {
   .cta,
   .counter {
     color: rgba(255,255,255,.95);
-    font-size: 18px;
     font-weight: 700;
     line-height: 1;
     padding: 14px 18px;
@@ -374,7 +602,33 @@ function buildHtml({ slides }) {
     font-weight: 900;
   }
 
-  ${pageCss}
+  .layout-cinematic_center .footer {
+    justify-content: space-between;
+  }
+
+  .layout-dramatic_bottom_left .copy {
+    max-width: 72%;
+  }
+
+  .layout-luxury_top_left .copy {
+    max-width: 68%;
+  }
+
+  .layout-editorial_left .copy {
+    max-width: 62%;
+  }
+
+  .textpos-center .copy,
+  .textpos-center .subtitle,
+  .textpos-center h1 {
+    text-align: center;
+  }
+
+  .textpos-center .subtitle,
+  .textpos-center .copy {
+    margin-left: auto !important;
+    margin-right: auto !important;
+  }
 </style>
 </head>
 <body>
@@ -404,23 +658,34 @@ export async function renderSlidesToPng({
     throw new Error("outDir required");
   }
 
-  const normalizedSlides = slides.map((slide, i) => ({
-    title: safeText(slide.title || slide.headline || slide.text || "Untitled Slide", 120),
-    subtitle: safeText(slide.subtitle || slide.subline || slide.kicker || "", 180),
-    cta: safeText(slide.cta || "NEOX • AI Automation", 72),
-    badge: safeText(slide.badge || "NEOX", 24),
-    align: slide.align || "left",
-    theme: slide.theme || "neox_dark",
-    slideNumber: Number(slide.slideNumber || i + 1),
-    totalSlides: Number(slide.totalSlides || slides.length),
-    bgImageUrl: String(slide.bgImageUrl || slide.backgroundUrl || "").trim(),
-    logoText: safeText(slide.logoText || "NEOX", 18),
-    renderHints: {
-      textPosition: slide?.renderHints?.textPosition || slide.align || "left",
-      safeArea: slide?.renderHints?.safeArea || "left-heavy",
-      overlayStrength: slide?.renderHints?.overlayStrength || "medium",
-    },
-  }));
+  const normalizedSlides = slides.map((slide, i) => {
+    const aspectRatio = normalizeAspectRatio(
+      slide.aspectRatio ||
+        slide?.visualMeta?.aspectRatio ||
+        "1:1"
+    );
+
+    return {
+      title: safeText(slide.title || slide.headline || slide.text || "Untitled Slide", 120),
+      subtitle: safeText(slide.subtitle || slide.subline || slide.kicker || "", 180),
+      cta: safeText(slide.cta || "NEOX • AI Automation", 72),
+      badge: safeText(slide.badge || "NEOX", 24),
+      align: slide.align || "left",
+      theme: slide.theme || "neox_dark",
+      slideNumber: Number(slide.slideNumber || i + 1),
+      totalSlides: Number(slide.totalSlides || slides.length),
+      bgImageUrl: String(slide.bgImageUrl || slide.backgroundUrl || "").trim(),
+      logoText: safeText(slide.logoText || "NEOX", 18),
+      aspectRatio,
+      renderHints: {
+        layoutFamily: slide?.renderHints?.layoutFamily || "editorial_left",
+        textPosition: slide?.renderHints?.textPosition || slide.align || "left",
+        safeArea: slide?.renderHints?.safeArea || "left-heavy",
+        overlayStrength: slide?.renderHints?.overlayStrength || "medium",
+        focalBias: slide?.renderHints?.focalBias || "right",
+      },
+    };
+  });
 
   ensureDir(outDir);
 
@@ -428,8 +693,9 @@ export async function renderSlidesToPng({
   const browser = await chromium.launch({ args: ["--no-sandbox"] });
 
   try {
+    const firstDims = dimsByAspectRatio(normalizedSlides[0].aspectRatio);
     const page = await browser.newPage({
-      viewport: { width: 1080, height: 1080 },
+      viewport: { width: firstDims.width, height: firstDims.height },
       deviceScaleFactor: 1,
     });
 
@@ -441,7 +707,13 @@ export async function renderSlidesToPng({
 
     for (let i = 0; i < pageNodes.length; i++) {
       const node = pageNodes[i];
-      const hash = crypto.createHash("md5").update(`${Date.now()}-${i}-${normalizedSlides[i].title}`).digest("hex").slice(0, 10);
+      const dims = dimsByAspectRatio(normalizedSlides[i].aspectRatio);
+      const hash = crypto
+        .createHash("md5")
+        .update(`${Date.now()}-${i}-${normalizedSlides[i].title}`)
+        .digest("hex")
+        .slice(0, 10);
+
       const filename = `slide-${i + 1}-${hash}.png`;
       const filePath = path.join(outDir, filename);
 
@@ -453,8 +725,8 @@ export async function renderSlidesToPng({
       assets.push({
         file: filename,
         localPath: filePath,
-        width: 1080,
-        height: 1080,
+        width: dims.width,
+        height: dims.height,
         url: buildAssetUrl({
           publicBaseUrl,
           uploadsDir,

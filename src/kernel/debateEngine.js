@@ -1,6 +1,6 @@
 // src/kernel/debateEngine.js
 //
-// FINAL v6.0 — premium campaign-safe draft normalization
+// FINAL v6.1 — premium campaign-safe draft normalization
 //
 // Goals:
 // - Keep existing debate flow
@@ -11,6 +11,7 @@
 //   - each slides[].visualPrompt
 // - Strongly prevent website / dashboard / fake text visual prompts
 // - Support n8n asset generation + separate render engine
+// - Add better layout-family guidance for renderer / asset generation
 //
 // Supported modes:
 // - answer
@@ -25,7 +26,7 @@ import OpenAI from "openai";
 import { cfg } from "../config.js";
 import { getGlobalPolicy, getUsecasePrompt } from "../prompts/index.js";
 
-export const DEBATE_ENGINE_VERSION = "final-v6.0";
+export const DEBATE_ENGINE_VERSION = "final-v6.1";
 console.log(`[debateEngine] LOADED ${DEBATE_ENGINE_VERSION}`);
 
 const DEFAULT_AGENTS = ["orion", "nova", "atlas", "echo"];
@@ -479,6 +480,48 @@ function pickAspectRatio(format) {
   return "1:1";
 }
 
+function sanitizeVisualText(x, max = 260) {
+  let t = fixMojibake(String(x || "").trim());
+  if (!t) return "";
+
+  t = t
+    .replace(/\b(navbar|navigation|menu|header|footer|button|cta button)\b/gi, "")
+    .replace(/\b(website|landing page|web page|homepage|site hero|hero section)\b/gi, "")
+    .replace(/\b(dashboard|admin panel|analytics panel|saas ui|ui screen|app screen|app ui|browser window)\b/gi, "")
+    .replace(/\b(mockup of a website|interface mockup|ui mockup|screen mockup)\b/gi, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+
+  return truncate(t, max);
+}
+
+function sanitizeVisualElements(arr = []) {
+  const bad = [
+    "website",
+    "landing page",
+    "dashboard",
+    "ui",
+    "screen",
+    "browser",
+    "navbar",
+    "menu",
+    "button",
+    "interface",
+    "app screen",
+    "admin panel",
+  ];
+
+  const out = [];
+  for (const item of asArr(arr)) {
+    const v = sanitizeVisualText(item, 120);
+    if (!v) continue;
+    const low = v.toLowerCase();
+    if (bad.some((b) => low.includes(b))) continue;
+    out.push(v);
+  }
+  return uniqStrings(out).slice(0, 10);
+}
+
 function normalizeFrame(frame, idx, format) {
   const f = asObj(frame);
   const typeByFormat = format === "reel" ? "scene" : idx === 1 ? "cover" : "slide";
@@ -488,8 +531,8 @@ function normalizeFrame(frame, idx, format) {
     frameType: String(f.frameType || typeByFormat),
     headline: truncate(fixMojibake(f.headline || ""), 140),
     subline: truncate(fixMojibake(f.subline || ""), 240),
-    layout: truncate(fixMojibake(f.layout || ""), 260),
-    visualElements: uniqStrings(asArr(f.visualElements)).slice(0, 10),
+    layout: sanitizeVisualText(f.layout || "", 260),
+    visualElements: sanitizeVisualElements(asArr(f.visualElements)),
     motion: truncate(fixMojibake(f.motion || ""), 160),
     durationSec: Number.isFinite(Number(f.durationSec)) ? Number(f.durationSec) : 0,
   };
@@ -512,12 +555,12 @@ function ensureFrames(frames, format, cta = "") {
           subline:
             "NEOX avtomatlaşdırma həlləri ilə sürət və səmərəlilik qazanın",
           layout:
-            "Reserved title area on left, strong copy-safe zone, hero subject offset to right, logo-safe area top-left",
+            "Editorial composition with clean negative space on left, main visual subject offset to right, premium poster balance",
           visualElements: [
             "premium futuristic subject",
             "subtle data glow",
-            "dark gradient background",
-            "elegant tech atmosphere",
+            "dark gradient atmosphere",
+            "elegant tech mood",
           ],
           motion: "",
           durationSec: 0,
@@ -548,10 +591,10 @@ function ensureFrames(frames, format, cta = "") {
                   ? cta || "Daha çox məlumat üçün NEOX komandası ilə əlaqə saxlayın"
                   : "AI və avtomatlaşdırma ilə daha sürətli və ağıllı işləyin",
               layout:
-                "Reserved copy-safe zone on left or upper-left, premium poster composition, hero visual offset to right, elegant negative space",
+                "Premium campaign composition with clear negative space, focal subject offset, elegant ad-like balance",
               visualElements: [
                 "cinematic tech glow",
-                "premium abstract automation shapes",
+                "premium abstract automation forms",
                 "futuristic brand atmosphere",
               ],
               motion: "",
@@ -590,9 +633,9 @@ function ensureFrames(frames, format, cta = "") {
                   ? cta || "Bizimlə əlaqə saxlayın"
                   : "AI ilə daha ağıllı iş axınları",
               layout:
-                "Vertical composition with clear focal subject and clean reserved text space",
+                "Vertical cinematic composition with strong focal subject and clean negative space for later typography",
               visualElements: [
-                "vertical motion graphics mood",
+                "vertical motion energy",
                 "premium tech subject",
                 "cinematic glow",
               ],
@@ -623,6 +666,31 @@ function ensureFrames(frames, format, cta = "") {
   return out;
 }
 
+function pickLayoutFamily({ format, idx, totalSlides, layoutText }) {
+  const lt = String(layoutText || "").toLowerCase();
+
+  if (format === "reel") {
+    if (lt.includes("center")) return "cinematic_center";
+    if (lt.includes("top-left")) return "luxury_top_left";
+    if (lt.includes("bottom-left")) return "dramatic_bottom_left";
+    return idx === 1 ? "cinematic_center" : "editorial_left";
+  }
+
+  if (format === "carousel") {
+    if (idx === 1) return "editorial_left";
+    if (idx === totalSlides) return "dramatic_bottom_left";
+    if (lt.includes("center")) return "cinematic_center";
+    if (lt.includes("top-left")) return "luxury_top_left";
+    if (lt.includes("bottom-left")) return "dramatic_bottom_left";
+    return idx % 2 === 0 ? "luxury_top_left" : "editorial_left";
+  }
+
+  if (lt.includes("center")) return "cinematic_center";
+  if (lt.includes("top-left")) return "luxury_top_left";
+  if (lt.includes("bottom-left")) return "dramatic_bottom_left";
+  return "editorial_left";
+}
+
 function buildFallbackImagePrompt(payload) {
   const p = asObj(payload);
   const format = String(p.format || "image").trim().toLowerCase();
@@ -632,34 +700,35 @@ function buildFallbackImagePrompt(payload) {
 
   const lines = [
     format === "carousel"
-      ? "Create a premium square campaign background visual for the cover slide of a NEOX carousel."
+      ? "Create a premium square campaign artwork background for the cover slide of a NEOX carousel."
       : format === "reel"
-      ? "Create a premium vertical campaign background visual for the opening hero frame of a NEOX reel."
-      : "Create a premium campaign background visual for a NEOX social post.",
+      ? "Create a premium vertical campaign artwork background for the opening frame of a NEOX reel."
+      : "Create a premium campaign artwork background for a NEOX social post.",
     "NEOX is an AI automation and digital technology brand.",
     p.topic ? `Campaign topic: ${p.topic}.` : "",
-    p.hook ? `Core idea: ${p.hook}.` : "",
-    "This image must be TEXT-FREE.",
-    "Do not render readable text, letters, words, numbers, UI labels, fake buttons, fake menus, dashboards, browser windows, websites, landing pages, app screens, or navigation bars.",
+    p.hook ? `Core message direction: ${p.hook}.` : "",
+    "This image must be completely TEXT-FREE.",
+    "Absolutely do not render readable text, letters, words, numbers, logos, monograms, UI labels, fake buttons, fake menus, dashboards, browser windows, websites, landing pages, app screens, or navigation bars.",
     "Do not create a website hero section.",
-    "Do not create a desktop interface mockup.",
-    "Do not create a dashboard screenshot style visual.",
+    "Do not create a SaaS dashboard screenshot aesthetic.",
+    "Do not create an application interface shot.",
+    "Do not create a mobile app UI mockup.",
     first.headline
       ? `Visually support this message theme: ${first.headline}.`
       : "",
-    first.subline ? `Secondary message theme: ${first.subline}.` : "",
+    first.subline ? `Secondary message direction: ${first.subline}.` : "",
     visualPlan.style
-      ? `Style: ${visualPlan.style}, but expressed as premium advertising artwork rather than an interface.`
+      ? `Style: ${visualPlan.style}, expressed as premium advertising artwork rather than interface design.`
       : "Style: premium, modern, cinematic, futuristic brand advertising artwork.",
     visualPlan.colorNotes
       ? `Color palette: ${visualPlan.colorNotes}.`
       : "Color palette: deep blue, cyan glow, graphite, subtle silver, premium contrast.",
     visualPlan.composition
       ? `Composition: ${visualPlan.composition}.`
-      : "Composition: bold focal subject, elegant negative space, clean reserved copy area, premium ad composition.",
+      : "Composition: strong focal subject, elegant negative space, polished premium ad direction.",
     first.layout
       ? `Layout guidance: ${first.layout}.`
-      : "Layout guidance: keep a clean copy-safe zone on the left or upper-left, with the main subject offset to the right or lower-right.",
+      : "Layout guidance: maintain a clean typography-safe negative space area, but do not render any text.",
     asArr(first.visualElements).length
       ? `Visual elements: ${asArr(first.visualElements).join(", ")}.`
       : "",
@@ -668,13 +737,13 @@ function buildFallbackImagePrompt(payload) {
       : format === "carousel"
       ? "Aspect ratio intent: 1:1 square."
       : "Aspect ratio intent: 4:5 vertical social post.",
-    "Feel like a polished commercial key visual, editorial campaign artwork, or cinematic product advertisement.",
-    "The image should feel attractive, modern, premium, and customer-friendly.",
-    "Avoid overly stiff corporate visuals.",
-    "Avoid flat generic stock-photo aesthetics.",
-    "Use cinematic lighting, premium materials, tasteful glow, depth, and elegant atmosphere.",
-    "Keep a clearly reserved logo-safe area and headline-safe area.",
-    "No readable text.",
+    "Feel like a polished commercial key visual, editorial campaign artwork, cinematic tech ad, or luxury brand poster background.",
+    "The image should feel attractive, modern, premium, warm, and customer-friendly.",
+    "Avoid generic stock-photo aesthetics.",
+    "Avoid literal UI visualization.",
+    "Avoid anything that resembles a screenshot.",
+    "Use cinematic lighting, premium materials, depth, atmosphere, subtle glow, and elegant visual hierarchy.",
+    "No readable text. No symbols that look like text. No logo marks.",
   ];
 
   return truncate(lines.filter(Boolean).join(" "), 2400);
@@ -687,22 +756,23 @@ function buildSlideVisualPrompt({ payload, frame, totalSlides, format }) {
 
   const lines = [
     format === "carousel"
-      ? `Create a premium text-free square campaign background visual for carousel slide ${f.index} of ${totalSlides} for NEOX.`
+      ? `Create a premium square text-free campaign artwork background for carousel slide ${f.index} of ${totalSlides} for NEOX.`
       : format === "reel"
-      ? `Create a premium text-free vertical campaign background visual for reel scene ${f.index} of ${totalSlides} for NEOX.`
-      : "Create a premium text-free campaign background visual for a NEOX social post.",
+      ? `Create a premium vertical text-free campaign artwork background for reel scene ${f.index} of ${totalSlides} for NEOX.`
+      : "Create a premium text-free campaign artwork background for a NEOX social post.",
     "NEOX is an AI automation and digital technology brand.",
     p.topic ? `Campaign topic: ${p.topic}.` : "",
     f.headline
       ? `The visual should emotionally support this message: ${f.headline}.`
       : "",
-    f.subline ? `Secondary supporting idea: ${f.subline}.` : "",
-    "This image will be used only as a background visual.",
-    "All final readable text will be added later by a render engine.",
-    "Do not render readable text, letters, words, numbers, labels, menu items, navigation bars, buttons, dashboards, browser windows, website sections, application screens, or interface mockups.",
+    f.subline ? `Secondary message direction: ${f.subline}.` : "",
+    "This image is background artwork only.",
+    "All final readable text will be added later by a separate render engine.",
+    "Absolutely do not render readable text, letters, words, numbers, icons that resemble letters, labels, logos, monograms, menu items, navigation bars, buttons, dashboards, browser windows, website sections, application screens, or interface mockups.",
     "Do not make it look like a website hero section.",
     "Do not make it look like a SaaS dashboard screen.",
     "Do not make it look like a UI concept shot.",
+    "Do not make it look like an app promo screenshot.",
     visualPlan.style
       ? `Style: ${visualPlan.style}, interpreted as premium advertising artwork, not interface design.`
       : "Style: premium futuristic brand advertising, cinematic, polished, elegant, visually rich.",
@@ -710,7 +780,7 @@ function buildSlideVisualPrompt({ payload, frame, totalSlides, format }) {
       ? `Color palette: ${visualPlan.colorNotes}.`
       : "Color palette: deep blue, electric cyan, graphite, soft silver, controlled neon accents.",
     f.layout
-      ? `Composition and copy-safe area: ${f.layout}.`
+      ? `Composition guidance: ${f.layout}.`
       : "Composition: strong focal subject, clear negative space for later typography, premium poster-like structure.",
     asArr(f.visualElements).length
       ? `Visual elements: ${asArr(f.visualElements).join(", ")}.`
@@ -720,37 +790,54 @@ function buildSlideVisualPrompt({ payload, frame, totalSlides, format }) {
       : format === "carousel"
       ? "Aspect ratio intent: 1:1 square."
       : "Aspect ratio intent: 4:5 vertical social post.",
-    "Feel like premium ad campaign artwork, cinematic editorial tech key art, or polished commercial poster design.",
-    "The image should feel welcoming, modern, premium, and visually memorable.",
+    "Feel like premium ad campaign artwork, cinematic editorial tech key art, or polished commercial poster background.",
+    "The image should feel welcoming, premium, modern, visually memorable, and commercially usable.",
     "Avoid dry corporate visuals.",
-    "Avoid anything that looks like a screenshot or web interface.",
-    "Use elegant lighting, premium materials, depth, atmosphere, and clean negative space.",
-    "No readable text.",
+    "Avoid screenshots.",
+    "Avoid product UI demos.",
+    "Use elegant lighting, premium materials, atmosphere, depth, and negative space.",
+    "No readable text. No fake text. No logo glyphs.",
   ];
 
   return truncate(lines.filter(Boolean).join(" "), 2400);
 }
 
-function buildRenderHints(frame, format, idx) {
+function buildRenderHints(frame, format, idx, totalSlides) {
   const f = asObj(frame);
   const layoutText = String(f.layout || "").toLowerCase();
 
+  const layoutFamily = pickLayoutFamily({
+    format,
+    idx,
+    totalSlides,
+    layoutText,
+  });
+
   let textPosition = "left";
-  if (layoutText.includes("center")) textPosition = "center";
+  if (layoutFamily === "cinematic_center") textPosition = "center";
+  if (layoutFamily === "luxury_top_left") textPosition = "top-left";
+  if (layoutFamily === "dramatic_bottom_left") textPosition = "bottom-left";
 
   let safeArea = "left-heavy";
-  if (layoutText.includes("center")) safeArea = "centered";
-  if (layoutText.includes("top-left")) safeArea = "top-left";
-  if (layoutText.includes("bottom-left")) safeArea = "bottom-left";
+  if (layoutFamily === "cinematic_center") safeArea = "centered";
+  if (layoutFamily === "luxury_top_left") safeArea = "top-left";
+  if (layoutFamily === "dramatic_bottom_left") safeArea = "bottom-left";
 
   let overlayStrength = "medium";
   if (idx === 1) overlayStrength = "strong";
   if (format === "reel") overlayStrength = "strong";
 
+  let focalBias = "right";
+  if (layoutFamily === "cinematic_center") focalBias = "center";
+  if (layoutFamily === "luxury_top_left") focalBias = "lower-right";
+  if (layoutFamily === "dramatic_bottom_left") focalBias = "upper-right";
+
   return {
+    layoutFamily,
     textPosition,
     safeArea,
     overlayStrength,
+    focalBias,
   };
 }
 
@@ -793,11 +880,11 @@ function buildSlidesFromFrames(payload) {
       subtitle: truncate(f.subline || p.hook || "", 180),
       cta,
       badge,
-      align: idx === 1 ? "left" : "left",
+      align: "left",
       theme: "neox_dark",
       slideNumber: idx,
       totalSlides,
-      renderHints: buildRenderHints(f, format, idx),
+      renderHints: buildRenderHints(f, format, idx, totalSlides),
       visualDirection: truncate(
         [
           f.layout || "",
@@ -846,7 +933,7 @@ function normalizeContentDraftPayload(rawPayload, vars = {}) {
     composition: truncate(
       fixMojibake(
         visualPlanSrc.composition ||
-          "clean premium composition, strong hierarchy, reserved text zone, clear logo-safe area, polished campaign layout, poster-like visual balance"
+          "clean premium composition, strong hierarchy, clear negative space, polished campaign balance, premium poster-like visual direction"
       ),
       260
     ),
@@ -857,7 +944,7 @@ function normalizeContentDraftPayload(rawPayload, vars = {}) {
       ),
       240
     ),
-    textOnVisual: uniqStrings(asArr(visualPlanSrc.textOnVisual)).slice(0, 12),
+    textOnVisual: [],
     frames: normalizedFrames,
   };
 
@@ -959,12 +1046,14 @@ function normalizeContentDraftPayload(rawPayload, vars = {}) {
         slideNumber: 1,
         totalSlides: 1,
         renderHints: {
+          layoutFamily: "editorial_left",
           textPosition: "left",
           safeArea: "left-heavy",
           overlayStrength: "strong",
+          focalBias: "right",
         },
         visualDirection:
-          "Reserved text zone on left, premium focal subject offset to right, poster-style composition",
+          "Editorial premium composition with strong focal subject offset to right and clean negative space",
         visualPrompt: assetBrief.imagePrompt,
       },
     ];

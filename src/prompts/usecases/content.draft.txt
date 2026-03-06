@@ -6,8 +6,10 @@ Context:
 - Output must be detailed and production-ready.
 - The output will later be used for premium asset generation.
 - IMPORTANT: visuals and readable text are separated in production.
-- The AI image model will generate TEXT-FREE background visuals only.
+- The AI image model must generate TEXT-FREE background visuals only.
 - A separate render engine will place all readable text later.
+- The visual generation stage is NOT allowed to design full website sections or UI mockups.
+- The goal is premium social campaign artwork, not interface design.
 
 DATE: {{today}}
 TENANT: {{tenantId}}
@@ -30,7 +32,8 @@ If FORMAT = image:
 - this is a premium static social post
 - include one strong headline
 - include one short supporting subtitle
-- visual must feel like a premium campaign poster, not a website
+- visual must feel like a premium campaign poster
+- visual must NOT feel like a website, dashboard, landing page, or app screen
 
 If FORMAT = carousel:
 - produce 5 to 8 slides
@@ -39,7 +42,8 @@ If FORMAT = carousel:
 - final slide must contain a clear CTA
 - every slide must have practical visual guidance
 - every slide must be renderable as a premium branded social slide
-- visuals must feel like premium campaign artwork, not a landing page
+- visuals must feel like premium campaign artwork
+- visuals must NOT feel like a landing page, UI concept, or dashboard mockup
 
 If FORMAT = reel:
 - produce 3 to 6 scenes
@@ -47,6 +51,7 @@ If FORMAT = reel:
 - include motion notes
 - include approximate duration
 - scenes must feel producible as short-form social video
+- scene visuals must feel like premium cinematic social content, not app promos or interface shots
 
 Brand:
 NEOX is an AI automation and digital technology company.
@@ -67,7 +72,7 @@ Content must:
 - look like a high-end tech brand
 - be practical for real production use
 - feel attractive and polished for real social audiences
-- not feel overly corporate, stiff, or cold
+- not feel overly corporate, stiff, cold, or bureaucratic
 
 Audience:
 - startup founders
@@ -76,15 +81,51 @@ Audience:
 - entrepreneurs
 - business owners interested in automation
 
+CORE CREATIVE DIRECTION:
+- Think like a premium campaign art director, not a web designer.
+- The result should feel closer to commercial key art, editorial tech poster design, premium ad campaign visuals, or cinematic branded artwork.
+- The visual system must support elegant text overlay later.
+- Focus on composition, focal subject, atmosphere, lighting, depth, premium materials, color harmony, and clean negative space.
+- The most important visual principle is: strong text-safe negative space without generating actual text.
+
 CRITICAL VISUAL RULES:
 - Do NOT rely on AI-generated readable text inside images.
 - Background visuals must be text-free.
-- Do NOT describe fake website navigation bars, fake UI menus, fake dashboards, fake buttons, fake mobile app screens, or fake readable text in image prompts.
-- Do NOT ask for landing page hero sections, web headers, desktop interfaces, browser windows, admin dashboards, or app mockups unless explicitly needed.
-- Image prompts must describe premium composition, subject, lighting, materials, atmosphere, and reserved copy space.
+- Do NOT describe fake website navigation bars.
+- Do NOT describe fake UI menus.
+- Do NOT describe fake dashboards.
+- Do NOT describe fake buttons.
+- Do NOT describe fake mobile app screens.
+- Do NOT describe fake browser windows.
+- Do NOT describe fake landing pages.
+- Do NOT describe fake SaaS interface layouts.
+- Do NOT describe readable labels, words, letters, numbers, icons that look like letters, or logo-like glyphs inside the image.
+- Do NOT ask for landing page hero sections, web headers, desktop interfaces, browser chrome, admin dashboards, or app mockups.
+- Do NOT ask for website hero visuals.
+- Do NOT ask for UI concept shots.
+- Do NOT ask for product interface screenshots.
+- Image prompts must describe premium composition, subject, atmosphere, materials, lighting, depth, camera feel, and reserved copy space.
 - The final readable text will be added later by a render engine.
 - Visuals should feel like premium ad campaign artwork, editorial tech posters, cinematic brand visuals, or polished commercial key art.
-- Visuals should feel customer-friendly and attractive, not dry or bureaucratic.
+- Visuals should feel customer-friendly and attractive, not dry, stiff, or bureaucratic.
+- Visuals should not look like a template-based startup landing page.
+- Visuals should not look like Figma app mockups.
+- Visuals should not look like UI marketing shots.
+
+NEGATIVE VISUAL BIAS TO AVOID:
+Avoid outputs that resemble:
+- SaaS homepage hero
+- startup landing page
+- mobile app promo screen
+- dashboard screenshot
+- admin panel
+- browser window composition
+- fake UI card grid
+- fake analytics widgets
+- fake menu/navigation header
+- fake CTA buttons
+- fake text blocks baked into image
+- fake logos or fake brand marks inside artwork
 
 Return STRICT JSON only.
 
@@ -108,7 +149,7 @@ JSON SCHEMA:
     "aspectRatio": "1:1|4:5|9:16",
     "composition": "string",
     "colorNotes": "string",
-    "textOnVisual": ["string"],
+    "textOnVisual": [],
     "frames": [
       {
         "index": 1,
@@ -137,9 +178,11 @@ JSON SCHEMA:
       "slideNumber": 1,
       "totalSlides": 5,
       "renderHints": {
-        "textPosition": "left|center",
+        "layoutFamily": "editorial_left|cinematic_center|luxury_top_left|dramatic_bottom_left",
+        "textPosition": "left|center|top-left|bottom-left",
         "safeArea": "left-heavy|centered|top-left|bottom-left",
-        "overlayStrength": "soft|medium|strong"
+        "overlayStrength": "soft|medium|strong",
+        "focalBias": "right|center|lower-right|upper-right"
       },
       "visualDirection": "string",
       "visualPrompt": "string"
@@ -166,47 +209,69 @@ STRICT OUTPUT RULES:
 6. Every slides[].visualPrompt is REQUIRED and must NEVER be empty.
 7. Every slides[].visualPrompt must be in English.
 8. Every slides[].visualPrompt must describe a TEXT-FREE premium visual.
-9. Do NOT ask the image model to render readable text, letters, words, numbers, UI labels, menu labels, navigation bars, dashboard widgets, website sections, browser chrome, or app screens.
-10. Instead, mention reserved headline area / reserved copy space / clean text zone.
-11. If FORMAT = image:
+9. Every slides[].visualPrompt must describe background artwork only, not final typeset composition.
+10. Do NOT ask the image model to render readable text, letters, words, numbers, UI labels, menu labels, navigation bars, dashboard widgets, website sections, browser chrome, app screens, device UI, or interface cards.
+11. Do NOT ask for website hero sections, landing page blocks, dashboard scenes, app promo layouts, or browser-window framing.
+12. Instead, mention reserved headline area, reserved copy space, negative space, text-safe zone, premium focal subject, composition balance, and atmospheric visual direction.
+13. visualPlan.textOnVisual must be an empty array.
+14. If FORMAT = image:
    - visualPlan.frames must contain exactly 1 item
    - slides[] must contain exactly 1 item
-12. If FORMAT = carousel:
+15. If FORMAT = carousel:
    - visualPlan.frames must contain 5 to 8 items
    - slides[] must contain 5 to 8 items
-13. If FORMAT = reel:
+16. If FORMAT = reel:
    - visualPlan.frames must contain 3 to 6 items
    - slides[] must contain 3 to 6 items
-14. Do not leave keys empty unless absolutely impossible.
-15. Do not use placeholders like "insert headline here".
-16. Do not output markdown.
-17. Do not output explanations.
+17. Do not leave keys empty unless absolutely impossible.
+18. Do not use placeholders like "insert headline here".
+19. Do not output markdown.
+20. Do not output explanations.
+21. Do not wrap JSON in code fences.
+22. Do not produce partially filled frames or slides.
+23. The cover slide must feel the most premium and visually striking.
+24. The final slide or final scene must push CTA clearly.
+25. Every visualPrompt must be commercially usable and designer-friendly.
+26. Every visualPrompt must avoid fake typography baked into the artwork.
+27. Avoid repeated generic phrases like "futuristic dashboard" or "modern UI".
+28. Prefer premium art-direction language over web-design language.
 
-Caption rules:
+CAPTION RULES:
 - must sound natural
 - must not sound robotic
-- structure: hook → value → CTA
+- structure: hook -> value -> CTA
 - max 1200 characters
 
-Hashtag rules:
+HASHTAG RULES:
 - between 8 and 18
 - mix Azerbaijani and English
 - include #AI #Automation #Neox
 
-Slides rules:
+SLIDES RULES:
 - title must be concise and strong
 - subtitle must be shorter than title
 - visualPrompt must be practical for premium image generation
 - renderHints must help a design renderer place text cleanly
 - cover slide should feel most premium
 - final slide should push CTA clearly
+- slides should feel like a coherent campaign set, not unrelated visuals
 
-Asset brief rules:
+ASSET BRIEF RULES:
 - must be practical
 - must be usable by AI image tools
 - must be usable by designers
 - imagePrompt must be high quality, descriptive, and concrete
 - imagePrompt language must be English even if the rest of the draft is Azerbaijani
+- imagePrompt must describe premium text-free artwork only
+- imagePrompt must not request typography baked into the image
+- imagePrompt must not request app UI, fake dashboard UI, browser framing, or website sections
+
+QUALITY BAR:
+- Think premium ad campaign, not generic social template.
+- Think polished commercial artwork, not startup website header.
+- Think text-free branded background art, not poster with baked text.
+- Think elegant negative space and focal control, not clutter.
+- Think premium composition and atmosphere, not UI screens.
 
 Return JSON only.
 No explanation.
