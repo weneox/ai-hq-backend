@@ -1,10 +1,15 @@
-// src/kernel/debateEngine.js (FINAL v4.0 — enforced content draft normalization + guaranteed imagePrompt)
+// src/kernel/debateEngine.js
+//
+// FINAL v5.0 — premium slide schema + renderer-ready draft normalization
 //
 // Goals:
 // - Keep existing debate flow
-// - Force draft payload normalization
-// - Guarantee assetBrief.imagePrompt for content drafts
-// - Make output stable for n8n / asset generation
+// - Normalize content drafts for premium render pipeline
+// - Guarantee:
+//   - payload.assetBrief.imagePrompt
+//   - payload.slides[]
+//   - each slides[].visualPrompt
+// - Support n8n asset generation + separate render engine
 //
 // Supported modes:
 // - answer
@@ -19,7 +24,7 @@ import OpenAI from "openai";
 import { cfg } from "../config.js";
 import { getGlobalPolicy, getUsecasePrompt } from "../prompts/index.js";
 
-export const DEBATE_ENGINE_VERSION = "final-v4.0";
+export const DEBATE_ENGINE_VERSION = "final-v5.0";
 console.log(`[debateEngine] LOADED ${DEBATE_ENGINE_VERSION}`);
 
 const DEFAULT_AGENTS = ["orion", "nova", "atlas", "echo"];
@@ -238,7 +243,6 @@ function visibleEmptyMarker(kind, agentId, resp) {
   const usage = resp?.usage || {};
   const outTok = usage?.output_tokens ?? null;
   const rTok = usage?.output_tokens_details?.reasoning_tokens ?? null;
-
   const id = resp?.id || null;
   const status = resp?.status || null;
   const model = resp?.model || null;
@@ -271,7 +275,6 @@ async function askAgent({ openai, agentId, message, round, notesSoFar, timeoutMs
   };
 
   const resp = await withTimeout(openai.responses.create(req), timeoutMs, `OpenAI timeout (${agentId})`);
-
   let text = extractText(resp);
 
   console.log("[debate] agent", agentId, "status=", resp?.status || null, "id=", resp?.id || null, "len=", (text || "").length);
@@ -402,7 +405,7 @@ Rules:
   const repairReq = {
     model: cfg.OPENAI_MODEL || "gpt-5",
     text: { format: { type: "text" } },
-    max_output_tokens: 1200,
+    max_output_tokens: 1400,
     input: [
       { role: "system", content: repairSys },
       { role: "user", content: String(badText || "") },
@@ -431,14 +434,16 @@ function normalizeFrame(frame, idx, format) {
     headline: truncate(fixMojibake(f.headline || ""), 140),
     subline: truncate(fixMojibake(f.subline || ""), 240),
     layout: truncate(fixMojibake(f.layout || ""), 260),
-    visualElements: uniqStrings(asArr(f.visualElements)).slice(0, 8),
+    visualElements: uniqStrings(asArr(f.visualElements)).slice(0, 10),
     motion: truncate(fixMojibake(f.motion || ""), 160),
     durationSec: Number.isFinite(Number(f.durationSec)) ? Number(f.durationSec) : 0,
   };
 }
 
 function ensureFrames(frames, format, cta = "") {
-  let out = asArr(frames).map((f, i) => normalizeFrame(f, i + 1, format)).filter((x) => x.headline || x.subline || x.layout);
+  let out = asArr(frames)
+    .map((f, i) => normalizeFrame(f, i + 1, format))
+    .filter((x) => x.headline || x.subline || x.layout || x.visualElements.length);
 
   if (format === "image") {
     if (!out.length) {
@@ -446,10 +451,10 @@ function ensureFrames(frames, format, cta = "") {
         {
           index: 1,
           frameType: "cover",
-          headline: "NEOX",
-          subline: "AI və avtomatlaşdırma həlləri",
-          layout: "Headline center-left, subline below, logo bottom-right, premium tech composition",
-          visualElements: ["neon grid", "abstract automation interface"],
+          headline: "AI ilə biznesinizi gücləndirin",
+          subline: "NEOX avtomatlaşdırma həlləri ilə sürət və səmərəlilik qazanın",
+          layout: "Reserved title area on left, visual subject on right, logo top-left, CTA bottom-left",
+          visualElements: ["premium futuristic robot", "subtle data glow", "dark gradient background"],
           motion: "",
           durationSec: 0,
         },
@@ -467,11 +472,19 @@ function ensureFrames(frames, format, cta = "") {
           normalizeFrame(
             {
               index: idx,
-              frameType: idx === 1 ? "cover" : idx === 5 ? "slide" : "slide",
-              headline: idx === 1 ? "NEOX" : idx === 5 ? "İndi əlaqə saxlayın" : `Slide ${idx}`,
-              subline: idx === 5 ? cta || "Daha çox məlumat üçün bizimlə əlaqə saxlayın" : "",
-              layout: "Clean premium carousel layout, strong hierarchy, logo bottom-right",
-              visualElements: ["tech UI", "data lines"],
+              frameType: idx === 1 ? "cover" : "slide",
+              headline:
+                idx === 1
+                  ? "NEOX ilə gələcəyi qurun"
+                  : idx === 5
+                  ? "İndi əlaqə saxlayın"
+                  : `Əsas üstünlük ${idx - 1}`,
+              subline:
+                idx === 5
+                  ? cta || "Daha çox məlumat üçün NEOX komandası ilə əlaqə saxlayın"
+                  : "AI və avtomatlaşdırma ilə daha sürətli və ağıllı işləyin",
+              layout: "Reserved text zone on left, visual support on right, premium square composition, clean hierarchy",
+              visualElements: ["tech glow", "premium abstract automation shapes"],
               motion: "",
               durationSec: 0,
             },
@@ -484,15 +497,6 @@ function ensureFrames(frames, format, cta = "") {
     }
 
     if (out.length > 8) out = out.slice(0, 8);
-
-    const last = out[out.length - 1];
-    if (last && !String(last.subline || "").trim() && cta) {
-      last.subline = truncate(cta, 220);
-    }
-
-    if (last && !/cta|əlaqə|discover|start|başla|indi/i.test(`${last.headline} ${last.subline}`) && cta) {
-      last.subline = truncate(cta, 220);
-    }
 
     return out.map((x, i) => ({
       ...x,
@@ -512,10 +516,10 @@ function ensureFrames(frames, format, cta = "") {
               index: idx,
               frameType: "scene",
               headline: idx === 1 ? "NEOX" : `Scene ${idx}`,
-              subline: idx === 3 ? cta || "Bizimlə əlaqə saxlayın" : "",
-              layout: "Vertical short-form video scene with strong center focus",
-              visualElements: ["motion graphics", "tech overlays"],
-              motion: "subtle camera move",
+              subline: idx === 3 ? cta || "Bizimlə əlaqə saxlayın" : "AI ilə daha ağıllı iş axınları",
+              layout: "Vertical composition with clear subject focus and reserved text space",
+              visualElements: ["vertical motion graphics", "futuristic business visuals"],
+              motion: "subtle push-in camera movement",
               durationSec: 2,
             },
             idx,
@@ -548,21 +552,22 @@ function buildFallbackImagePrompt(payload) {
 
   const lines = [
     format === "carousel"
-      ? "Create a premium futuristic carousel cover image for NEOX, an AI automation and digital technology company."
+      ? "Create a premium futuristic carousel cover background visual for NEOX, an AI automation and digital technology company."
       : format === "reel"
-      ? "Create a premium futuristic vertical hero frame / thumbnail for a NEOX short-form reel about AI automation and business efficiency."
-      : "Create a premium futuristic advertising image for NEOX, an AI automation and digital technology company.",
+      ? "Create a premium futuristic vertical opening hero-frame background visual for a NEOX short-form reel about AI automation and business efficiency."
+      : "Create a premium futuristic advertising background visual for NEOX, an AI automation and digital technology company.",
     p.topic ? `Topic: ${p.topic}.` : "",
-    p.hook ? `Hook: ${p.hook}.` : "",
-    first.headline ? `Headline on visual: ${first.headline}.` : "",
-    first.subline ? `Supporting subline: ${first.subline}.` : "",
-    visualPlan.style ? `Style: ${visualPlan.style}.` : "Style: premium, modern, futuristic, high-end tech brand.",
+    p.hook ? `Core campaign hook: ${p.hook}.` : "",
+    "IMPORTANT: The visual must be text-free. Do not render readable text, letters, UI navigation, website menus, or fake typography.",
+    first.headline ? `Reserve clear copy space for this message theme: ${first.headline}.` : "",
+    first.subline ? `Supporting message theme: ${first.subline}.` : "",
+    visualPlan.style ? `Style: ${visualPlan.style}.` : "Style: premium, modern, futuristic, high-end tech advertising.",
     visualPlan.colorNotes
       ? `Color palette: ${visualPlan.colorNotes}.`
-      : "Color palette: deep blue, neon cyan, dark graphite, subtle premium glow.",
+      : "Color palette: deep blue, neon cyan, dark graphite, silver accents, subtle premium glow.",
     visualPlan.composition
       ? `Composition: ${visualPlan.composition}.`
-      : "Composition: strong visual hierarchy, clean premium layout, balanced typography zones, brand-focused.",
+      : "Composition: strong visual hierarchy, clean reserved text zone, premium campaign layout.",
     first.layout ? `Layout guidance: ${first.layout}.` : "",
     asArr(first.visualElements).length ? `Visual elements: ${asArr(first.visualElements).join(", ")}.` : "",
     format === "reel"
@@ -570,12 +575,126 @@ function buildFallbackImagePrompt(payload) {
       : format === "carousel"
       ? "Aspect ratio intent: 1:1 square."
       : "Aspect ratio intent: 4:5 social post.",
-    "Logo area must be clearly reserved.",
-    "Modern premium advertising visual, cinematic lighting, polished surfaces, elegant contrast, highly detailed, professional brand campaign quality.",
-    "No clutter, no cheap stock-photo feel, no low-quality text rendering.",
+    "Keep a clearly reserved logo area and a clean headline-safe zone.",
+    "Cinematic lighting, polished materials, elegant contrast, premium brand campaign quality, realistic professional finish.",
+    "No clutter, no cheap stock-photo feel, no readable text.",
   ];
 
   return lines.filter(Boolean).join(" ");
+}
+
+function buildSlideVisualPrompt({ payload, frame, totalSlides, format }) {
+  const p = asObj(payload);
+  const f = asObj(frame);
+  const visualPlan = asObj(p.visualPlan);
+
+  const lines = [
+    format === "carousel"
+      ? `Create a premium text-free square carousel background visual for slide ${f.index} of ${totalSlides} for NEOX, an AI automation and digital technology company.`
+      : format === "reel"
+      ? `Create a premium text-free vertical reel scene background / hero-frame for scene ${f.index} of ${totalSlides} for NEOX.`
+      : "Create a premium text-free social post background visual for NEOX.",
+    p.topic ? `Campaign topic: ${p.topic}.` : "",
+    f.headline ? `Message theme to support visually: ${f.headline}.` : "",
+    f.subline ? `Supporting message theme: ${f.subline}.` : "",
+    "Do not render readable text, letters, button labels, fake website menus, or UI navigation.",
+    "This image will be used as a background only. The final readable text will be added later by a render engine.",
+    visualPlan.style ? `Style: ${visualPlan.style}.` : "Style: premium futuristic tech advertising.",
+    visualPlan.colorNotes
+      ? `Color palette: ${visualPlan.colorNotes}.`
+      : "Color palette: deep blue, cyan glow, graphite, premium silver accents.",
+    f.layout ? `Composition and reserved text zone: ${f.layout}.` : "Composition: clean reserved text area, strong focal subject, balanced premium hierarchy.",
+    asArr(f.visualElements).length ? `Visual elements: ${asArr(f.visualElements).join(", ")}.` : "",
+    format === "reel"
+      ? "Aspect ratio intent: 9:16 vertical."
+      : format === "carousel"
+      ? "Aspect ratio intent: 1:1 square."
+      : "Aspect ratio intent: 4:5 vertical social post.",
+    "Premium advertising quality, cinematic lighting, elegant composition, highly detailed, no clutter, no cheap stock-photo feel.",
+  ];
+
+  return truncate(lines.filter(Boolean).join(" "), 2400);
+}
+
+function buildRenderHints(frame, format, idx, total) {
+  const f = asObj(frame);
+
+  const layoutText = String(f.layout || "").toLowerCase();
+
+  let textPosition = "left";
+  if (layoutText.includes("center")) textPosition = "center";
+
+  let safeArea = "left-heavy";
+  if (layoutText.includes("center")) safeArea = "centered";
+  if (layoutText.includes("top-left")) safeArea = "top-left";
+  if (layoutText.includes("bottom-left")) safeArea = "bottom-left";
+
+  let overlayStrength = "medium";
+  if (idx === 1) overlayStrength = "strong";
+  if (format === "reel") overlayStrength = "strong";
+
+  return {
+    textPosition,
+    safeArea,
+    overlayStrength,
+  };
+}
+
+function buildSlidesFromFrames(payload) {
+  const p = asObj(payload);
+  const format = String(p.format || "image").trim().toLowerCase();
+  const frames = asArr(asObj(p.visualPlan).frames);
+  const totalSlides = frames.length;
+
+  return frames.map((frame, i) => {
+    const idx = i + 1;
+    const f = asObj(frame);
+
+    const isLast = idx === totalSlides;
+    const badge =
+      format === "carousel"
+        ? idx === 1
+          ? "NEOX"
+          : isLast
+          ? "CTA"
+          : "AI HQ"
+        : format === "reel"
+        ? "REEL"
+        : "NEOX";
+
+    const cta = isLast ? truncate(p.cta || "Daha çox məlumat üçün bizimlə əlaqə saxlayın", 80) : "";
+
+    return {
+      id: `slide_${idx}`,
+      index: idx,
+      frameType: String(f.frameType || (format === "reel" ? "scene" : idx === 1 ? "cover" : "slide")),
+      title: truncate(f.headline || p.topic || "NEOX", 120),
+      subtitle: truncate(f.subline || p.hook || "", 180),
+      cta,
+      badge,
+      align: idx === 1 ? "left" : "left",
+      theme: "neox_dark",
+      slideNumber: idx,
+      totalSlides,
+      renderHints: buildRenderHints(f, format, idx, totalSlides),
+      visualDirection: truncate(
+        [
+          f.layout || "",
+          asArr(f.visualElements).join(", "),
+          f.motion ? `Motion mood: ${f.motion}` : "",
+        ]
+          .filter(Boolean)
+          .join(" | "),
+        400
+      ),
+      visualPrompt: buildSlideVisualPrompt({
+        payload: p,
+        frame: f,
+        totalSlides,
+        format,
+      }),
+    };
+  });
 }
 
 function normalizeContentDraftPayload(rawPayload, vars = {}) {
@@ -593,7 +712,7 @@ function normalizeContentDraftPayload(rawPayload, vars = {}) {
     composition: truncate(
       fixMojibake(
         visualPlanSrc.composition ||
-          "clean premium composition, strong hierarchy, clear headline zone, clear logo zone, polished tech-forward layout"
+          "clean premium composition, strong hierarchy, reserved text zone, clear logo zone, polished tech-forward campaign layout"
       ),
       260
     ),
@@ -609,12 +728,20 @@ function normalizeContentDraftPayload(rawPayload, vars = {}) {
   };
 
   const assetBriefSrc = asObj(src.assetBrief);
-  const neededAssets = uniqStrings(assetBriefSrc.neededAssets || (format === "reel" ? ["video", "icons", "mockups"] : ["image", "icons", "mockups"]));
-  const brollIdeas = uniqStrings(assetBriefSrc.brollIdeas).slice(0, 10);
-  const imagePrompt = truncate(
-    fixMojibake(assetBriefSrc.imagePrompt || "").trim() || buildFallbackImagePrompt({ ...src, visualPlan, format }),
-    2400
+  const neededAssets = uniqStrings(
+    assetBriefSrc.neededAssets ||
+      (format === "reel" ? ["video", "image", "icons", "mockups"] : ["image", "icons", "mockups"])
   );
+  const brollIdeas = uniqStrings(assetBriefSrc.brollIdeas).slice(0, 10);
+
+  const assetBrief = {
+    neededAssets,
+    imagePrompt: truncate(
+      fixMojibake(assetBriefSrc.imagePrompt || "").trim() || buildFallbackImagePrompt({ ...src, visualPlan, format }),
+      2400
+    ),
+    brollIdeas,
+  };
 
   const payload = {
     type: "content_draft",
@@ -632,11 +759,8 @@ function normalizeContentDraftPayload(rawPayload, vars = {}) {
     cta: truncate(fixMojibake(src.cta || "Daha çox məlumat üçün bizimlə əlaqə saxlayın"), 180),
     hashtags: uniqStrings(asArr(src.hashtags)).slice(0, 18),
     visualPlan,
-    assetBrief: {
-      neededAssets,
-      imagePrompt,
-      brollIdeas,
-    },
+    slides: [],
+    assetBrief,
     complianceNotes: uniqStrings(asArr(src.complianceNotes)).slice(0, 10),
     reviewQuestionsForCEO: uniqStrings(asArr(src.reviewQuestionsForCEO)).slice(0, 8),
   };
@@ -644,7 +768,6 @@ function normalizeContentDraftPayload(rawPayload, vars = {}) {
   if (!payload.hashtags.some((x) => x.toLowerCase() === "#ai")) payload.hashtags.push("#AI");
   if (!payload.hashtags.some((x) => x.toLowerCase() === "#automation")) payload.hashtags.push("#Automation");
   if (!payload.hashtags.some((x) => x.toLowerCase() === "#neox")) payload.hashtags.push("#Neox");
-
   payload.hashtags = uniqStrings(payload.hashtags).slice(0, 18);
 
   if (!payload.reviewQuestionsForCEO.length) {
@@ -659,7 +782,34 @@ function normalizeContentDraftPayload(rawPayload, vars = {}) {
     payload.complianceNotes = [
       "Brend tonu premium və peşəkar qalmalıdır.",
       "Həddindən artıq şişirdilmiş nəticə vəd edilməməlidir.",
-      "Vizualda oxunaqlılıq və aydın hierarchy qorunmalıdır.",
+      "Oxunaqlı və aydın mətn hierarchy qorunmalıdır.",
+    ];
+  }
+
+  payload.slides = buildSlidesFromFrames(payload);
+
+  if (!payload.slides.length) {
+    payload.slides = [
+      {
+        id: "slide_1",
+        index: 1,
+        frameType: "cover",
+        title: payload.topic || "NEOX",
+        subtitle: payload.hook || "",
+        cta: payload.cta || "",
+        badge: "NEOX",
+        align: "left",
+        theme: "neox_dark",
+        slideNumber: 1,
+        totalSlides: 1,
+        renderHints: {
+          textPosition: "left",
+          safeArea: "left-heavy",
+          overlayStrength: "strong",
+        },
+        visualDirection: "Reserved text zone on left, premium tech focal subject on right",
+        visualPrompt: assetBrief.imagePrompt,
+      },
     ];
   }
 
@@ -669,7 +819,7 @@ function normalizeContentDraftPayload(rawPayload, vars = {}) {
 function normalizeDraftProposalObject(obj, vars = {}) {
   const src = asObj(obj);
 
-  if (src.type === "content_draft" || src.format || src.visualPlan || src.assetBrief) {
+  if (src.type === "content_draft" || src.format || src.visualPlan || src.assetBrief || src.slides) {
     const payload = normalizeContentDraftPayload(src, vars);
     return {
       type: "draft",
@@ -705,7 +855,7 @@ async function synthesizeFinal({ openai, message, agentNotes, mode, timeoutMs, v
     .map((n) => `### ${n.agentId}\n${String(n.text || "").trim()}`)
     .join("\n\n");
 
-  const maxOut = Number(cfg.OPENAI_DEBATE_SYNTH_TOKENS || 1400);
+  const maxOut = Number(cfg.OPENAI_DEBATE_SYNTH_TOKENS || 2200);
   const sysText = buildSynthesisSystem({ mode: normMode, vars });
 
   const userText = `

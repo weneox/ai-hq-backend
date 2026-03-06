@@ -4,7 +4,10 @@ Context:
 - This is a single-day content idea.
 - The draft will be reviewed by the CEO in AI HQ.
 - Output must be detailed and production-ready.
-- The output will later be used for asset generation, so visual instructions must be concrete and practical.
+- The output will later be used for premium asset generation.
+- IMPORTANT: visuals and text layout are separated in production.
+- The AI image model will generate TEXT-FREE background visuals only.
+- A separate render engine will place all readable text later.
 
 DATE: {{today}}
 TENANT: {{tenantId}}
@@ -23,20 +26,23 @@ Allowed formats:
 - reel
 
 If FORMAT = image:
-- produce a single-frame visual concept
+- produce exactly 1 slide
+- this is a premium static social post
 - include one strong headline
-- include minimal text
+- include one short supporting subtitle
 - visual must feel like a premium tech advertisement
 
 If FORMAT = carousel:
 - produce 5 to 8 slides
-- first slide must be a strong hook / cover
+- slide 1 must be a strong hook / cover
 - middle slides must provide value, transformation, process, proof, or benefits
-- last slide must contain a clear CTA
+- final slide must contain a clear CTA
 - every slide must have practical visual guidance
+- every slide must be renderable as a premium branded social slide
 
 If FORMAT = reel:
 - produce 3 to 6 scenes
+- opening scene must work as a thumbnail / hero frame
 - include motion notes
 - include approximate duration
 - scenes must feel producible as short-form social video
@@ -64,6 +70,13 @@ Audience:
 - entrepreneurs
 - business owners interested in automation
 
+CRITICAL VISUAL RULES:
+- Do NOT rely on AI-generated readable text inside images.
+- Background visuals must be text-free.
+- Do NOT describe fake website navigation bars, fake UI menus, or fake readable text in image prompts.
+- Image prompts must describe premium composition, subject, lighting, mood, materials, camera feel, and reserved text zones.
+- The final readable text will be added later by a render engine.
+
 Return STRICT JSON only.
 
 JSON SCHEMA:
@@ -80,6 +93,7 @@ JSON SCHEMA:
   "caption": "string",
   "cta": "string",
   "hashtags": ["#..."],
+
   "visualPlan": {
     "style": "string",
     "aspectRatio": "1:1|4:5|9:16",
@@ -99,11 +113,36 @@ JSON SCHEMA:
       }
     ]
   },
+
+  "slides": [
+    {
+      "id": "slide_1",
+      "index": 1,
+      "frameType": "cover|slide|scene",
+      "title": "string",
+      "subtitle": "string",
+      "cta": "string",
+      "badge": "string",
+      "align": "left|center",
+      "theme": "neox_dark",
+      "slideNumber": 1,
+      "totalSlides": 5,
+      "renderHints": {
+        "textPosition": "left|center",
+        "safeArea": "left-heavy|centered|top-left|bottom-left",
+        "overlayStrength": "soft|medium|strong"
+      },
+      "visualDirection": "string",
+      "visualPrompt": "string"
+    }
+  ],
+
   "assetBrief": {
     "neededAssets": ["image|video|icons|mockups"],
     "imagePrompt": "string",
     "brollIdeas": ["string"]
   },
+
   "complianceNotes": ["string"],
   "reviewQuestionsForCEO": ["string"]
 }
@@ -113,27 +152,26 @@ STRICT OUTPUT RULES:
 1. assetBrief.imagePrompt is REQUIRED.
 2. assetBrief.imagePrompt must NEVER be empty.
 3. assetBrief.imagePrompt must be a real production-ready visual generation prompt in English.
-4. assetBrief.imagePrompt must describe:
-   - brand style
-   - composition
-   - lighting
-   - mood
-   - color palette
-   - subject matter
-   - layout hierarchy
-   - aspect ratio intent
-   - premium advertising quality
-5. If FORMAT = carousel:
-   - assetBrief.imagePrompt must describe the COVER SLIDE visual first
+4. assetBrief.imagePrompt must describe the COVER visual first.
+5. slides[] is REQUIRED.
+6. Every slides[].visualPrompt is REQUIRED and must NEVER be empty.
+7. Every slides[].visualPrompt must be in English.
+8. Every slides[].visualPrompt must describe a TEXT-FREE premium visual.
+9. Do NOT ask the image model to render readable text, buttons, website menus, or UI navigation.
+10. Instead, mention reserved headline area / reserved copy space / clean text zone.
+11. If FORMAT = image:
+   - visualPlan.frames must contain exactly 1 item
+   - slides[] must contain exactly 1 item
+12. If FORMAT = carousel:
    - visualPlan.frames must contain 5 to 8 items
-6. If FORMAT = image:
-   - visualPlan.frames must contain exactly 1 main frame entry
-7. If FORMAT = reel:
-   - assetBrief.imagePrompt should describe the opening hero frame / thumbnail style
-8. Do not leave any key empty unless absolutely impossible.
-9. Do not use placeholders like "insert headline here".
-10. Do not output markdown.
-11. Do not output explanations.
+   - slides[] must contain 5 to 8 items
+13. If FORMAT = reel:
+   - visualPlan.frames must contain 3 to 6 items
+   - slides[] must contain 3 to 6 items
+14. Do not leave keys empty unless absolutely impossible.
+15. Do not use placeholders like "insert headline here".
+16. Do not output markdown.
+17. Do not output explanations.
 
 Caption rules:
 - must sound natural
@@ -146,11 +184,13 @@ Hashtag rules:
 - mix Azerbaijani and English
 - include #AI #Automation #Neox
 
-Visual plan rules:
-- clearly specify where logo appears
-- clearly specify where headline appears
-- clearly specify hierarchy and layout guidance
-- be directly usable by designers
+Slides rules:
+- title must be concise and strong
+- subtitle must be shorter than title
+- visualPrompt must be practical for premium image generation
+- renderHints must help a design renderer place text cleanly
+- cover slide should feel most premium
+- final slide should push CTA clearly
 
 Asset brief rules:
 - must be practical
