@@ -1,10 +1,10 @@
 // src/routes/api/content.js
-// FINAL v3.3 — Draft -> Asset/Video Generate -> Publish
+// FINAL v3.4 — Draft -> Asset/Video Generate -> Publish
 // FIXES:
-// ✅ publish asset lookup is now tolerant across content_pack + row.publish + row.output + row.result + row.assets
-// ✅ approved tab publish now works even with legacy callback shapes
-// ✅ publish payload sends normalized asset fields to n8n
-// ✅ publish can start from approved/draft.approved/asset.ready rows when asset exists anywhere on row
+// ✅ publish route now handles publish.requested / publish.queued / publish.running first
+// ✅ repeated Publish click no longer throws "content must be asset.ready before publish"
+// ✅ publish route returns stable "already requested" response instead
+// ✅ asset lookup remains tolerant across content_pack + row.publish + row.output + row.result + row.assets
 
 import express from "express";
 import crypto from "crypto";
@@ -781,6 +781,17 @@ export function contentRoutes({ db, wsHub }) {
         const contentPack = normalizeContentPack(row.content_pack) || {};
         const st = statusLc(row.status);
 
+        if (isPublishRequestedStatus(st)) {
+          return okJson(res, {
+            ok: true,
+            alreadyRequested: true,
+            note: "publish already requested",
+            status: row.status,
+            contentId: id,
+            dbDisabled: true,
+          });
+        }
+
         if (!canPublishRow(row)) {
           return okJson(res, {
             ok: false,
@@ -862,6 +873,18 @@ export function contentRoutes({ db, wsHub }) {
       if (!row) return okJson(res, { ok: false, error: "content not found" });
 
       const contentPack = normalizeContentPack(row.content_pack) || {};
+      const st = statusLc(row.status);
+
+      if (isPublishRequestedStatus(st)) {
+        return okJson(res, {
+          ok: true,
+          alreadyRequested: true,
+          note: "publish already requested",
+          status: row.status,
+          contentId: row.id,
+        });
+      }
+
       if (!canPublishRow(row)) {
         return okJson(res, {
           ok: false,
