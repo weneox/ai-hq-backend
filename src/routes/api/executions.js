@@ -1,5 +1,5 @@
 // src/routes/api/executions.js
-// FINAL v3.1 — FIXED callback merge + publish/asset status consistency
+// FINAL v3.2 — FIXED image asset callback merge + publish/asset status consistency
 
 import express from "express";
 import { cfg } from "../../config.js";
@@ -116,60 +116,95 @@ function isPublishJobType(jt) {
   return jt === "publish" || jt === "content.publish";
 }
 
-function mergePackAssets(result) {
-  const rawPack =
-    result?.contentPack ||
-    result?.content_pack ||
-    result?.draft ||
-    result?.pack ||
-    result?.content ||
-    null;
+function asObj(x) {
+  return x && typeof x === "object" && !Array.isArray(x) ? x : null;
+}
 
-  const assets = Array.isArray(result?.assets) ? result.assets : [];
+function safeLower(x) {
+  return String(x || "").trim().toLowerCase();
+}
 
-  if (rawPack && typeof rawPack === "object") {
-    const rpAssets = Array.isArray(rawPack.assets) ? rawPack.assets : [];
-    return deepFix({
-      ...rawPack,
-      assets: rpAssets.length ? rpAssets : assets,
-    });
+function firstNonEmpty(...vals) {
+  for (const v of vals) {
+    const s = String(v || "").trim();
+    if (s) return s;
   }
-
-  if (assets.length) return deepFix({ assets });
-
   return null;
 }
 
-function pickPublishInfo(result) {
-  const pub =
-    (result?.publish && typeof result.publish === "object" ? result.publish : null) ||
-    (result?.published && typeof result.published === "object" ? result.published : null) ||
-    null;
+function normalizeAssetItem(a) {
+  if (!a || typeof a !== "object") return null;
 
-  const publishedMediaId =
-    result?.publishedMediaId ||
-    result?.published_media_id ||
-    pub?.publishedMediaId ||
-    pub?.published_media_id ||
-    pub?.mediaId ||
-    pub?.id ||
-    null;
-
-  const permalink =
-    result?.permalink ||
-    result?.postUrl ||
-    result?.post_url ||
-    pub?.permalink ||
-    pub?.url ||
-    null;
-
-  const platform = result?.platform || pub?.platform || "instagram";
+  const url = firstNonEmpty(a.url, a.secure_url, a.publicUrl, a.public_url);
+  if (!url) return null;
 
   return deepFix({
-    platform,
-    publishedMediaId: publishedMediaId ? String(publishedMediaId) : null,
-    permalink: permalink ? String(permalink) : null,
-    raw: pub ? deepFix(pub) : null,
+    kind: a.kind || a.type || "image",
+    type: a.type || a.kind || "image",
+    role: a.role || "primary",
+    provider: a.provider || null,
+    url,
+    secure_url: a.secure_url || null,
+    publicUrl: a.publicUrl || null,
+    public_url: a.public_url || null,
+    thumbnailUrl: a.thumbnailUrl || a.thumbnail_url || null,
+    durationSec: a.durationSec ?? a.duration_sec ?? null,
+    aspectRatio: a.aspectRatio || a.aspect_ratio || null,
+    taskId: a.taskId || a.task_id || null,
+  });
+}
+
+function pickImageInfo(result) {
+  const image =
+    (result?.image && typeof result.image === "object" ? result.image : null) ||
+    (result?.asset && typeof result.asset === "object" ? result.asset : null) ||
+    null;
+
+  const imageUrl = firstNonEmpty(
+    result?.imageUrl,
+    result?.image_url,
+    result?.assetUrl,
+    result?.asset_url,
+    result?.url,
+    image?.imageUrl,
+    image?.image_url,
+    image?.assetUrl,
+    image?.asset_url,
+    image?.url
+  );
+
+  const coverUrl = firstNonEmpty(
+    result?.coverUrl,
+    result?.cover_url,
+    result?.thumbnailUrl,
+    result?.thumbnail_url,
+    image?.coverUrl,
+    image?.cover_url,
+    image?.thumbnailUrl,
+    image?.thumbnail_url
+  );
+
+  const provider = firstNonEmpty(
+    result?.provider,
+    result?.engine,
+    image?.provider
+  );
+
+  const aspectRatio = firstNonEmpty(
+    result?.aspectRatio,
+    result?.aspect_ratio,
+    image?.aspectRatio,
+    image?.aspect_ratio
+  );
+
+  if (!imageUrl && !coverUrl && !image) return null;
+
+  return deepFix({
+    provider: provider ? String(provider) : null,
+    imageUrl: imageUrl ? String(imageUrl) : null,
+    coverUrl: coverUrl ? String(coverUrl) : null,
+    aspectRatio: aspectRatio ? String(aspectRatio) : null,
+    raw: image ? deepFix(image) : null,
   });
 }
 
@@ -183,7 +218,6 @@ function pickVideoInfo(result) {
   const videoUrl =
     result?.videoUrl ||
     result?.video_url ||
-    result?.url ||
     video?.videoUrl ||
     video?.video_url ||
     video?.url ||
@@ -245,13 +279,122 @@ function pickVideoInfo(result) {
   });
 }
 
+function mergePackAssets(result) {
+  const rawPack =
+    result?.contentPack ||
+    result?.content_pack ||
+    result?.draft ||
+    result?.pack ||
+    result?.content ||
+    null;
+
+  const assets = Array.isArray(result?.assets)
+    ? result.assets.map(normalizeAssetItem).filter(Boolean)
+    : [];
+
+  const image = pickImageInfo(result);
+  const video = pickVideoInfo(result);
+
+  const topLevelPatch = deepFix({
+    ...(image?.imageUrl ? { imageUrl: image.imageUrl } : {}),
+    ...(image?.coverUrl ? { coverUrl: image.coverUrl, thumbnailUrl: image.coverUrl } : {}),
+    ...(video?.videoUrl ? { videoUrl: video.videoUrl } : {}),
+    ...(video?.thumbnailUrl ? { thumbnailUrl: video.thumbnailUrl } : {}),
+    ...(image?.aspectRatio || video?.aspectRatio
+      ? { aspectRatio: image?.aspectRatio || video?.aspectRatio }
+      : {}),
+  });
+
+  if (rawPack && typeof rawPack === "object") {
+    const rpAssets = Array.isArray(rawPack.assets)
+      ? rawPack.assets.map(normalizeAssetItem).filter(Boolean)
+      : [];
+
+    return deepFix({
+      ...rawPack,
+      ...topLevelPatch,
+      assets: [...rpAssets, ...assets],
+    });
+  }
+
+  if (assets.length || Object.keys(topLevelPatch).length) {
+    return deepFix({
+      ...topLevelPatch,
+      ...(assets.length ? { assets } : {}),
+    });
+  }
+
+  return null;
+}
+
+function pickPublishInfo(result) {
+  const pub =
+    (result?.publish && typeof result.publish === "object" ? result.publish : null) ||
+    (result?.published && typeof result.published === "object" ? result.published : null) ||
+    null;
+
+  const publishedMediaId =
+    result?.publishedMediaId ||
+    result?.published_media_id ||
+    pub?.publishedMediaId ||
+    pub?.published_media_id ||
+    pub?.mediaId ||
+    pub?.id ||
+    null;
+
+  const permalink =
+    result?.permalink ||
+    result?.postUrl ||
+    result?.post_url ||
+    pub?.permalink ||
+    pub?.url ||
+    null;
+
+  const platform = result?.platform || pub?.platform || "instagram";
+
+  return deepFix({
+    platform,
+    publishedMediaId: publishedMediaId ? String(publishedMediaId) : null,
+    permalink: permalink ? String(permalink) : null,
+    raw: pub ? deepFix(pub) : null,
+  });
+}
+
 function buildMediaAssets(result) {
   const out = [];
 
   if (Array.isArray(result?.assets)) {
     for (const item of result.assets) {
-      if (item) out.push(deepFix(item));
+      const normalized = normalizeAssetItem(item);
+      if (normalized) out.push(normalized);
     }
+  }
+
+  const image = pickImageInfo(result);
+  if (image?.imageUrl) {
+    out.push(
+      deepFix({
+        kind: "image",
+        type: "image",
+        role: "primary",
+        provider: image.provider || null,
+        url: image.imageUrl,
+        aspectRatio: image.aspectRatio || null,
+      })
+    );
+  }
+
+  if (image?.coverUrl) {
+    out.push(
+      deepFix({
+        kind: "image",
+        type: "image",
+        role: "cover",
+        provider: image.provider || null,
+        url: image.coverUrl,
+        aspectRatio: image.aspectRatio || null,
+      })
+    );
   }
 
   const video = pickVideoInfo(result);
@@ -313,12 +456,20 @@ function mergeContentPack(prevPack, incomingPack, result, jt) {
   }
 
   const video = pickVideoInfo(result);
+  const image = pickImageInfo(result);
 
   const merged = deepFix({
     ...prev,
     ...next,
     assets: uniqueAssets,
   });
+
+  if (image?.imageUrl) merged.imageUrl = image.imageUrl;
+  if (image?.coverUrl) {
+    merged.coverUrl = image.coverUrl;
+    if (!merged.thumbnailUrl) merged.thumbnailUrl = image.coverUrl;
+  }
+  if (image?.aspectRatio && !merged.aspectRatio) merged.aspectRatio = image.aspectRatio;
 
   if (video) {
     merged.video = deepFix({
@@ -608,6 +759,7 @@ export function executionsRoutes({ db, wsHub }) {
             contentId: contentRow?.id || null,
             publish: publishInfo,
             video: pickVideoInfo(result),
+            image: pickImageInfo(result),
           },
         });
 
@@ -664,6 +816,10 @@ export function executionsRoutes({ db, wsHub }) {
               deepFix({
                 assets: merged.assets || [],
                 video: merged.video || null,
+                imageUrl: merged.imageUrl || null,
+                videoUrl: merged.videoUrl || null,
+                thumbnailUrl: merged.thumbnailUrl || null,
+                coverUrl: merged.coverUrl || null,
               })
             );
           }
@@ -708,6 +864,7 @@ export function executionsRoutes({ db, wsHub }) {
           contentId: contentRow?.id || null,
           publish: publishInfo,
           video: pickVideoInfo(result),
+          image: pickImageInfo(result),
         }),
       });
 

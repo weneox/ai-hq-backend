@@ -1,9 +1,10 @@
 // src/routes/api/content.js
-// FINAL v3.2 — Draft -> Asset/Video Generate -> Publish
+// FINAL v3.3 — Draft -> Asset/Video Generate -> Publish
 // FIXES:
-// ✅ publish tolerant for approved/draft.approved rows when assetUrl exists
-// ✅ top-level asset fields added to n8n payload
-// ✅ publish can start from approved row even if legacy status mismatch
+// ✅ publish asset lookup is now tolerant across content_pack + row.publish + row.output + row.result + row.assets
+// ✅ approved tab publish now works even with legacy callback shapes
+// ✅ publish payload sends normalized asset fields to n8n
+// ✅ publish can start from approved/draft.approved/asset.ready rows when asset exists anywhere on row
 
 import express from "express";
 import crypto from "crypto";
@@ -42,6 +43,20 @@ function normalizeContentPack(x) {
     }
   }
   if (typeof x === "object") return deepFix(x);
+  return null;
+}
+
+function normalizeLooseObject(x) {
+  if (!x) return null;
+  if (typeof x === "string") {
+    try {
+      const o = JSON.parse(x);
+      return typeof o === "object" && o ? deepFix(o) : null;
+    } catch {
+      return null;
+    }
+  }
+  if (typeof x === "object" && !Array.isArray(x)) return deepFix(x);
   return null;
 }
 
@@ -114,64 +129,158 @@ function pickAssetGenerationJobType(contentPack) {
   return isReelPack(contentPack) ? "video.generate" : "asset.generate";
 }
 
-function pickFirstAssetUrl(contentPack) {
-  if (!contentPack || typeof contentPack !== "object") return null;
-
-  const direct =
-    contentPack.videoUrl ||
-    contentPack.video_url ||
-    contentPack.imageUrl ||
-    contentPack.image_url ||
-    contentPack.coverUrl ||
-    contentPack.cover_url ||
-    contentPack.thumbnailUrl ||
-    contentPack.thumbnail_url ||
-    null;
-
-  if (direct) return String(direct);
-
-  const assets = Array.isArray(contentPack.assets) ? contentPack.assets : [];
-  if (!assets.length) return null;
-
-  const preferredVideo = assets.find((a) => {
-    const kind = safeLower(a?.kind || a?.type || a?.mime || "");
-    return kind.includes("video");
-  });
-
-  const preferredImage = assets.find((a) => {
-    const kind = safeLower(a?.kind || a?.type || a?.mime || "");
-    const role = safeLower(a?.role || "");
-    return kind.includes("image") || role === "thumbnail" || role === "cover";
-  });
-
-  const chosen = preferredVideo || preferredImage || assets[0] || null;
-  if (!chosen) return null;
-
-  const u = chosen.url || chosen.secure_url || chosen.publicUrl || chosen.public_url || null;
-  return u ? String(u) : null;
+function addUrl(out, value) {
+  const s = String(value || "").trim();
+  if (!s) return;
+  if (/^https?:\/\//i.test(s)) out.push(s);
 }
 
-function pickThumbnailUrl(contentPack) {
-  if (!contentPack || typeof contentPack !== "object") return null;
+function collectUrlsDeep(node, out, depth = 0) {
+  if (!node || depth > 6) return;
 
-  const direct =
-    contentPack.thumbnailUrl ||
-    contentPack.thumbnail_url ||
-    contentPack.coverUrl ||
-    contentPack.cover_url ||
-    null;
+  if (typeof node === "string") {
+    addUrl(out, node);
+    return;
+  }
 
-  if (direct) return String(direct);
+  if (Array.isArray(node)) {
+    for (const item of node) collectUrlsDeep(item, out, depth + 1);
+    return;
+  }
 
-  const assets = Array.isArray(contentPack.assets) ? contentPack.assets : [];
-  const chosen =
-    assets.find((a) => safeLower(a?.role || "") === "thumbnail") ||
-    assets.find((a) => safeLower(a?.role || "") === "cover") ||
-    assets.find((a) => safeLower(a?.kind || a?.type || "") === "image") ||
-    null;
+  if (typeof node !== "object") return;
 
-  const u = chosen?.url || chosen?.secure_url || chosen?.publicUrl || null;
-  return u ? String(u) : null;
+  addUrl(out, node.url);
+  addUrl(out, node.secure_url);
+  addUrl(out, node.publicUrl);
+  addUrl(out, node.public_url);
+
+  addUrl(out, node.imageUrl);
+  addUrl(out, node.image_url);
+  addUrl(out, node.videoUrl);
+  addUrl(out, node.video_url);
+  addUrl(out, node.coverUrl);
+  addUrl(out, node.cover_url);
+  addUrl(out, node.thumbnailUrl);
+  addUrl(out, node.thumbnail_url);
+  addUrl(out, node.permalink);
+
+  const likelyChildren = [
+    node.assets,
+    node.media,
+    node.images,
+    node.videos,
+    node.publish,
+    node.result,
+    node.output,
+    node.contentPack,
+    node.content_pack,
+    node.payload,
+    node.data,
+    node.item,
+    node.items,
+  ];
+
+  for (const child of likelyChildren) {
+    collectUrlsDeep(child, out, depth + 1);
+  }
+}
+
+function getAllAssetUrlsFromRow(row) {
+  const out = [];
+
+  const contentPack = normalizeContentPack(row?.content_pack) || null;
+  const publishObj = normalizeLooseObject(row?.publish) || null;
+  const outputObj = normalizeLooseObject(row?.output) || null;
+  const resultObj = normalizeLooseObject(row?.result) || null;
+  const payloadObj = normalizeLooseObject(row?.payload) || null;
+
+  collectUrlsDeep(contentPack, out);
+  collectUrlsDeep(publishObj, out);
+  collectUrlsDeep(outputObj, out);
+  collectUrlsDeep(resultObj, out);
+  collectUrlsDeep(payloadObj, out);
+  collectUrlsDeep(row?.assets, out);
+  collectUrlsDeep(row?.media, out);
+  collectUrlsDeep(row, out);
+
+  return Array.from(new Set(out));
+}
+
+function pickFirstAssetUrl(contentPack, row = null) {
+  if (contentPack && typeof contentPack === "object") {
+    const direct =
+      contentPack.videoUrl ||
+      contentPack.video_url ||
+      contentPack.imageUrl ||
+      contentPack.image_url ||
+      contentPack.coverUrl ||
+      contentPack.cover_url ||
+      contentPack.thumbnailUrl ||
+      contentPack.thumbnail_url ||
+      null;
+
+    if (direct) return String(direct);
+
+    const assets = Array.isArray(contentPack.assets) ? contentPack.assets : [];
+    if (assets.length) {
+      const preferredVideo = assets.find((a) => {
+        const kind = safeLower(a?.kind || a?.type || a?.mime || "");
+        return kind.includes("video");
+      });
+
+      const preferredImage = assets.find((a) => {
+        const kind = safeLower(a?.kind || a?.type || a?.mime || "");
+        const role = safeLower(a?.role || "");
+        return kind.includes("image") || role === "thumbnail" || role === "cover";
+      });
+
+      const chosen = preferredVideo || preferredImage || assets[0] || null;
+      const u = chosen?.url || chosen?.secure_url || chosen?.publicUrl || chosen?.public_url || null;
+      if (u) return String(u);
+    }
+  }
+
+  if (row) {
+    const urls = getAllAssetUrlsFromRow(row);
+    if (urls.length) return urls[0];
+  }
+
+  return null;
+}
+
+function pickThumbnailUrl(contentPack, row = null) {
+  if (contentPack && typeof contentPack === "object") {
+    const direct =
+      contentPack.thumbnailUrl ||
+      contentPack.thumbnail_url ||
+      contentPack.coverUrl ||
+      contentPack.cover_url ||
+      null;
+
+    if (direct) return String(direct);
+
+    const assets = Array.isArray(contentPack.assets) ? contentPack.assets : [];
+    const chosen =
+      assets.find((a) => safeLower(a?.role || "") === "thumbnail") ||
+      assets.find((a) => safeLower(a?.role || "") === "cover") ||
+      assets.find((a) => safeLower(a?.kind || a?.type || "") === "image") ||
+      null;
+
+    const u = chosen?.url || chosen?.secure_url || chosen?.publicUrl || chosen?.public_url || null;
+    if (u) return String(u);
+  }
+
+  if (row) {
+    const all = getAllAssetUrlsFromRow(row);
+    const thumb =
+      all.find((u) => /thumbnail|thumb|cover/i.test(String(u))) ||
+      all.find((u) => /\.(png|jpe?g|webp)(\?|$)/i.test(String(u))) ||
+      null;
+    if (thumb) return String(thumb);
+  }
+
+  return null;
 }
 
 function normalizeHashtagsValue(v) {
@@ -217,7 +326,8 @@ function isAssetReadyStatus(s) {
     v === "assets.ready" ||
     v === "publish.ready" ||
     v === "approved" ||
-    v === "draft.approved"
+    v === "draft.approved" ||
+    v === "content.approved"
   );
 }
 
@@ -228,7 +338,7 @@ function isPublishRequestedStatus(s) {
 
 function canPublishRow(row) {
   const contentPack = normalizeContentPack(row?.content_pack) || {};
-  const assetUrl = pickFirstAssetUrl(contentPack);
+  const assetUrl = pickFirstAssetUrl(contentPack, row);
   return Boolean(assetUrl) && isAssetReadyStatus(row?.status);
 }
 
@@ -280,20 +390,22 @@ function buildPublishNotifyExtra({
   assetUrl,
   caption,
 }) {
-  const thumbnailUrl = pickThumbnailUrl(contentPack);
+  const thumbnailUrl = pickThumbnailUrl(contentPack, row);
+  const kind = packType(contentPack);
+
   return deepFix({
     tenantId,
     proposalId: String(proposal?.id || row?.proposal_id || ""),
     threadId: String(proposal?.thread_id || row?.thread_id || ""),
     jobId: jobId || null,
     contentId: String(row?.id || ""),
-    postType: packType(contentPack),
-    format: packType(contentPack),
+    postType: kind,
+    format: kind,
     aspectRatio: pickAspectRatio(contentPack),
     visualPreset: pickVisualPreset(contentPack),
     assetUrl,
-    imageUrl: assetUrl,
-    videoUrl: assetUrl,
+    imageUrl: kind === "reel" ? null : assetUrl,
+    videoUrl: kind === "reel" ? assetUrl : null,
     thumbnailUrl,
     coverUrl: thumbnailUrl || assetUrl,
     caption,
@@ -476,7 +588,7 @@ export function contentRoutes({ db, wsHub }) {
           return okJson(res, { ok: false, error: "publish already requested", status: row.status, dbDisabled: true });
         }
 
-        if (isAssetReadyStatus(st) && pickFirstAssetUrl(normalizeContentPack(row.content_pack) || {})) {
+        if (isAssetReadyStatus(st) && pickFirstAssetUrl(normalizeContentPack(row.content_pack) || {}, row)) {
           return okJson(res, { ok: true, content: row, note: "asset already ready", dbDisabled: true });
         }
 
@@ -526,13 +638,17 @@ export function contentRoutes({ db, wsHub }) {
 
         const p = mem.proposals.get(row.proposal_id) || null;
         if (p) {
-          notifyN8n(eventName, p, buildAssetNotifyExtra({
-            tenantId,
-            proposal: p,
-            row: updated || row,
-            jobId,
-            contentPack,
-          }));
+          notifyN8n(
+            eventName,
+            p,
+            buildAssetNotifyExtra({
+              tenantId,
+              proposal: p,
+              row: updated || row,
+              jobId,
+              contentPack,
+            })
+          );
         }
 
         const notif = memCreateNotification({
@@ -563,7 +679,7 @@ export function contentRoutes({ db, wsHub }) {
         return okJson(res, { ok: false, error: "publish already requested", status: row.status });
       }
 
-      if (isAssetReadyStatus(st) && pickFirstAssetUrl(normalizeContentPack(row.content_pack) || {})) {
+      if (isAssetReadyStatus(st) && pickFirstAssetUrl(normalizeContentPack(row.content_pack) || {}, row)) {
         return okJson(res, { ok: true, content: row, note: "asset already ready" });
       }
 
@@ -606,13 +722,17 @@ export function contentRoutes({ db, wsHub }) {
         job_id: job?.id || row.job_id,
       });
 
-      notifyN8n(eventName, proposal, buildAssetNotifyExtra({
-        tenantId,
+      notifyN8n(
+        eventName,
         proposal,
-        row: updated || row,
-        jobId: job?.id || null,
-        contentPack,
-      }));
+        buildAssetNotifyExtra({
+          tenantId,
+          proposal,
+          row: updated || row,
+          jobId: job?.id || null,
+          contentPack,
+        })
+      );
 
       const notif = await dbCreateNotification(db, {
         recipient: "ceo",
@@ -666,12 +786,12 @@ export function contentRoutes({ db, wsHub }) {
             ok: false,
             error: "content must be asset.ready before publish",
             status: row.status,
-            hasAssetUrl: !!pickFirstAssetUrl(contentPack),
+            hasAssetUrl: !!pickFirstAssetUrl(contentPack, row),
             dbDisabled: true,
           });
         }
 
-        const assetUrl = pickFirstAssetUrl(contentPack);
+        const assetUrl = pickFirstAssetUrl(contentPack, row);
         const caption = buildCaption(contentPack);
 
         if (!assetUrl) {
@@ -688,7 +808,7 @@ export function contentRoutes({ db, wsHub }) {
             contentId: id,
             contentPack,
             assetUrl,
-            thumbnailUrl: pickThumbnailUrl(contentPack),
+            thumbnailUrl: pickThumbnailUrl(contentPack, row),
             caption,
             format: packType(contentPack),
             aspectRatio: pickAspectRatio(contentPack),
@@ -704,15 +824,19 @@ export function contentRoutes({ db, wsHub }) {
 
         const p = mem.proposals.get(row.proposal_id) || null;
         if (p) {
-          notifyN8n("content.publish", p, buildPublishNotifyExtra({
-            tenantId,
-            proposal: p,
-            row,
-            jobId,
-            contentPack,
-            assetUrl,
-            caption,
-          }));
+          notifyN8n(
+            "content.publish",
+            p,
+            buildPublishNotifyExtra({
+              tenantId,
+              proposal: p,
+              row,
+              jobId,
+              contentPack,
+              assetUrl,
+              caption,
+            })
+          );
         }
 
         const notif = memCreateNotification({
@@ -743,14 +867,14 @@ export function contentRoutes({ db, wsHub }) {
           ok: false,
           error: "content must be asset.ready before publish",
           status: row.status,
-          hasAssetUrl: !!pickFirstAssetUrl(contentPack),
+          hasAssetUrl: !!pickFirstAssetUrl(contentPack, row),
         });
       }
 
       const proposal = await dbGetProposalById(db, String(row.proposal_id));
       if (!proposal) return okJson(res, { ok: false, error: "proposal not found for content" });
 
-      const assetUrl = pickFirstAssetUrl(contentPack);
+      const assetUrl = pickFirstAssetUrl(contentPack, row);
       const caption = buildCaption(contentPack);
 
       if (!assetUrl) {
@@ -765,7 +889,7 @@ export function contentRoutes({ db, wsHub }) {
           contentId: row.id,
           contentPack,
           assetUrl,
-          thumbnailUrl: pickThumbnailUrl(contentPack),
+          thumbnailUrl: pickThumbnailUrl(contentPack, row),
           caption,
           format: packType(contentPack),
           aspectRatio: pickAspectRatio(contentPack),
@@ -777,15 +901,19 @@ export function contentRoutes({ db, wsHub }) {
         job_id: job?.id || row.job_id,
       });
 
-      notifyN8n("content.publish", proposal, buildPublishNotifyExtra({
-        tenantId,
+      notifyN8n(
+        "content.publish",
         proposal,
-        row: updated || row,
-        jobId: job?.id || null,
-        contentPack,
-        assetUrl,
-        caption,
-      }));
+        buildPublishNotifyExtra({
+          tenantId,
+          proposal,
+          row: updated || row,
+          jobId: job?.id || null,
+          contentPack,
+          assetUrl,
+          caption,
+        })
+      );
 
       const notif = await dbCreateNotification(db, {
         recipient: "ceo",
