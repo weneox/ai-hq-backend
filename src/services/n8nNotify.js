@@ -1,8 +1,8 @@
 // src/services/n8nNotify.js
 // FINAL — Runway / Draft / Asset / Publish aware routing
-// ✅ no double /aihq-approved
+// ✅ publish now routes to /aihq-publish
+// ✅ approved/assets route to /aihq-approved
 // ✅ supports full URL or base URL
-// ✅ maps content asset/video events to existing prod flows when needed
 // ✅ keeps original action while sending normalized event
 // ✅ includes stable callback + prompt bundle + media/reel fields
 
@@ -50,8 +50,6 @@ function normalizeAspectRatio(x, fallbackFormat = "") {
 function normalizeEventForTransport(event, extra = {}) {
   const raw = clean(event);
 
-  // Existing prod flow compatibility:
-  // many current n8n flows already listen on proposal.approved / content.publish.
   switch (raw) {
     case "content.assets.generate":
     case "asset.generate":
@@ -129,8 +127,13 @@ function pickWebhookUrl(event, extra = {}) {
 
   if (looksLikeFullWebhookUrl(base)) return base;
 
-  // Current prod default single entry flow
-  if (event === "content.publish") return `${base}/aihq-approved`;
+  // Approved / asset / draft-auto flow
+  if (event === "proposal.approved") return `${base}/aihq-approved`;
+
+  // Publish flow
+  if (event === "content.publish") return `${base}/aihq-publish`;
+
+  // Fallback
   return `${base}/aihq-approved`;
 }
 
@@ -302,7 +305,7 @@ export function notifyN8n(event, proposal, extra = {}) {
           : JSON.stringify(r?.data || {}).slice(0, 220);
 
       console.log(
-        `[n8n] event=${mappedEvent} action=${action || "-"} workflow=${workflowHint} -> ${info} ${preview}`
+        `[n8n] event=${mappedEvent} action=${action || "-"} workflow=${workflowHint} url=${url} -> ${info} ${preview}`
       );
     })
     .catch((e) => {
