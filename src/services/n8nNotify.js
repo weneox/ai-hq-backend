@@ -1,7 +1,7 @@
 // src/services/n8nNotify.js
 // FINAL — Runway / Draft / Asset / Publish aware routing
-// ✅ publish now routes to /aihq-publish
-// ✅ approved/assets route to /aihq-approved
+// ✅ publish routes to N8N_WEBHOOK_PUBLISH_URL or /aihq-publish
+// ✅ approved/assets route to N8N_WEBHOOK_PROPOSAL_APPROVED_URL or /aihq-approved
 // ✅ supports full URL or base URL
 // ✅ keeps original action while sending normalized event
 // ✅ includes stable callback + prompt bundle + media/reel fields
@@ -110,30 +110,37 @@ function pickWorkflowHint(event, extra = {}) {
 
 function pickWebhookUrl(event, extra = {}) {
   const override = clean(extra.webhookUrl);
-  if (override) return override;
-
-  const full = clean(cfg.N8N_WEBHOOK_URL);
-  if (full) return stripTrailingSlashes(full);
+  if (override) return stripTrailingSlashes(override);
 
   const perEvent = {
     "proposal.approved": clean(cfg.N8N_WEBHOOK_PROPOSAL_APPROVED_URL),
     "content.publish": clean(cfg.N8N_WEBHOOK_PUBLISH_URL),
   };
 
-  if (perEvent[event]) return stripTrailingSlashes(perEvent[event]);
+  if (perEvent[event]) {
+    return stripTrailingSlashes(perEvent[event]);
+  }
+
+  const full = clean(cfg.N8N_WEBHOOK_URL);
+  if (full) {
+    return stripTrailingSlashes(full);
+  }
 
   const base = stripTrailingSlashes(cfg.N8N_WEBHOOK_BASE);
   if (!base) return "";
 
-  if (looksLikeFullWebhookUrl(base)) return base;
+  if (looksLikeFullWebhookUrl(base)) {
+    return base;
+  }
 
-  // Approved / asset / draft-auto flow
-  if (event === "proposal.approved") return `${base}/aihq-approved`;
+  if (event === "proposal.approved") {
+    return `${base}/aihq-approved`;
+  }
 
-  // Publish flow
-  if (event === "content.publish") return `${base}/aihq-publish`;
+  if (event === "content.publish") {
+    return `${base}/aihq-publish`;
+  }
 
-  // Fallback
   return `${base}/aihq-approved`;
 }
 
