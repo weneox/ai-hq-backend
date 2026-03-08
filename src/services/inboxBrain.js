@@ -1,5 +1,5 @@
 // src/services/inboxBrain.js
-// FINAL v3.0 — AI-first inbox brain + safe fallback
+// FINAL v4.0 — inbox reliability layer + AI/fallback decisioning
 
 import OpenAI from "openai";
 import { cfg } from "../config.js";
@@ -28,6 +28,24 @@ function pickStringDeep(x) {
     if (typeof x.text === "string") return x.text;
   }
   return "";
+}
+
+function toNum(v, fallback = 0) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function nowMs() {
+  return Date.now();
+}
+
+function toMs(v) {
+  if (!v) return 0;
+  const n = Number(v);
+  if (Number.isFinite(n) && n > 0) return n;
+
+  const t = Date.parse(String(v));
+  return Number.isFinite(t) ? t : 0;
 }
 
 function fixMojibake(input) {
@@ -128,6 +146,89 @@ function getThreadHandoffState(thread) {
   };
 }
 
+function normalizeRecentMessages(input) {
+  if (!Array.isArray(input)) return [];
+  return input
+    .map((m) => ({
+      id: s(m?.id),
+      direction: lower(m?.direction),
+      sender_type: lower(m?.sender_type),
+      text: fixMojibake(s(m?.text)),
+      sent_at: m?.sent_at || null,
+      created_at: m?.created_at || null,
+      meta: m?.meta && typeof m.meta === "object" ? m.meta : {},
+    }))
+    .filter((m) => m.id || m.text)
+    .sort((a, b) => toMs(a.sent_at || a.created_at) - toMs(b.sent_at || b.created_at));
+}
+
+function getLatestOutbound(messages) {
+  const list = normalizeRecentMessages(messages);
+  for (let i = list.length - 1; i >= 0; i -= 1) {
+    const m = list[i];
+    if (m.direction === "outbound") return m;
+  }
+  return null;
+}
+
+function getLatestOperatorOutbound(messages) {
+  const list = normalizeRecentMessages(messages);
+  for (let i = list.length - 1; i >= 0; i -= 1) {
+    const m = list[i];
+    if (m.direction === "outbound" && (m.sender_type === "agent" || m.sender_type === "operator")) {
+      return m;
+    }
+  }
+  return null;
+}
+
+function getLastAiOutbound(messages) {
+  const list = normalizeRecentMessages(messages);
+  for (let i = list.length - 1; i >= 0; i -= 1) {
+    const m = list[i];
+    if (m.direction === "outbound" && (m.sender_type === "ai" || m.sender_type === "assistant")) {
+      return m;
+    }
+  }
+  return null;
+}
+
+function isAckOnlyText(text) {
+  const incoming = lower(text);
+  if (!incoming) return false;
+
+  return (
+    includesAny(incoming, [
+      "👍",
+      "👌",
+      "ok",
+      "oks",
+      "thanks",
+      "thank you",
+      "təşəkkür",
+      "tesekkur",
+      "sağ ol",
+      "sag ol",
+    ]) &&
+    incoming.length <= 20
+  );
+}
+
+function buildHistorySnippet(messages = [], limit = 6) {
+  const list = normalizeRecentMessages(messages).slice(-limit);
+  return list
+    .map((m) => {
+      const who =
+        m.direction === "inbound"
+          ? "customer"
+          : m.sender_type === "agent" || m.sender_type === "operator"
+            ? "operator"
+            : "ai";
+      return `${who}: ${s(m.text).slice(0, 300)}`;
+    })
+    .join("\n");
+}
+
 function buildMeta({ tenantKey, thread, message, intent, score = 0, extra = {} }) {
   return {
     tenantKey: s(tenantKey || "neox"),
@@ -226,6 +327,45 @@ function ensureOpenAI() {
   return openaiSingleton;
 }
 
+function getReliabilityFlags({ text, thread, recentMessages = [], quietHoursApplied, policy }) {
+  const list = normalizeRecentMessages(recentMessages);
+  const latestOutbound = getLatestOutbound(list);
+  const lastOperatorOutbound = getLatestOperatorOutbound(list);
+  const lastAiOutbound = getLastAiOutbound(list);
+
+  const now = nowMs();
+  const cooldownMs = Math.max(0, Number(cfg.INBOX_REPLY_COOLDOWN_MS || 45000));
+  const operatorCooldownMs = Math.max(0, Number(cfg.INBOX_OPERATOR_REPLY_SUPPRESS_MS || 300000));
+
+  const latestOutboundAgeMs = latestOutbound ? Math.max(0, now - toMs(latestOutbound.sent_at || latestOutbound.created_at)) : null;
+  const operatorOutboundAgeMs = lastOperatorOutbound
+    ? Math.max(0, now - toMs(lastOperatorOutbound.sent_at || lastOperatorOutbound.created_at))
+    : null;
+
+  const duplicateOfLastAiReply =
+    Boolean(lastAiOutbound?.text) &&
+    lower(lastAiOutbound.text) === lower(text);
+
+  const recentOutboundCooldownActive =
+    latestOutboundAgeMs !== null && latestOutboundAgeMs < cooldownMs;
+
+  const operatorRecentlyReplied =
+    operatorOutboundAgeMs !== null && operatorOutboundAgeMs < operatorCooldownMs;
+
+  const closedLike = thread?.status === "closed" || thread?.status === "spam";
+
+  return {
+    recentOutboundCooldownActive,
+    latestOutboundAgeMs,
+    operatorRecentlyReplied,
+    operatorOutboundAgeMs,
+    duplicateOfLastAiReply,
+    quietHoursApplied: Boolean(quietHoursApplied),
+    channelAllowed: Boolean(policy?.channelAllowed),
+    closedLike,
+  };
+}
+
 async function aiDecideInbox({
   text,
   channel,
@@ -235,12 +375,15 @@ async function aiDecideInbox({
   message,
   policy,
   quietHoursApplied,
+  recentMessages = [],
+  reliability = {},
 }) {
   const openai = ensureOpenAI();
   if (!openai) return null;
 
   const model = s(cfg.OPENAI_MODEL || "gpt-5") || "gpt-5";
   const max_output_tokens = Number(cfg.OPENAI_MAX_OUTPUT_TOKENS || 800);
+  const historySnippet = buildHistorySnippet(recentMessages, 6);
 
   const prompt = `
 You are an AI inbox copilot for NEOX.
@@ -258,6 +401,8 @@ Business context:
 - If user wants a human/operator, set handoff=true.
 - If message looks like clear service interest, createLead should usually be true.
 - If message is only short acknowledgement like "ok", "thanks", "👍", then noReply=true.
+- If operator recently replied, prefer noReply=true unless the user is clearly asking something new and urgent.
+- Avoid repeating the same reply again.
 - If quiet hours are active, still analyze normally but noReply can be true if needed.
 - Never output anything except JSON.
 
@@ -289,10 +434,17 @@ channel=${s(channel || "instagram")}
 externalUserId=${s(externalUserId || "")}
 threadId=${s(thread?.id || "")}
 messageId=${s(message?.id || "")}
+threadStatus=${s(thread?.status || "open")}
 quietHoursApplied=${quietHoursApplied ? "true" : "false"}
 policy.autoReplyEnabled=${Boolean(policy?.autoReplyEnabled)}
 policy.createLeadEnabled=${Boolean(policy?.createLeadEnabled)}
 policy.handoffEnabled=${Boolean(policy?.handoffEnabled)}
+recentOutboundCooldownActive=${Boolean(reliability?.recentOutboundCooldownActive)}
+operatorRecentlyReplied=${Boolean(reliability?.operatorRecentlyReplied)}
+duplicateOfLastAiReply=${Boolean(reliability?.duplicateOfLastAiReply)}
+
+Recent thread history:
+${historySnippet || "(empty)"}
 
 Incoming message:
 ${JSON.stringify(String(text || ""))}
@@ -353,9 +505,10 @@ function buildInboxActionsFallback({
   tenantKey,
   thread,
   message,
-  tenant = null,
   policy,
   quietHoursApplied,
+  recentMessages = [],
+  reliability = {},
 }) {
   const incoming = lower(text);
   const actions = [];
@@ -373,6 +526,16 @@ function buildInboxActionsFallback({
   let handoffPriority = "normal";
 
   if (quietHoursApplied) {
+    shouldReply = false;
+    shouldTyping = false;
+  }
+
+  if (reliability?.recentOutboundCooldownActive) {
+    shouldReply = false;
+    shouldTyping = false;
+  }
+
+  if (reliability?.operatorRecentlyReplied) {
     shouldReply = false;
     shouldTyping = false;
   }
@@ -513,6 +676,11 @@ function buildInboxActionsFallback({
       "Bizimlə maraqlandığınız üçün təşəkkür edirik. İstədiyiniz xidməti yazın, komandamız sizə uyğun şəkildə yönləndirsin.";
   }
 
+  if (reliability?.duplicateOfLastAiReply) {
+    shouldReply = false;
+    shouldTyping = false;
+  }
+
   if (!policy.createLeadEnabled) shouldCreateLead = false;
   if (!policy.handoffEnabled) shouldHandoff = false;
 
@@ -524,6 +692,7 @@ function buildInboxActionsFallback({
     score: leadScore,
     extra: {
       quietHoursApplied,
+      recentMessageCount: normalizeRecentMessages(recentMessages).length,
       policyAutoReplyEnabled: Boolean(policy.autoReplyEnabled),
       policyCreateLeadEnabled: Boolean(policy.createLeadEnabled),
       policyHandoffEnabled: Boolean(policy.handoffEnabled),
@@ -532,6 +701,9 @@ function buildInboxActionsFallback({
       policySuppressAiDuringHandoff: Boolean(policy.suppressAiDuringHandoff),
       timezone: s(policy.timezone || "Asia/Baku"),
       engine: "fallback",
+      recentOutboundCooldownActive: Boolean(reliability?.recentOutboundCooldownActive),
+      operatorRecentlyReplied: Boolean(reliability?.operatorRecentlyReplied),
+      duplicateOfLastAiReply: Boolean(reliability?.duplicateOfLastAiReply),
     },
   });
 
@@ -581,7 +753,15 @@ function buildInboxActionsFallback({
   } else {
     actions.push(
       noReplyAction({
-        reason: quietHoursApplied ? "quiet_hours" : "reply_suppressed",
+        reason: quietHoursApplied
+          ? "quiet_hours"
+          : reliability?.operatorRecentlyReplied
+            ? "operator_recently_replied"
+            : reliability?.recentOutboundCooldownActive
+              ? "recent_outbound_cooldown"
+              : reliability?.duplicateOfLastAiReply
+                ? "duplicate_ai_reply_guard"
+                : "reply_suppressed",
         meta: commonMeta,
       })
     );
@@ -607,6 +787,7 @@ export async function buildInboxActions({
   thread,
   message,
   tenant = null,
+  recentMessages = [],
 }) {
   const policy = getInboxPolicy({
     tenantKey,
@@ -618,6 +799,13 @@ export async function buildInboxActions({
   const actions = [];
   const handoff = getThreadHandoffState(thread);
   const quietHoursApplied = isPolicyQuietHours(policy);
+  const reliability = getReliabilityFlags({
+    text,
+    thread,
+    recentMessages,
+    quietHoursApplied,
+    policy,
+  });
 
   const metaBase = {
     tenantKey: s(tenantKey || "neox"),
@@ -626,6 +814,10 @@ export async function buildInboxActions({
     channelAllowed: Boolean(policy.channelAllowed),
     quietHoursApplied,
     handoffActive: Boolean(handoff.active),
+    recentOutboundCooldownActive: Boolean(reliability.recentOutboundCooldownActive),
+    operatorRecentlyReplied: Boolean(reliability.operatorRecentlyReplied),
+    duplicateOfLastAiReply: Boolean(reliability.duplicateOfLastAiReply),
+    recentMessageCount: normalizeRecentMessages(recentMessages).length,
   };
 
   if (!policy.channelAllowed) {
@@ -721,21 +913,7 @@ export async function buildInboxActions({
     };
   }
 
-  if (
-    includesAny(incoming, [
-      "👍",
-      "👌",
-      "ok",
-      "oks",
-      "thanks",
-      "thank you",
-      "təşəkkür",
-      "tesekkur",
-      "sağ ol",
-      "sag ol",
-    ]) &&
-    incoming.length <= 20
-  ) {
+  if (isAckOnlyText(incoming)) {
     if (policy.markSeenEnabled) {
       actions.push(
         markSeenAction({
@@ -747,7 +925,7 @@ export async function buildInboxActions({
             message,
             intent: "ack",
             score: 0,
-            extra: { quietHoursApplied, engine: "rule_ack" },
+            extra: { ...metaBase, engine: "rule_ack" },
           }),
         })
       );
@@ -762,13 +940,53 @@ export async function buildInboxActions({
           message,
           intent: "ack",
           score: 0,
-          extra: { quietHoursApplied, engine: "rule_ack" },
+          extra: { ...metaBase, engine: "rule_ack" },
         }),
       })
     );
 
     return {
       intent: "ack",
+      leadScore: 0,
+      policy,
+      actions,
+    };
+  }
+
+  if (reliability.operatorRecentlyReplied) {
+    if (policy.markSeenEnabled) {
+      actions.push(
+        markSeenAction({
+          channel,
+          recipientId: externalUserId,
+          meta: buildMeta({
+            tenantKey,
+            thread,
+            message,
+            intent: "operator_recently_replied",
+            score: 0,
+            extra: metaBase,
+          }),
+        })
+      );
+    }
+
+    actions.push(
+      noReplyAction({
+        reason: "operator_recently_replied",
+        meta: buildMeta({
+          tenantKey,
+          thread,
+          message,
+          intent: "operator_recently_replied",
+          score: 0,
+          extra: metaBase,
+        }),
+      })
+    );
+
+    return {
+      intent: "operator_recently_replied",
       leadScore: 0,
       policy,
       actions,
@@ -784,6 +1002,8 @@ export async function buildInboxActions({
     message,
     policy,
     quietHoursApplied,
+    recentMessages,
+    reliability,
   });
 
   if (ai) {
@@ -803,6 +1023,16 @@ export async function buildInboxActions({
       shouldTyping = false;
     }
 
+    if (reliability.recentOutboundCooldownActive) {
+      shouldReply = false;
+      shouldTyping = false;
+    }
+
+    if (reliability.duplicateOfLastAiReply) {
+      shouldReply = false;
+      shouldTyping = false;
+    }
+
     if (!policy.createLeadEnabled) shouldCreateLead = false;
     if (!policy.handoffEnabled) shouldHandoff = false;
 
@@ -818,6 +1048,7 @@ export async function buildInboxActions({
       score: leadScore,
       extra: {
         quietHoursApplied,
+        recentMessageCount: normalizeRecentMessages(recentMessages).length,
         policyAutoReplyEnabled: Boolean(policy.autoReplyEnabled),
         policyCreateLeadEnabled: Boolean(policy.createLeadEnabled),
         policyHandoffEnabled: Boolean(policy.handoffEnabled),
@@ -826,6 +1057,9 @@ export async function buildInboxActions({
         policySuppressAiDuringHandoff: Boolean(policy.suppressAiDuringHandoff),
         timezone: s(policy.timezone || "Asia/Baku"),
         engine: "ai",
+        recentOutboundCooldownActive: Boolean(reliability.recentOutboundCooldownActive),
+        operatorRecentlyReplied: Boolean(reliability.operatorRecentlyReplied),
+        duplicateOfLastAiReply: Boolean(reliability.duplicateOfLastAiReply),
       },
     });
 
@@ -875,7 +1109,13 @@ export async function buildInboxActions({
     } else {
       actions.push(
         noReplyAction({
-          reason: quietHoursApplied ? "quiet_hours" : "reply_suppressed",
+          reason: quietHoursApplied
+            ? "quiet_hours"
+            : reliability.recentOutboundCooldownActive
+              ? "recent_outbound_cooldown"
+              : reliability.duplicateOfLastAiReply
+                ? "duplicate_ai_reply_guard"
+                : "reply_suppressed",
           meta: commonMeta,
         })
       );
@@ -900,8 +1140,9 @@ export async function buildInboxActions({
     tenantKey,
     thread,
     message,
-    tenant,
     policy,
     quietHoursApplied,
+    recentMessages,
+    reliability,
   });
 }

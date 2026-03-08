@@ -7,7 +7,12 @@ import {
   s,
 } from "./inbox.shared.js";
 
-export async function persistLeadActions({ db, wsHub, tenantKey, actions }) {
+function pickDb(db, client) {
+  return client || db;
+}
+
+export async function persistLeadActions({ db, client = null, wsHub, tenantKey, actions }) {
+  const q = pickDb(db, client);
   const list = Array.isArray(actions) ? actions : [];
   const persisted = [];
 
@@ -50,7 +55,7 @@ export async function persistLeadActions({ db, wsHub, tenantKey, actions }) {
     if (!inboxThreadId || !isUuid(inboxThreadId)) continue;
     if (proposalId && !isUuid(proposalId)) continue;
 
-    const found = await db.query(
+    const found = await q.query(
       `
       select
         id,
@@ -85,7 +90,7 @@ export async function persistLeadActions({ db, wsHub, tenantKey, actions }) {
     const existing = found.rows?.[0] || null;
 
     if (existing) {
-      const updated = await db.query(
+      const updated = await q.query(
         `
         update leads
         set
@@ -157,7 +162,7 @@ export async function persistLeadActions({ db, wsHub, tenantKey, actions }) {
       } catch {}
 
       try {
-        await writeAudit(db, {
+        await writeAudit(q, {
           actor: "ai_hq",
           action: "lead.updated",
           objectType: "lead",
@@ -181,7 +186,7 @@ export async function persistLeadActions({ db, wsHub, tenantKey, actions }) {
       continue;
     }
 
-    const inserted = await db.query(
+    const inserted = await q.query(
       `
       insert into leads (
         tenant_key,
@@ -270,7 +275,7 @@ export async function persistLeadActions({ db, wsHub, tenantKey, actions }) {
     } catch {}
 
     try {
-      await writeAudit(db, {
+      await writeAudit(q, {
         actor: "ai_hq",
         action: "lead.created",
         objectType: "lead",
@@ -295,7 +300,8 @@ export async function persistLeadActions({ db, wsHub, tenantKey, actions }) {
   return persisted;
 }
 
-export async function applyHandoffActions({ db, wsHub, threadId, actions }) {
+export async function applyHandoffActions({ db, client = null, wsHub, threadId, actions }) {
+  const q = pickDb(db, client);
   const list = Array.isArray(actions) ? actions : [];
   const handoffs = list.filter((x) => s(x?.type).toLowerCase() === "handoff");
   if (!handoffs.length || !threadId || !isUuid(threadId)) return [];
@@ -306,8 +312,9 @@ export async function applyHandoffActions({ db, wsHub, threadId, actions }) {
     const reason = s(action?.reason || "manual_review");
     const priority = s(action?.priority || "normal").toLowerCase() || "normal";
     const meta = action?.meta && typeof action.meta === "object" ? action.meta : {};
+    const actor = fixText(s(meta?.actor || meta?.handoffBy || "ai_hq")) || "ai_hq";
 
-    const updated = await db.query(
+    const updated = await q.query(
       `
       update inbox_threads
       set
@@ -322,7 +329,12 @@ export async function applyHandoffActions({ db, wsHub, threadId, actions }) {
             coalesce(labels, '[]'::jsonb) || to_jsonb(array['handoff', $2::text]::text[])
           ) as t(v)
         ),
-        meta = coalesce(meta, '{}'::jsonb) || $3::jsonb,
+        handoff_active = true,
+        handoff_reason = $3::text,
+        handoff_priority = $2::text,
+        handoff_at = now(),
+        handoff_by = $4::text,
+        meta = coalesce(meta, '{}'::jsonb) || $5::jsonb,
         updated_at = now()
       where id = $1::uuid
       returning
@@ -341,18 +353,26 @@ export async function applyHandoffActions({ db, wsHub, threadId, actions }) {
         assigned_to,
         labels,
         meta,
+        handoff_active,
+        handoff_reason,
+        handoff_priority,
+        handoff_at,
+        handoff_by,
         created_at,
         updated_at
       `,
       [
         threadId,
         priority,
+        reason,
+        actor,
         JSON.stringify({
           handoff: {
             active: true,
             reason,
             priority,
             at: new Date().toISOString(),
+            by: actor,
             meta,
           },
         }),
@@ -370,7 +390,7 @@ export async function applyHandoffActions({ db, wsHub, threadId, actions }) {
       } catch {}
 
       try {
-        await writeAudit(db, {
+        await writeAudit(q, {
           actor: "ai_hq",
           action: "inbox.handoff.applied",
           objectType: "inbox_thread",

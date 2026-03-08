@@ -12,6 +12,7 @@ import {
   s,
   toInt,
   truthy,
+  sortMessagesChronologically,
 } from "./inbox.shared.js";
 
 import {
@@ -26,6 +27,18 @@ import {
   applyHandoffActions,
   persistLeadActions,
 } from "./inbox.mutations.js";
+
+function uniqueTextJsonbSql(existingLabelsSql, extraLabels = []) {
+  const arr = extraLabels.filter(Boolean);
+  return `
+    (
+      select coalesce(jsonb_agg(distinct v), '[]'::jsonb)
+      from jsonb_array_elements_text(
+        coalesce(${existingLabelsSql}, '[]'::jsonb) || to_jsonb($LABELS$::text[])
+      ) as t(v)
+    )
+  `.replace("$LABELS$", `{${arr.map((x) => `"${x}"`).join(",")}}`);
+}
 
 export function inboxRoutes({ db, wsHub }) {
   const r = express.Router();
@@ -63,6 +76,8 @@ export function inboxRoutes({ db, wsHub }) {
       return okJson(res, { ok: false, error: "text required" });
     }
 
+    let client = null;
+
     try {
       if (!isDbReady(db)) {
         return okJson(res, {
@@ -74,10 +89,14 @@ export function inboxRoutes({ db, wsHub }) {
       }
 
       const tenant = await getTenantByKey(db, tenantKey);
+
+      client = await db.connect();
+      await client.query("BEGIN");
+
       let thread = null;
 
       if (externalThreadId) {
-        const existing = await db.query(
+        const existing = await client.query(
           `
           select
             id,
@@ -95,6 +114,11 @@ export function inboxRoutes({ db, wsHub }) {
             assigned_to,
             labels,
             meta,
+            handoff_active,
+            handoff_reason,
+            handoff_priority,
+            handoff_at,
+            handoff_by,
             created_at,
             updated_at
           from inbox_threads
@@ -110,93 +134,134 @@ export function inboxRoutes({ db, wsHub }) {
       }
 
       if (!thread) {
-        const created = await db.query(
-          `
-          insert into inbox_threads (
-            tenant_key,
-            channel,
-            external_thread_id,
-            external_user_id,
-            external_username,
-            customer_name,
-            status,
-            assigned_to,
-            labels,
-            meta,
-            last_message_at,
-            last_inbound_at,
-            unread_count
-          )
-          values (
-            $1::text,
-            $2::text,
-            $3::text,
-            $4::text,
-            $5::text,
-            $6::text,
-            'open',
-            null,
-            '[]'::jsonb,
-            $7::jsonb,
-            now(),
-            now(),
-            1
-          )
-          returning
-            id,
-            tenant_key,
-            channel,
-            external_thread_id,
-            external_user_id,
-            external_username,
-            customer_name,
-            status,
-            last_message_at,
-            last_inbound_at,
-            last_outbound_at,
-            unread_count,
-            assigned_to,
-            labels,
-            meta,
-            created_at,
-            updated_at
-          `,
-          [
-            tenantKey,
-            channel,
-            externalThreadId,
-            externalUserId,
-            externalUsername,
-            customerName,
-            JSON.stringify(meta),
-          ]
-        );
-
-        thread = created.rows?.[0] || null;
-
         try {
-          wsHub?.broadcast?.("inbox.thread.created", {
-            type: "inbox.thread.created",
-            thread: normalizeThread(thread),
-          });
-        } catch {}
-
-        try {
-          await writeAudit(db, {
-            actor: "meta_gateway",
-            action: "inbox.thread.created",
-            objectType: "inbox_thread",
-            objectId: String(thread?.id || ""),
-            meta: {
+          const created = await client.query(
+            `
+            insert into inbox_threads (
+              tenant_key,
+              channel,
+              external_thread_id,
+              external_user_id,
+              external_username,
+              customer_name,
+              status,
+              assigned_to,
+              labels,
+              meta,
+              last_message_at,
+              last_inbound_at,
+              unread_count
+            )
+            values (
+              $1::text,
+              $2::text,
+              $3::text,
+              $4::text,
+              $5::text,
+              $6::text,
+              'open',
+              null,
+              '[]'::jsonb,
+              $7::jsonb,
+              now(),
+              now(),
+              1
+            )
+            returning
+              id,
+              tenant_key,
+              channel,
+              external_thread_id,
+              external_user_id,
+              external_username,
+              customer_name,
+              status,
+              last_message_at,
+              last_inbound_at,
+              last_outbound_at,
+              unread_count,
+              assigned_to,
+              labels,
+              meta,
+              handoff_active,
+              handoff_reason,
+              handoff_priority,
+              handoff_at,
+              handoff_by,
+              created_at,
+              updated_at
+            `,
+            [
               tenantKey,
               channel,
               externalThreadId,
               externalUserId,
-            },
-          });
-        } catch {}
+              externalUsername,
+              customerName,
+              JSON.stringify(meta),
+            ]
+          );
+
+          thread = created.rows?.[0] || null;
+        } catch (e) {
+          const code = String(e?.code || "");
+          if (code !== "23505") throw e;
+
+          const retry = await client.query(
+            `
+            select
+              id,
+              tenant_key,
+              channel,
+              external_thread_id,
+              external_user_id,
+              external_username,
+              customer_name,
+              status,
+              last_message_at,
+              last_inbound_at,
+              last_outbound_at,
+              unread_count,
+              assigned_to,
+              labels,
+              meta,
+              handoff_active,
+              handoff_reason,
+              handoff_priority,
+              handoff_at,
+              handoff_by,
+              created_at,
+              updated_at
+            from inbox_threads
+            where tenant_key = $1::text
+              and channel = $2::text
+              and external_thread_id = $3::text
+            limit 1
+            `,
+            [tenantKey, channel, externalThreadId]
+          );
+
+          thread = retry.rows?.[0] || null;
+        }
+
+        if (thread) {
+          try {
+            await writeAudit(client, {
+              actor: "meta_gateway",
+              action: "inbox.thread.created",
+              objectType: "inbox_thread",
+              objectId: String(thread?.id || ""),
+              meta: {
+                tenantKey,
+                channel,
+                externalThreadId,
+                externalUserId,
+              },
+            });
+          } catch {}
+        }
       } else {
-        const updated = await db.query(
+        const updated = await client.query(
           `
           update inbox_threads
           set
@@ -224,6 +289,11 @@ export function inboxRoutes({ db, wsHub }) {
             assigned_to,
             labels,
             meta,
+            handoff_active,
+            handoff_reason,
+            handoff_priority,
+            handoff_at,
+            handoff_by,
             created_at,
             updated_at
           `,
@@ -235,25 +305,31 @@ export function inboxRoutes({ db, wsHub }) {
 
       if (externalMessageId && thread?.id) {
         const existingMessage = await findExistingInboundMessage({
-          db,
+          db: client,
           tenantKey,
           threadId: thread.id,
           externalMessageId,
         });
 
         if (existingMessage) {
-          await writeAudit(db, {
-            actor: "meta_gateway",
-            action: "inbox.inbound.deduped",
-            objectType: "inbox_message",
-            objectId: String(existingMessage?.id || ""),
-            meta: {
-              tenantKey,
-              channel,
-              threadId: String(thread?.id || ""),
-              externalMessageId: String(externalMessageId || ""),
-            },
-          });
+          try {
+            await writeAudit(client, {
+              actor: "meta_gateway",
+              action: "inbox.inbound.deduped",
+              objectType: "inbox_message",
+              objectId: String(existingMessage?.id || ""),
+              meta: {
+                tenantKey,
+                channel,
+                threadId: String(thread?.id || ""),
+                externalMessageId: String(externalMessageId || ""),
+              },
+            });
+          } catch {}
+
+          await client.query("COMMIT");
+          client.release();
+          client = null;
 
           return okJson(res, {
             ok: true,
@@ -268,7 +344,7 @@ export function inboxRoutes({ db, wsHub }) {
         }
       }
 
-      const insertedMessage = await db.query(
+      const insertedMessage = await client.query(
         `
         insert into inbox_messages (
           thread_id,
@@ -322,15 +398,7 @@ export function inboxRoutes({ db, wsHub }) {
       let normalizedThread = normalizeThread(thread);
 
       try {
-        wsHub?.broadcast?.("inbox.message.created", {
-          type: "inbox.message.created",
-          threadId: thread.id,
-          message,
-        });
-      } catch {}
-
-      try {
-        await writeAudit(db, {
+        await writeAudit(client, {
           actor: "meta_gateway",
           action: "inbox.inbound.created",
           objectType: "inbox_message",
@@ -344,6 +412,33 @@ export function inboxRoutes({ db, wsHub }) {
         });
       } catch {}
 
+      const recentMessagesQuery = await client.query(
+        `
+        select
+          id,
+          thread_id,
+          tenant_key,
+          direction,
+          sender_type,
+          external_message_id,
+          message_type,
+          text,
+          attachments,
+          meta,
+          sent_at,
+          created_at
+        from inbox_messages
+        where thread_id = $1::uuid
+        order by sent_at desc, created_at desc
+        limit 8
+        `,
+        [thread.id]
+      );
+
+      const recentMessages = sortMessagesChronologically(
+        (recentMessagesQuery.rows || []).map(normalizeMessage)
+      );
+
       const brain = await buildInboxActions({
         text,
         channel,
@@ -352,12 +447,13 @@ export function inboxRoutes({ db, wsHub }) {
         thread: normalizedThread,
         message,
         tenant,
+        recentMessages,
       });
 
       const actions = Array.isArray(brain?.actions) ? brain.actions : [];
 
       try {
-        await writeAudit(db, {
+        await writeAudit(client, {
           actor: "ai_hq",
           action: "inbox.brain.executed",
           objectType: "inbox_message",
@@ -374,6 +470,7 @@ export function inboxRoutes({ db, wsHub }) {
 
       const leadResults = await persistLeadActions({
         db,
+        client,
         wsHub,
         tenantKey,
         actions,
@@ -381,13 +478,74 @@ export function inboxRoutes({ db, wsHub }) {
 
       const handoffResults = await applyHandoffActions({
         db,
+        client,
         wsHub,
         threadId: normalizedThread?.id,
         actions,
       });
 
       if (handoffResults.length && normalizedThread?.id) {
-        normalizedThread = await refreshThread(db, normalizedThread.id, normalizedThread);
+        const refreshed = await client.query(
+          `
+          select
+            id,
+            tenant_key,
+            channel,
+            external_thread_id,
+            external_user_id,
+            external_username,
+            customer_name,
+            status,
+            last_message_at,
+            last_inbound_at,
+            last_outbound_at,
+            unread_count,
+            assigned_to,
+            labels,
+            meta,
+            handoff_active,
+            handoff_reason,
+            handoff_priority,
+            handoff_at,
+            handoff_by,
+            created_at,
+            updated_at
+          from inbox_threads
+          where id = $1::uuid
+          limit 1
+          `,
+          [normalizedThread.id]
+        );
+
+        normalizedThread = normalizeThread(refreshed.rows?.[0] || normalizedThread);
+      }
+
+      await client.query("COMMIT");
+      client.release();
+      client = null;
+
+      try {
+        wsHub?.broadcast?.("inbox.thread.created", {
+          type: "inbox.thread.created",
+          thread: normalizeThread(thread),
+        });
+      } catch {}
+
+      try {
+        wsHub?.broadcast?.("inbox.message.created", {
+          type: "inbox.message.created",
+          threadId: thread.id,
+          message,
+        });
+      } catch {}
+
+      if (handoffResults.length && normalizedThread?.id) {
+        try {
+          wsHub?.broadcast?.("inbox.thread.updated", {
+            type: "inbox.thread.updated",
+            thread: normalizedThread,
+          });
+        } catch {}
       }
 
       return okJson(res, {
@@ -412,6 +570,15 @@ export function inboxRoutes({ db, wsHub }) {
         handoffResults,
       });
     } catch (e) {
+      if (client) {
+        try {
+          await client.query("ROLLBACK");
+        } catch {}
+        try {
+          client.release();
+        } catch {}
+      }
+
       return okJson(res, {
         ok: false,
         error: "Error",
@@ -559,10 +726,25 @@ export function inboxRoutes({ db, wsHub }) {
           last_message_at = now(),
           last_outbound_at = now(),
           external_user_id = coalesce($2::text, external_user_id),
-          updated_at = now()
+          updated_at = now(),
+          handoff_active = case when $3::text = 'agent' then false else handoff_active end,
+          handoff_reason = case when $3::text = 'agent' then '' else handoff_reason end,
+          handoff_priority = case when $3::text = 'agent' then 'normal' else handoff_priority end,
+          handoff_at = case when $3::text = 'agent' then null else handoff_at end,
+          handoff_by = case when $3::text = 'agent' then null else handoff_by end,
+          meta = case
+            when $3::text = 'agent' then
+              jsonb_set(
+                coalesce(meta, '{}'::jsonb),
+                '{handoff}',
+                '{"active":false,"reason":"","priority":"normal","at":null,"by":null}'::jsonb,
+                true
+              )
+            else coalesce(meta, '{}'::jsonb)
+          end
         where id = $1::uuid
         `,
-        [threadId, recipientId]
+        [threadId, recipientId, senderType]
       );
 
       const normalizedThread = await refreshThread(db, threadId, existingThread);
@@ -640,7 +822,7 @@ export function inboxRoutes({ db, wsHub }) {
       }
 
       if (handoffOnly) {
-        where += ` and coalesce(t.meta->'handoff'->>'active', 'false') = 'true'`;
+        where += ` and coalesce(t.handoff_active, false) = true`;
       }
 
       if (q) {
@@ -675,6 +857,11 @@ export function inboxRoutes({ db, wsHub }) {
           t.assigned_to,
           t.labels,
           t.meta,
+          t.handoff_active,
+          t.handoff_reason,
+          t.handoff_priority,
+          t.handoff_at,
+          t.handoff_by,
           t.created_at,
           t.updated_at,
           (
@@ -845,6 +1032,11 @@ export function inboxRoutes({ db, wsHub }) {
           assigned_to,
           labels,
           meta,
+          handoff_active,
+          handoff_reason,
+          handoff_priority,
+          handoff_at,
+          handoff_by,
           created_at,
           updated_at
         `,
@@ -992,12 +1184,32 @@ export function inboxRoutes({ db, wsHub }) {
             when $2::text = 'inbound' then coalesce(unread_count, 0) + 1
             else unread_count
           end,
+          handoff_active = case
+            when $3::boolean = true then false
+            else handoff_active
+          end,
+          handoff_reason = case
+            when $3::boolean = true then ''
+            else handoff_reason
+          end,
+          handoff_priority = case
+            when $3::boolean = true then 'normal'
+            else handoff_priority
+          end,
+          handoff_at = case
+            when $3::boolean = true then null
+            else handoff_at
+          end,
+          handoff_by = case
+            when $3::boolean = true then null
+            else handoff_by
+          end,
           meta = case
             when $3::boolean = true then
               jsonb_set(
                 coalesce(meta, '{}'::jsonb),
                 '{handoff}',
-                '{"active":false,"reason":"","priority":"","at":null}'::jsonb,
+                '{"active":false,"reason":"","priority":"normal","at":null,"by":null}'::jsonb,
                 true
               )
             else coalesce(meta, '{}'::jsonb)
@@ -1149,6 +1361,11 @@ export function inboxRoutes({ db, wsHub }) {
           assigned_to,
           labels,
           meta,
+          handoff_active,
+          handoff_reason,
+          handoff_priority,
+          handoff_at,
+          handoff_by,
           created_at,
           updated_at
         `,
@@ -1202,19 +1419,6 @@ export function inboxRoutes({ db, wsHub }) {
         return okJson(res, { ok: false, error: "threadId must be uuid" });
       }
 
-      const existing = await getThreadById(db, threadId);
-      if (!existing) return okJson(res, { ok: false, error: "thread not found" });
-
-      const meta = {
-        ...(existing.meta && typeof existing.meta === "object" ? existing.meta : {}),
-        handoff: {
-          active: true,
-          reason,
-          priority,
-          at: new Date().toISOString(),
-        },
-      };
-
       const updated = await db.query(
         `
         update inbox_threads
@@ -1227,7 +1431,12 @@ export function inboxRoutes({ db, wsHub }) {
               coalesce(labels, '[]'::jsonb) || to_jsonb(array['handoff', $3::text]::text[])
             ) as t(v)
           ),
-          meta = $4::jsonb,
+          handoff_active = true,
+          handoff_reason = $4::text,
+          handoff_priority = $3::text,
+          handoff_at = now(),
+          handoff_by = $5::text,
+          meta = coalesce(meta, '{}'::jsonb) || $6::jsonb,
           updated_at = now()
         where id = $1::uuid
         returning
@@ -1246,13 +1455,34 @@ export function inboxRoutes({ db, wsHub }) {
           assigned_to,
           labels,
           meta,
+          handoff_active,
+          handoff_reason,
+          handoff_priority,
+          handoff_at,
+          handoff_by,
           created_at,
           updated_at
         `,
-        [threadId, assignedTo, priority, JSON.stringify(meta)]
+        [
+          threadId,
+          assignedTo,
+          priority,
+          reason,
+          actor,
+          JSON.stringify({
+            handoff: {
+              active: true,
+              reason,
+              priority,
+              at: new Date().toISOString(),
+              by: actor,
+            },
+          }),
+        ]
       );
 
       const thread = normalizeThread(updated.rows?.[0] || null);
+      if (!thread) return okJson(res, { ok: false, error: "thread not found" });
 
       try {
         wsHub?.broadcast?.("inbox.thread.updated", {
@@ -1295,24 +1525,16 @@ export function inboxRoutes({ db, wsHub }) {
         return okJson(res, { ok: false, error: "threadId must be uuid" });
       }
 
-      const existing = await getThreadById(db, threadId);
-      if (!existing) return okJson(res, { ok: false, error: "thread not found" });
-
-      const meta = {
-        ...(existing.meta && typeof existing.meta === "object" ? existing.meta : {}),
-        handoff: {
-          active: false,
-          reason: "",
-          priority: "",
-          at: null,
-        },
-      };
-
       const updated = await db.query(
         `
         update inbox_threads
         set
-          meta = $2::jsonb,
+          handoff_active = false,
+          handoff_reason = '',
+          handoff_priority = 'normal',
+          handoff_at = null,
+          handoff_by = null,
+          meta = coalesce(meta, '{}'::jsonb) || '{"handoff":{"active":false,"reason":"","priority":"normal","at":null,"by":null}}'::jsonb,
           updated_at = now()
         where id = $1::uuid
         returning
@@ -1331,13 +1553,19 @@ export function inboxRoutes({ db, wsHub }) {
           assigned_to,
           labels,
           meta,
+          handoff_active,
+          handoff_reason,
+          handoff_priority,
+          handoff_at,
+          handoff_by,
           created_at,
           updated_at
         `,
-        [threadId, JSON.stringify(meta)]
+        [threadId]
       );
 
       const thread = normalizeThread(updated.rows?.[0] || null);
+      if (!thread) return okJson(res, { ok: false, error: "thread not found" });
 
       try {
         wsHub?.broadcast?.("inbox.thread.updated", {
@@ -1410,6 +1638,11 @@ export function inboxRoutes({ db, wsHub }) {
           assigned_to,
           labels,
           meta,
+          handoff_active,
+          handoff_reason,
+          handoff_priority,
+          handoff_at,
+          handoff_by,
           created_at,
           updated_at
         `,

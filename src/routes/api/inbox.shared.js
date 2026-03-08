@@ -17,6 +17,20 @@ export function truthy(v) {
   return ["1", "true", "yes", "on"].includes(String(v ?? "").trim().toLowerCase());
 }
 
+function toMs(v) {
+  if (!v) return 0;
+  const n = Number(v);
+  if (Number.isFinite(n) && n > 0) return n;
+  const t = Date.parse(String(v));
+  return Number.isFinite(t) ? t : 0;
+}
+
+export function sortMessagesChronologically(list = []) {
+  return [...(Array.isArray(list) ? list : [])].sort(
+    (a, b) => toMs(a?.sent_at || a?.created_at) - toMs(b?.sent_at || b?.created_at)
+  );
+}
+
 export function normalizeThread(row) {
   if (!row) return row;
 
