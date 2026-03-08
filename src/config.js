@@ -34,6 +34,7 @@ export const cfg = {
   PUBLIC_BASE_URL: s(process.env.PUBLIC_BASE_URL, ""),
 
   DEBUG_API_TOKEN: s(process.env.DEBUG_API_TOKEN, ""),
+  AIHQ_INTERNAL_TOKEN: s(process.env.AIHQ_INTERNAL_TOKEN, ""),
 
   OPENAI_API_KEY: s(process.env.OPENAI_API_KEY, ""),
   OPENAI_MODEL: s(process.env.OPENAI_MODEL, "gpt-5"),

@@ -14,6 +14,8 @@ import { threadsRoutes } from "./threads.js";
 import { chatRoutes } from "./chat.js";
 import { debateRoutes } from "./debate.js";
 import { debugRoutes } from "./debug.js";
+import { inboxRoutes } from "./inbox.js";
+import { leadsRoutes } from "./leads.js";
 
 export function apiRouter({ db, wsHub }) {
   const r = express.Router();
@@ -31,6 +33,8 @@ export function apiRouter({ db, wsHub }) {
   r.use("/", threadsRoutes({ db }));
   r.use("/", chatRoutes({ db, wsHub }));
   r.use("/", debateRoutes({ db, wsHub }));
+  r.use("/", inboxRoutes({ db, wsHub }));
+  r.use("/", leadsRoutes({ db, wsHub }));
   r.use("/", debugRoutes());
 
   return r;

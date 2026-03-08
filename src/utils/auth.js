@@ -24,3 +24,21 @@ export function requireCallbackToken(req) {
   ).trim();
   return Boolean(got) && got === expected;
 }
+
+export function internalTokenExpected() {
+  return String(cfg.AIHQ_INTERNAL_TOKEN || "").trim();
+}
+
+export function requireInternalToken(req) {
+  const expected = internalTokenExpected();
+  if (!expected) return true;
+  const got = String(
+    req.headers["x-internal-token"] ||
+      req.headers["authorization"] ||
+      req.body?.internalToken ||
+      ""
+  )
+    .replace(/^Bearer\s+/i, "")
+    .trim();
+  return Boolean(got) && got === expected;
+}

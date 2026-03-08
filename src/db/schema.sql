@@ -1,6 +1,7 @@
 -- src/db/schema.sql
--- AI HQ schema (upgrade-safe + FULL legacy fixes) — FINAL v7.5
+-- AI HQ schema (upgrade-safe + FULL legacy fixes + INBOX + LEADS) — FINAL v7.6
 -- ✅ Adds/ensures: threads, messages, proposals, notifications, jobs, audit_log, push_subscriptions, tenants, content_items
+-- ✅ NEW: inbox_threads, inbox_messages, leads
 -- ✅ Keeps: legacy fixes (messages/proposals conversation_id + agent_key)
 -- ✅ FIX: proposals.status includes in_progress + published
 -- ✅ FIX: content_items.status is FUTURE-PROOF (draft.* + asset.* + publish.* + exec statuses)
@@ -63,7 +64,6 @@ alter table messages add column if not exists content text;
 alter table messages add column if not exists meta jsonb default '{}'::jsonb;
 alter table messages add column if not exists created_at timestamptz default now();
 
--- drop legacy FK to conversation_id if exists
 do $$
 begin
   if exists (select 1 from pg_constraint where conname = 'messages_conversation_id_fkey') then
@@ -74,7 +74,6 @@ begin
   end if;
 end$$;
 
--- drop NOT NULL on legacy conversation_id if exists
 do $$
 begin
   if exists (
@@ -104,7 +103,6 @@ begin
   end;
 end$$;
 
--- ensure FK exists (idempotent)
 do $$
 begin
   if not exists (select 1 from pg_constraint where conname = 'messages_thread_id_fkey') then
@@ -146,7 +144,6 @@ alter table proposals add column if not exists created_at timestamptz default no
 alter table proposals add column if not exists decided_at timestamptz;
 alter table proposals add column if not exists decision_by text;
 
--- drop legacy FK to conversation_id if exists
 do $$
 begin
   if exists (select 1 from pg_constraint where conname = 'proposals_conversation_id_fkey') then
@@ -157,7 +154,6 @@ begin
   end if;
 end$$;
 
--- drop NOT NULL on legacy conversation_id if exists
 do $$
 begin
   if exists (
@@ -171,7 +167,6 @@ begin
   end if;
 end$$;
 
--- legacy agent_key not-null fix (if exists)
 do $$
 begin
   if exists (
@@ -185,7 +180,6 @@ begin
   end if;
 end$$;
 
--- backfill agent_key from agent if both exist
 do $$
 begin
   if exists (
@@ -208,7 +202,6 @@ begin
   end;
 end$$;
 
--- ✅ IMPORTANT: status constraint includes in_progress + published
 do $$
 begin
   begin
@@ -447,7 +440,6 @@ create table if not exists content_items (
   updated_at timestamptz not null default now()
 );
 
--- Ensure columns exist in older deployments (idempotent)
 alter table content_items add column if not exists proposal_id uuid;
 alter table content_items add column if not exists thread_id uuid;
 alter table content_items add column if not exists job_id uuid;
@@ -472,7 +464,6 @@ alter table content_items add column if not exists publish jsonb default '{}'::j
 alter table content_items add column if not exists created_at timestamptz default now();
 alter table content_items add column if not exists updated_at timestamptz default now();
 
--- defaults (best-effort)
 do $$
 begin
   begin
@@ -501,7 +492,6 @@ begin
   end;
 end$$;
 
--- ✅ FUTURE-PROOF status constraint (this is the key fix)
 do $$
 begin
   begin
@@ -513,19 +503,12 @@ begin
     alter table content_items
       add constraint content_items_status_check
       check (
-        -- Draft lifecycle
         status like 'draft.%'
-
-        -- Asset generation lifecycle (support both singular/plural)
         OR status like 'asset.%'
         OR status like 'assets.%'
         OR status like 'render.%'
-
-        -- Publish lifecycle
         OR status like 'publish.%'
         OR status in ('publishing','published')
-
-        -- Common generic states (some backends use these)
         OR status in (
           'pending',
           'queued',
@@ -542,7 +525,6 @@ begin
   end;
 end$$;
 
--- FK (optional, idempotent)
 do $$
 begin
   if not exists (select 1 from pg_constraint where conname = 'content_items_proposal_id_fkey') then
@@ -573,19 +555,475 @@ begin
   end if;
 end$$;
 
--- indexes
 create index if not exists idx_content_proposal_updated on content_items(proposal_id, updated_at desc);
 create index if not exists idx_content_status_updated on content_items(status, updated_at desc);
 create index if not exists idx_content_tenant_status on content_items(tenant_key, status, created_at desc);
 create index if not exists idx_content_schedule on content_items(status, schedule_at);
 
--- auto updated_at trigger (best-effort)
 do $$
 begin
   if not exists (select 1 from pg_trigger where tgname = 'trg_content_items_updated_at') then
     execute '
       create trigger trg_content_items_updated_at
       before update on content_items
+      for each row execute function set_updated_at();
+    ';
+  end if;
+exception when others then null;
+end$$;
+
+-- ============================================================
+-- inbox_threads
+-- ============================================================
+create table if not exists inbox_threads (
+  id uuid primary key default gen_random_uuid(),
+
+  tenant_key text not null default 'neox',
+  channel text not null default 'instagram',
+  external_thread_id text,
+  external_user_id text,
+  external_username text,
+  customer_name text not null default '',
+
+  status text not null default 'open',
+  last_message_at timestamptz,
+  last_inbound_at timestamptz,
+  last_outbound_at timestamptz,
+
+  unread_count int not null default 0,
+  assigned_to text,
+  labels jsonb not null default '[]'::jsonb,
+  meta jsonb not null default '{}'::jsonb,
+
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+alter table inbox_threads add column if not exists id uuid;
+alter table inbox_threads add column if not exists tenant_key text;
+alter table inbox_threads add column if not exists channel text;
+alter table inbox_threads add column if not exists external_thread_id text;
+alter table inbox_threads add column if not exists external_user_id text;
+alter table inbox_threads add column if not exists external_username text;
+alter table inbox_threads add column if not exists customer_name text;
+alter table inbox_threads add column if not exists status text;
+alter table inbox_threads add column if not exists last_message_at timestamptz;
+alter table inbox_threads add column if not exists last_inbound_at timestamptz;
+alter table inbox_threads add column if not exists last_outbound_at timestamptz;
+alter table inbox_threads add column if not exists unread_count int;
+alter table inbox_threads add column if not exists assigned_to text;
+alter table inbox_threads add column if not exists labels jsonb default '[]'::jsonb;
+alter table inbox_threads add column if not exists meta jsonb default '{}'::jsonb;
+alter table inbox_threads add column if not exists created_at timestamptz default now();
+alter table inbox_threads add column if not exists updated_at timestamptz default now();
+
+do $$
+begin
+  begin
+    alter table inbox_threads alter column id set default gen_random_uuid();
+  exception when others then null;
+  end;
+  begin
+    alter table inbox_threads alter column tenant_key set default 'neox';
+  exception when others then null;
+  end;
+  begin
+    alter table inbox_threads alter column channel set default 'instagram';
+  exception when others then null;
+  end;
+  begin
+    alter table inbox_threads alter column customer_name set default '';
+  exception when others then null;
+  end;
+  begin
+    alter table inbox_threads alter column status set default 'open';
+  exception when others then null;
+  end;
+  begin
+    alter table inbox_threads alter column unread_count set default 0;
+  exception when others then null;
+  end;
+  begin
+    alter table inbox_threads alter column labels set default '[]'::jsonb;
+  exception when others then null;
+  end;
+  begin
+    alter table inbox_threads alter column meta set default '{}'::jsonb;
+  exception when others then null;
+  end;
+  begin
+    alter table inbox_threads alter column updated_at set default now();
+  exception when others then null;
+  end;
+end$$;
+
+do $$
+begin
+  begin
+    execute 'alter table inbox_threads drop constraint if exists inbox_threads_status_check';
+  exception when others then null;
+  end;
+
+  begin
+    alter table inbox_threads
+      add constraint inbox_threads_status_check
+      check (status in ('open','pending','resolved','closed','spam'));
+  exception when others then null;
+  end;
+
+  begin
+    execute 'alter table inbox_threads drop constraint if exists inbox_threads_channel_check';
+  exception when others then null;
+  end;
+
+  begin
+    alter table inbox_threads
+      add constraint inbox_threads_channel_check
+      check (channel in ('instagram','facebook','whatsapp','web','email','other'));
+  exception when others then null;
+  end;
+end$$;
+
+create unique index if not exists uq_inbox_threads_external
+  on inbox_threads(channel, external_thread_id)
+  where external_thread_id is not null;
+
+create index if not exists idx_inbox_threads_tenant_status_updated
+  on inbox_threads(tenant_key, status, updated_at desc);
+
+create index if not exists idx_inbox_threads_last_message
+  on inbox_threads(last_message_at desc);
+
+create index if not exists idx_inbox_threads_unread
+  on inbox_threads(unread_count desc, updated_at desc);
+
+do $$
+begin
+  if not exists (select 1 from pg_trigger where tgname = 'trg_inbox_threads_updated_at') then
+    execute '
+      create trigger trg_inbox_threads_updated_at
+      before update on inbox_threads
+      for each row execute function set_updated_at();
+    ';
+  end if;
+exception when others then null;
+end$$;
+
+-- ============================================================
+-- inbox_messages
+-- ============================================================
+create table if not exists inbox_messages (
+  id uuid primary key default gen_random_uuid(),
+
+  thread_id uuid not null,
+  tenant_key text not null default 'neox',
+  direction text not null default 'inbound',
+  sender_type text not null default 'customer',
+
+  external_message_id text,
+  message_type text not null default 'text',
+  text text not null default '',
+
+  attachments jsonb not null default '[]'::jsonb,
+  meta jsonb not null default '{}'::jsonb,
+
+  sent_at timestamptz not null default now(),
+  created_at timestamptz not null default now()
+);
+
+alter table inbox_messages add column if not exists id uuid;
+alter table inbox_messages add column if not exists thread_id uuid;
+alter table inbox_messages add column if not exists tenant_key text;
+alter table inbox_messages add column if not exists direction text;
+alter table inbox_messages add column if not exists sender_type text;
+alter table inbox_messages add column if not exists external_message_id text;
+alter table inbox_messages add column if not exists message_type text;
+alter table inbox_messages add column if not exists text text;
+alter table inbox_messages add column if not exists attachments jsonb default '[]'::jsonb;
+alter table inbox_messages add column if not exists meta jsonb default '{}'::jsonb;
+alter table inbox_messages add column if not exists sent_at timestamptz default now();
+alter table inbox_messages add column if not exists created_at timestamptz default now();
+
+do $$
+begin
+  begin
+    alter table inbox_messages alter column id set default gen_random_uuid();
+  exception when others then null;
+  end;
+  begin
+    alter table inbox_messages alter column tenant_key set default 'neox';
+  exception when others then null;
+  end;
+  begin
+    alter table inbox_messages alter column direction set default 'inbound';
+  exception when others then null;
+  end;
+  begin
+    alter table inbox_messages alter column sender_type set default 'customer';
+  exception when others then null;
+  end;
+  begin
+    alter table inbox_messages alter column message_type set default 'text';
+  exception when others then null;
+  end;
+  begin
+    alter table inbox_messages alter column text set default '';
+  exception when others then null;
+  end;
+  begin
+    alter table inbox_messages alter column attachments set default '[]'::jsonb;
+  exception when others then null;
+  end;
+  begin
+    alter table inbox_messages alter column meta set default '{}'::jsonb;
+  exception when others then null;
+  end;
+end$$;
+
+do $$
+begin
+  begin
+    execute 'alter table inbox_messages drop constraint if exists inbox_messages_direction_check';
+  exception when others then null;
+  end;
+
+  begin
+    alter table inbox_messages
+      add constraint inbox_messages_direction_check
+      check (direction in ('inbound','outbound','internal'));
+  exception when others then null;
+  end;
+
+  begin
+    execute 'alter table inbox_messages drop constraint if exists inbox_messages_sender_type_check';
+  exception when others then null;
+  end;
+
+  begin
+    alter table inbox_messages
+      add constraint inbox_messages_sender_type_check
+      check (sender_type in ('customer','agent','system','ai'));
+  exception when others then null;
+  end;
+
+  begin
+    execute 'alter table inbox_messages drop constraint if exists inbox_messages_message_type_check';
+  exception when others then null;
+  end;
+
+  begin
+    alter table inbox_messages
+      add constraint inbox_messages_message_type_check
+      check (message_type in ('text','image','video','audio','file','event','other'));
+  exception when others then null;
+  end;
+end$$;
+
+do $$
+begin
+  if not exists (select 1 from pg_constraint where conname = 'inbox_messages_thread_id_fkey') then
+    begin
+      alter table inbox_messages
+        add constraint inbox_messages_thread_id_fkey
+        foreign key (thread_id) references inbox_threads(id) on delete cascade;
+    exception when others then null;
+    end;
+  end if;
+end$$;
+
+create unique index if not exists uq_inbox_messages_external
+  on inbox_messages(thread_id, external_message_id)
+  where external_message_id is not null;
+
+create index if not exists idx_inbox_messages_thread_sent
+  on inbox_messages(thread_id, sent_at asc);
+
+create index if not exists idx_inbox_messages_tenant_created
+  on inbox_messages(tenant_key, created_at desc);
+
+-- ============================================================
+-- leads
+-- ============================================================
+create table if not exists leads (
+  id uuid primary key default gen_random_uuid(),
+
+  tenant_key text not null default 'neox',
+  source text not null default 'manual',
+  source_ref text,
+
+  inbox_thread_id uuid,
+  proposal_id uuid,
+
+  full_name text not null default '',
+  username text,
+  company text,
+  phone text,
+  email text,
+
+  interest text,
+  notes text not null default '',
+
+  stage text not null default 'new',
+  score int not null default 0,
+  status text not null default 'open',
+
+  extra jsonb not null default '{}'::jsonb,
+
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+alter table leads add column if not exists id uuid;
+alter table leads add column if not exists tenant_key text;
+alter table leads add column if not exists source text;
+alter table leads add column if not exists source_ref text;
+alter table leads add column if not exists inbox_thread_id uuid;
+alter table leads add column if not exists proposal_id uuid;
+alter table leads add column if not exists full_name text;
+alter table leads add column if not exists username text;
+alter table leads add column if not exists company text;
+alter table leads add column if not exists phone text;
+alter table leads add column if not exists email text;
+alter table leads add column if not exists interest text;
+alter table leads add column if not exists notes text;
+alter table leads add column if not exists stage text;
+alter table leads add column if not exists score int;
+alter table leads add column if not exists status text;
+alter table leads add column if not exists extra jsonb default '{}'::jsonb;
+alter table leads add column if not exists created_at timestamptz default now();
+alter table leads add column if not exists updated_at timestamptz default now();
+
+do $$
+begin
+  begin
+    alter table leads alter column id set default gen_random_uuid();
+  exception when others then null;
+  end;
+  begin
+    alter table leads alter column tenant_key set default 'neox';
+  exception when others then null;
+  end;
+  begin
+    alter table leads alter column source set default 'manual';
+  exception when others then null;
+  end;
+  begin
+    alter table leads alter column full_name set default '';
+  exception when others then null;
+  end;
+  begin
+    alter table leads alter column notes set default '';
+  exception when others then null;
+  end;
+  begin
+    alter table leads alter column stage set default 'new';
+  exception when others then null;
+  end;
+  begin
+    alter table leads alter column score set default 0;
+  exception when others then null;
+  end;
+  begin
+    alter table leads alter column status set default 'open';
+  exception when others then null;
+  end;
+  begin
+    alter table leads alter column extra set default '{}'::jsonb;
+  exception when others then null;
+  end;
+  begin
+    alter table leads alter column updated_at set default now();
+  exception when others then null;
+  end;
+end$$;
+
+do $$
+begin
+  begin
+    execute 'alter table leads drop constraint if exists leads_stage_check';
+  exception when others then null;
+  end;
+
+  begin
+    alter table leads
+      add constraint leads_stage_check
+      check (stage in ('new','contacted','qualified','proposal','won','lost'));
+  exception when others then null;
+  end;
+
+  begin
+    execute 'alter table leads drop constraint if exists leads_status_check';
+  exception when others then null;
+  end;
+
+  begin
+    alter table leads
+      add constraint leads_status_check
+      check (status in ('open','archived','spam'));
+  exception when others then null;
+  end;
+end$$;
+
+do $$
+begin
+  if not exists (select 1 from pg_constraint where conname = 'leads_inbox_thread_id_fkey') then
+    begin
+      alter table leads
+        add constraint leads_inbox_thread_id_fkey
+        foreign key (inbox_thread_id) references inbox_threads(id) on delete set null;
+    exception when others then null;
+    end;
+  end if;
+
+  if not exists (select 1 from pg_constraint where conname = 'leads_proposal_id_fkey') then
+    begin
+      alter table leads
+        add constraint leads_proposal_id_fkey
+        foreign key (proposal_id) references proposals(id) on delete set null;
+    exception when others then null;
+    end;
+  end if;
+end$$;
+
+create index if not exists idx_leads_tenant_created
+  on leads(tenant_key, created_at desc);
+
+create index if not exists idx_leads_stage_created
+  on leads(stage, created_at desc);
+
+create index if not exists idx_leads_status_created
+  on leads(status, created_at desc);
+
+create index if not exists idx_leads_inbox_thread
+  on leads(inbox_thread_id);
+
+create index if not exists idx_leads_email
+  on leads(email);
+
+create index if not exists idx_leads_phone
+  on leads(phone);
+
+do $$
+begin
+  if not exists (select 1 from pg_trigger where tgname = 'trg_leads_updated_at') then
+    execute '
+      create trigger trg_leads_updated_at
+      before update on leads
+      for each row execute function set_updated_at();
+    ';
+  end if;
+exception when others then null;
+end$$;
+
+-- ============================================================
+-- inbox_threads updated_at trigger
+-- ============================================================
+do $$
+begin
+  if not exists (select 1 from pg_trigger where tgname = 'trg_inbox_threads_updated_at') then
+    execute '
+      create trigger trg_inbox_threads_updated_at
+      before update on inbox_threads
       for each row execute function set_updated_at();
     ';
   end if;
@@ -622,6 +1060,20 @@ begin
     update notifications
       set body = convert_from(convert_to(body, 'LATIN1'), 'UTF8')
     where body is not null and body ~ 'Ã.|Â.|â€|â€™|â€œ|â€�|â€“|â€”|â€¦';
+  exception when others then null;
+  end;
+
+  begin
+    update inbox_messages
+      set text = convert_from(convert_to(text, 'LATIN1'), 'UTF8')
+    where text is not null and text ~ 'Ã.|Â.|â€|â€™|â€œ|â€�|â€“|â€”|â€¦';
+  exception when others then null;
+  end;
+
+  begin
+    update leads
+      set full_name = convert_from(convert_to(full_name, 'LATIN1'), 'UTF8')
+    where full_name is not null and full_name ~ 'Ã.|Â.|â€|â€™|â€œ|â€�|â€“|â€”|â€¦';
   exception when others then null;
   end;
 
