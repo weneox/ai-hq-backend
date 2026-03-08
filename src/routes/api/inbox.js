@@ -16,11 +16,20 @@ import {
 } from "./inbox.shared.js";
 
 import {
+  createOutboundAttempt,
   findExistingInboundMessage,
   findExistingOutboundMessage,
+  findLatestAttemptByMessageId,
+  getOutboundAttemptById,
+  getOutboundAttemptsSummary,
   getTenantByKey,
   getThreadById,
+  listOutboundAttemptsByThread,
+  listFailedOutboundAttempts,
+  markOutboundAttemptDead,
   refreshThread,
+  scheduleOutboundRetry,
+  
 } from "./inbox.db.js";
 
 import {
@@ -38,6 +47,30 @@ function uniqueTextJsonbSql(existingLabelsSql, extraLabels = []) {
       ) as t(v)
     )
   `.replace("$LABELS$", `{${arr.map((x) => `"${x}"`).join(",")}}`);
+}
+
+function buildOutboundAttemptPayload({
+  threadId,
+  tenantKey,
+  channel,
+  recipientId,
+  senderType,
+  messageType,
+  text,
+  attachments,
+  meta,
+}) {
+  return {
+    threadId: s(threadId || ""),
+    tenantKey: s(tenantKey || "neox") || "neox",
+    channel: s(channel || "instagram").toLowerCase() || "instagram",
+    recipientId: fixText(s(recipientId || "")) || null,
+    senderType: s(senderType || "ai").toLowerCase() || "ai",
+    messageType: s(messageType || "text").toLowerCase() || "text",
+    text: fixText(s(text || "")),
+    attachments: Array.isArray(attachments) ? attachments : [],
+    meta: meta && typeof meta === "object" ? meta : {},
+  };
 }
 
 export function inboxRoutes({ db, wsHub }) {
@@ -597,6 +630,8 @@ export function inboxRoutes({ db, wsHub }) {
     if (!threadId) return okJson(res, { ok: false, error: "threadId required" });
     if (!isUuid(threadId)) return okJson(res, { ok: false, error: "threadId must be uuid" });
 
+    let client = null;
+
     try {
       if (!isDbReady(db)) {
         return okJson(res, { ok: false, error: "db disabled", dbDisabled: true });
@@ -621,6 +656,8 @@ export function inboxRoutes({ db, wsHub }) {
       const text = fixText(s(req.body?.text || ""));
       const attachments = Array.isArray(req.body?.attachments) ? req.body.attachments : [];
       const meta = req.body?.meta && typeof req.body.meta === "object" ? req.body.meta : {};
+      const provider = s(req.body?.provider || "meta") || "meta";
+      const maxAttempts = clamp(toInt(req.body?.maxAttempts, 5), 1, 20);
 
       if (!text && attachments.length === 0) {
         return okJson(res, { ok: false, error: "text or attachments required" });
@@ -648,12 +685,15 @@ export function inboxRoutes({ db, wsHub }) {
             },
           });
 
+          const existingAttempt = await findLatestAttemptByMessageId(db, existingMessage.id);
+
           return okJson(res, {
             ok: true,
             duplicate: true,
             deduped: true,
             thread: existingThread,
             message: existingMessage,
+            attempt: existingAttempt,
           });
         }
       }
@@ -661,11 +701,14 @@ export function inboxRoutes({ db, wsHub }) {
       const mergedMeta = {
         ...meta,
         recipientId,
-        provider: s(req.body?.provider || "meta") || "meta",
+        provider,
         operatorName: s(req.body?.operatorName || ""),
       };
 
-      const inserted = await db.query(
+      client = await db.connect();
+      await client.query("BEGIN");
+
+      const inserted = await client.query(
         `
         insert into inbox_messages (
           thread_id,
@@ -719,7 +762,7 @@ export function inboxRoutes({ db, wsHub }) {
 
       const message = normalizeMessage(inserted.rows?.[0] || null);
 
-      await db.query(
+      await client.query(
         `
         update inbox_threads
         set
@@ -747,7 +790,55 @@ export function inboxRoutes({ db, wsHub }) {
         [threadId, recipientId, senderType]
       );
 
-      const normalizedThread = await refreshThread(db, threadId, existingThread);
+      const attemptPayload = buildOutboundAttemptPayload({
+        threadId,
+        tenantKey,
+        channel,
+        recipientId,
+        senderType,
+        messageType,
+        text,
+        attachments,
+        meta: mergedMeta,
+      });
+
+      const attempt = await createOutboundAttempt({
+        db: client,
+        messageId: message.id,
+        threadId,
+        tenantKey,
+        channel,
+        provider,
+        recipientId,
+        payload: attemptPayload,
+        status: externalMessageId ? "sent" : "queued",
+        maxAttempts,
+        nextRetryAt: externalMessageId ? null : new Date().toISOString(),
+      });
+
+      const normalizedThread = await refreshThread(client, threadId, existingThread);
+
+      try {
+        await writeAudit(client, {
+          actor: senderType === "agent" ? "operator" : "meta_gateway",
+          action: "inbox.outbound.created",
+          objectType: "inbox_message",
+          objectId: String(message?.id || ""),
+          meta: {
+            tenantKey,
+            channel,
+            threadId,
+            externalMessageId: String(externalMessageId || ""),
+            senderType,
+            attemptId: String(attempt?.id || ""),
+            attemptStatus: String(attempt?.status || ""),
+          },
+        });
+      } catch {}
+
+      await client.query("COMMIT");
+      client.release();
+      client = null;
 
       try {
         wsHub?.broadcast?.("inbox.message.created", {
@@ -765,18 +856,9 @@ export function inboxRoutes({ db, wsHub }) {
       } catch {}
 
       try {
-        await writeAudit(db, {
-          actor: senderType === "agent" ? "operator" : "meta_gateway",
-          action: "inbox.outbound.created",
-          objectType: "inbox_message",
-          objectId: String(message?.id || ""),
-          meta: {
-            tenantKey,
-            channel,
-            threadId,
-            externalMessageId: String(externalMessageId || ""),
-            senderType,
-          },
+        wsHub?.broadcast?.("inbox.outbound.attempt.created", {
+          type: "inbox.outbound.attempt.created",
+          attempt,
         });
       } catch {}
 
@@ -786,8 +868,18 @@ export function inboxRoutes({ db, wsHub }) {
         deduped: false,
         thread: normalizedThread,
         message,
+        attempt,
       });
     } catch (e) {
+      if (client) {
+        try {
+          await client.query("ROLLBACK");
+        } catch {}
+        try {
+          client.release();
+        } catch {}
+      }
+
       return okJson(res, {
         ok: false,
         error: "Error",
@@ -962,6 +1054,178 @@ export function inboxRoutes({ db, wsHub }) {
 
       const messages = (result.rows || []).map(normalizeMessage);
       return okJson(res, { ok: true, threadId, messages });
+    } catch (e) {
+      return okJson(res, {
+        ok: false,
+        error: "Error",
+        details: { message: String(e?.message || e) },
+      });
+    }
+  });
+
+  r.get("/inbox/threads/:id/outbound-attempts", async (req, res) => {
+    const threadId = s(req.params.id);
+    const limit = clamp(toInt(req.query?.limit, 100), 1, 500);
+
+    if (!threadId) return okJson(res, { ok: false, error: "threadId required" });
+
+    try {
+      if (!isDbReady(db)) {
+        return okJson(res, {
+          ok: true,
+          threadId,
+          attempts: [],
+          dbDisabled: true,
+        });
+      }
+
+      if (!isUuid(threadId)) {
+        return okJson(res, { ok: false, error: "threadId must be uuid" });
+      }
+
+      const thread = await getThreadById(db, threadId);
+      if (!thread) return okJson(res, { ok: false, error: "thread not found" });
+
+      const attempts = await listOutboundAttemptsByThread(db, threadId, limit);
+
+      return okJson(res, {
+        ok: true,
+        threadId,
+        thread,
+        attempts,
+      });
+    } catch (e) {
+      return okJson(res, {
+        ok: false,
+        error: "Error",
+        details: { message: String(e?.message || e) },
+      });
+    }
+  });
+
+  r.post("/inbox/outbound/:attemptId/resend", async (req, res) => {
+    const attemptId = s(req.params.attemptId);
+    const actor = fixText(s(req.body?.actor || "operator")) || "operator";
+    const retryDelaySeconds = clamp(toInt(req.body?.retryDelaySeconds, 0), 0, 86400);
+
+    if (!attemptId) return okJson(res, { ok: false, error: "attemptId required" });
+
+    try {
+      if (!isDbReady(db)) {
+        return okJson(res, { ok: false, error: "db disabled", dbDisabled: true });
+      }
+
+      if (!isUuid(attemptId)) {
+        return okJson(res, { ok: false, error: "attemptId must be uuid" });
+      }
+
+      const attempt = await getOutboundAttemptById(db, attemptId);
+      if (!attempt) return okJson(res, { ok: false, error: "attempt not found" });
+
+      if (attempt.status === "sent") {
+        return okJson(res, {
+          ok: false,
+          error: "attempt already sent",
+          attempt,
+        });
+      }
+
+      if (attempt.status === "dead") {
+        return okJson(res, {
+          ok: false,
+          error: "attempt is dead",
+          attempt,
+        });
+      }
+
+      const updated = await scheduleOutboundRetry({
+        db,
+        attemptId,
+        retryDelaySeconds,
+      });
+
+      try {
+        await writeAudit(db, {
+          actor,
+          action: "inbox.outbound.retry_scheduled",
+          objectType: "inbox_outbound_attempt",
+          objectId: attemptId,
+          meta: {
+            threadId: String(updated?.thread_id || ""),
+            messageId: String(updated?.message_id || ""),
+            retryDelaySeconds,
+            previousStatus: String(attempt?.status || ""),
+            newStatus: String(updated?.status || ""),
+          },
+        });
+      } catch {}
+
+      try {
+        wsHub?.broadcast?.("inbox.outbound.attempt.updated", {
+          type: "inbox.outbound.attempt.updated",
+          attempt: updated,
+        });
+      } catch {}
+
+      return okJson(res, {
+        ok: true,
+        attempt: updated,
+      });
+    } catch (e) {
+      return okJson(res, {
+        ok: false,
+        error: "Error",
+        details: { message: String(e?.message || e) },
+      });
+    }
+  });
+
+  r.post("/inbox/outbound/:attemptId/mark-dead", async (req, res) => {
+    const attemptId = s(req.params.attemptId);
+    const actor = fixText(s(req.body?.actor || "operator")) || "operator";
+
+    if (!attemptId) return okJson(res, { ok: false, error: "attemptId required" });
+
+    try {
+      if (!isDbReady(db)) {
+        return okJson(res, { ok: false, error: "db disabled", dbDisabled: true });
+      }
+
+      if (!isUuid(attemptId)) {
+        return okJson(res, { ok: false, error: "attemptId must be uuid" });
+      }
+
+      const attempt = await getOutboundAttemptById(db, attemptId);
+      if (!attempt) return okJson(res, { ok: false, error: "attempt not found" });
+
+      const updated = await markOutboundAttemptDead(db, attemptId);
+
+      try {
+        await writeAudit(db, {
+          actor,
+          action: "inbox.outbound.marked_dead",
+          objectType: "inbox_outbound_attempt",
+          objectId: attemptId,
+          meta: {
+            threadId: String(updated?.thread_id || ""),
+            messageId: String(updated?.message_id || ""),
+            previousStatus: String(attempt?.status || ""),
+            newStatus: String(updated?.status || ""),
+          },
+        });
+      } catch {}
+
+      try {
+        wsHub?.broadcast?.("inbox.outbound.attempt.updated", {
+          type: "inbox.outbound.attempt.updated",
+          attempt: updated,
+        });
+      } catch {}
+
+      return okJson(res, {
+        ok: true,
+        attempt: updated,
+      });
     } catch (e) {
       return okJson(res, {
         ok: false,
@@ -1670,6 +1934,77 @@ export function inboxRoutes({ db, wsHub }) {
       } catch {}
 
       return okJson(res, { ok: true, thread });
+    } catch (e) {
+      return okJson(res, {
+        ok: false,
+        error: "Error",
+        details: { message: String(e?.message || e) },
+      });
+    }
+  });
+
+    r.get("/inbox/outbound/summary", async (req, res) => {
+    const tenantKey = s(req.query?.tenantKey || "neox") || "neox";
+
+    try {
+      if (!isDbReady(db)) {
+        return okJson(res, {
+          ok: true,
+          summary: {
+            tenantKey,
+            queued: 0,
+            sending: 0,
+            sent: 0,
+            failed: 0,
+            retrying: 0,
+            dead: 0,
+            total: 0,
+          },
+          dbDisabled: true,
+        });
+      }
+
+      const summary = await getOutboundAttemptsSummary(db, tenantKey);
+
+      return okJson(res, {
+        ok: true,
+        summary,
+      });
+    } catch (e) {
+      return okJson(res, {
+        ok: false,
+        error: "Error",
+        details: { message: String(e?.message || e) },
+      });
+    }
+  });
+
+  r.get("/inbox/outbound/failed", async (req, res) => {
+    const tenantKey = s(req.query?.tenantKey || "neox") || "neox";
+    const status = s(req.query?.status || "");
+    const limit = clamp(toInt(req.query?.limit, 50), 1, 500);
+
+    try {
+      if (!isDbReady(db)) {
+        return okJson(res, {
+          ok: true,
+          tenantKey,
+          attempts: [],
+          dbDisabled: true,
+        });
+      }
+
+      const attempts = await listFailedOutboundAttempts(db, {
+        tenantKey,
+        limit,
+        status,
+      });
+
+      return okJson(res, {
+        ok: true,
+        tenantKey,
+        attempts,
+      });
     } catch (e) {
       return okJson(res, {
         ok: false,

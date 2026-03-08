@@ -10,20 +10,19 @@ import { cfg } from "./src/config.js";
 import { initDb, getDb, migrate } from "./src/db/index.js";
 import { createWsHub } from "./src/wsHub.js";
 import { apiRouter } from "./src/routes/api.js";
+import { startOutboundRetryWorker } from "./src/workers/outboundRetryWorker.js";
 
 async function main() {
   const app = express();
 
   if (cfg.TRUST_PROXY) app.set("trust proxy", 1);
 
-  // security headers
   app.use(helmet());
 
-  // CORS: allow server-to-server (no Origin) + allow listed origins
   app.use(
     cors({
       origin: (origin, cb) => {
-        if (!origin) return cb(null, true); // server-to-server / curl / powershell
+        if (!origin) return cb(null, true);
 
         const allowed =
           cfg.CORS_ORIGIN === "*" ||
@@ -39,18 +38,12 @@ async function main() {
     })
   );
 
-  // Body parsers
   app.use(express.json({ limit: "1mb" }));
   app.use(express.urlencoded({ extended: false }));
 
-  // ================================
-  // Static uploads (ASSETS)
-  // ================================
   const UPLOADS_DIR = path.resolve(process.cwd(), "uploads");
   app.use("/assets", express.static(UPLOADS_DIR, { maxAge: "1h" }));
-  // ================================
 
-  // Root info
   app.get("/", (_req, res) => {
     res.setHeader("Content-Type", "application/json; charset=utf-8");
     res.status(200).json({
@@ -101,7 +94,6 @@ async function main() {
     return res.status(200).json(out);
   });
 
-  // init DB BEFORE routes
   try {
     await initDb();
     const m = await migrate();
@@ -116,16 +108,18 @@ async function main() {
   const server = http.createServer(app);
   const wsHub = createWsHub({ server, token: cfg.WS_AUTH_TOKEN });
 
-  // mount routes
   app.use("/api", apiRouter({ db: getDb(), wsHub }));
 
-  // Fallback 404
+  const outboundRetryWorker = startOutboundRetryWorker({
+    db: getDb(),
+    wsHub,
+  });
+
   app.use((req, res) => {
     res.setHeader("Content-Type", "application/json; charset=utf-8");
     res.status(404).json({ ok: false, error: "Not found", path: req.path });
   });
 
-  // Global error handler
   app.use((err, _req, res, _next) => {
     console.error("[api] error:", err?.message || err);
     res.setHeader("Content-Type", "application/json; charset=utf-8");
@@ -140,16 +134,24 @@ async function main() {
     console.log(
       `[ai-hq] OpenAI=${cfg.OPENAI_API_KEY ? "ON" : "OFF"} model=${cfg.OPENAI_MODEL}`
     );
+    console.log(`[ai-hq] WS_AUTH_TOKEN=${cfg.WS_AUTH_TOKEN ? "ON" : "OFF"}`);
     console.log(
-      `[ai-hq] WS_AUTH_TOKEN=${cfg.WS_AUTH_TOKEN ? "ON" : "OFF"}`
+      `[ai-hq] META_GATEWAY=${cfg.META_GATEWAY_BASE_URL ? "ON" : "OFF"} retryWorker=${
+        cfg.OUTBOUND_RETRY_ENABLED ? "ON" : "OFF"
+      }`
     );
   });
 
   async function shutdown() {
     try {
+      outboundRetryWorker?.stop?.();
+    } catch {}
+
+    try {
       const db = getDb();
       if (db) await db.end();
     } catch {}
+
     process.exit(0);
   }
 

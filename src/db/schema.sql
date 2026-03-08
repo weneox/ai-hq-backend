@@ -1152,3 +1152,408 @@ begin
   end;
 exception when others then null;
 end$$;
+
+-- ============================================================
+-- leads CRM workflow extensions
+-- ============================================================
+
+alter table leads add column if not exists owner text;
+alter table leads add column if not exists priority text default 'normal';
+alter table leads add column if not exists value_azn numeric(12,2) default 0;
+alter table leads add column if not exists follow_up_at timestamptz;
+alter table leads add column if not exists next_action text;
+alter table leads add column if not exists won_reason text;
+alter table leads add column if not exists lost_reason text;
+
+do $$
+begin
+  begin
+    alter table leads alter column priority set default 'normal';
+  exception when others then null;
+  end;
+
+  begin
+    alter table leads alter column value_azn set default 0;
+  exception when others then null;
+  end;
+
+  begin
+    execute 'update leads set priority = ''normal'' where priority is null or priority = ''''';
+  exception when others then null;
+  end;
+
+  begin
+    execute 'update leads set value_azn = 0 where value_azn is null';
+  exception when others then null;
+  end;
+end$$;
+
+do $$
+begin
+  begin
+    execute 'alter table leads drop constraint if exists leads_priority_check';
+  exception when others then null;
+  end;
+
+  begin
+    alter table leads
+      add constraint leads_priority_check
+      check (priority in ('low','normal','high','urgent'));
+  exception when others then null;
+  end;
+end$$;
+
+create index if not exists idx_leads_owner_updated
+  on leads(owner, updated_at desc);
+
+create index if not exists idx_leads_priority_updated
+  on leads(priority, updated_at desc);
+
+create index if not exists idx_leads_follow_up
+  on leads(follow_up_at);
+
+create index if not exists idx_leads_value
+  on leads(value_azn desc);
+
+-- ============================================================
+-- lead_events
+-- ============================================================
+
+create table if not exists lead_events (
+  id uuid primary key default gen_random_uuid(),
+  lead_id uuid not null,
+  tenant_key text not null default 'neox',
+  type text not null,
+  actor text not null default 'ai_hq',
+  payload jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now()
+);
+
+alter table lead_events add column if not exists id uuid;
+alter table lead_events add column if not exists lead_id uuid;
+alter table lead_events add column if not exists tenant_key text default 'neox';
+alter table lead_events add column if not exists type text;
+alter table lead_events add column if not exists actor text default 'ai_hq';
+alter table lead_events add column if not exists payload jsonb default '{}'::jsonb;
+alter table lead_events add column if not exists created_at timestamptz default now();
+
+do $$
+begin
+  begin
+    alter table lead_events alter column id set default gen_random_uuid();
+  exception when others then null;
+  end;
+
+  begin
+    alter table lead_events alter column tenant_key set default 'neox';
+  exception when others then null;
+  end;
+
+  begin
+    alter table lead_events alter column actor set default 'ai_hq';
+  exception when others then null;
+  end;
+
+  begin
+    alter table lead_events alter column payload set default '{}'::jsonb;
+  exception when others then null;
+  end;
+end$$;
+
+do $$
+begin
+  if not exists (select 1 from pg_constraint where conname = 'lead_events_lead_id_fkey') then
+    begin
+      alter table lead_events
+        add constraint lead_events_lead_id_fkey
+        foreign key (lead_id) references leads(id) on delete cascade;
+    exception when others then null;
+    end;
+  end if;
+end$$;
+
+create index if not exists idx_lead_events_lead_created
+  on lead_events(lead_id, created_at desc);
+
+create index if not exists idx_lead_events_tenant_created
+  on lead_events(tenant_key, created_at desc);
+
+create index if not exists idx_lead_events_type_created
+  on lead_events(type, created_at desc);
+
+-- ============================================================
+-- comments
+-- ============================================================
+create table if not exists comments (
+  id uuid primary key default gen_random_uuid(),
+
+  tenant_key text not null default 'neox',
+  channel text not null default 'instagram',
+  source text not null default 'meta',
+
+  external_comment_id text not null,
+  external_parent_comment_id text,
+  external_post_id text,
+
+  external_user_id text,
+  external_username text,
+  customer_name text,
+
+  text text not null default '',
+  classification jsonb not null default '{}'::jsonb,
+  raw jsonb not null default '{}'::jsonb,
+
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+alter table comments add column if not exists id uuid;
+alter table comments add column if not exists tenant_key text;
+alter table comments add column if not exists channel text;
+alter table comments add column if not exists source text;
+alter table comments add column if not exists external_comment_id text;
+alter table comments add column if not exists external_parent_comment_id text;
+alter table comments add column if not exists external_post_id text;
+alter table comments add column if not exists external_user_id text;
+alter table comments add column if not exists external_username text;
+alter table comments add column if not exists customer_name text;
+alter table comments add column if not exists text text;
+alter table comments add column if not exists classification jsonb default '{}'::jsonb;
+alter table comments add column if not exists raw jsonb default '{}'::jsonb;
+alter table comments add column if not exists created_at timestamptz default now();
+alter table comments add column if not exists updated_at timestamptz default now();
+
+do $$
+begin
+  begin
+    alter table comments alter column id set default gen_random_uuid();
+  exception when others then null;
+  end;
+  begin
+    alter table comments alter column tenant_key set default 'neox';
+  exception when others then null;
+  end;
+  begin
+    alter table comments alter column channel set default 'instagram';
+  exception when others then null;
+  end;
+  begin
+    alter table comments alter column source set default 'meta';
+  exception when others then null;
+  end;
+  begin
+    alter table comments alter column text set default '';
+  exception when others then null;
+  end;
+  begin
+    alter table comments alter column classification set default '{}'::jsonb;
+  exception when others then null;
+  end;
+  begin
+    alter table comments alter column raw set default '{}'::jsonb;
+  exception when others then null;
+  end;
+  begin
+    alter table comments alter column updated_at set default now();
+  exception when others then null;
+  end;
+end$$;
+
+create unique index if not exists uq_comments_tenant_channel_external_comment
+  on comments(tenant_key, channel, external_comment_id);
+
+create index if not exists idx_comments_tenant_created
+  on comments(tenant_key, created_at desc);
+
+create index if not exists idx_comments_channel_created
+  on comments(channel, created_at desc);
+
+create index if not exists idx_comments_post
+  on comments(external_post_id);
+
+create index if not exists idx_comments_category
+  on comments((classification->>'category'), created_at desc);
+
+do $$
+begin
+  if not exists (select 1 from pg_trigger where tgname = 'trg_comments_updated_at') then
+    execute '
+      create trigger trg_comments_updated_at
+      before update on comments
+      for each row execute function set_updated_at();
+    ';
+  end if;
+exception when others then null;
+end$$;
+
+-- ============================================================
+-- inbox_outbound_attempts
+-- retry / resend queue for outbound provider delivery
+-- ============================================================
+
+create table if not exists inbox_outbound_attempts (
+  id uuid primary key default gen_random_uuid(),
+
+  message_id uuid not null,
+  thread_id uuid not null,
+  tenant_key text not null default 'neox',
+  channel text not null default 'instagram',
+
+  provider text not null default 'meta',
+  recipient_id text,
+  provider_message_id text,
+
+  payload jsonb not null default '{}'::jsonb,
+  provider_response jsonb not null default '{}'::jsonb,
+
+  status text not null default 'queued',
+  attempt_count int not null default 0,
+  max_attempts int not null default 5,
+
+  queued_at timestamptz not null default now(),
+  first_attempt_at timestamptz,
+  last_attempt_at timestamptz,
+  next_retry_at timestamptz,
+
+  sent_at timestamptz,
+  last_error text,
+  last_error_code text,
+
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+alter table inbox_outbound_attempts add column if not exists id uuid;
+alter table inbox_outbound_attempts add column if not exists message_id uuid;
+alter table inbox_outbound_attempts add column if not exists thread_id uuid;
+alter table inbox_outbound_attempts add column if not exists tenant_key text default 'neox';
+alter table inbox_outbound_attempts add column if not exists channel text default 'instagram';
+alter table inbox_outbound_attempts add column if not exists provider text default 'meta';
+alter table inbox_outbound_attempts add column if not exists recipient_id text;
+alter table inbox_outbound_attempts add column if not exists provider_message_id text;
+alter table inbox_outbound_attempts add column if not exists payload jsonb default '{}'::jsonb;
+alter table inbox_outbound_attempts add column if not exists provider_response jsonb default '{}'::jsonb;
+alter table inbox_outbound_attempts add column if not exists status text default 'queued';
+alter table inbox_outbound_attempts add column if not exists attempt_count int default 0;
+alter table inbox_outbound_attempts add column if not exists max_attempts int default 5;
+alter table inbox_outbound_attempts add column if not exists queued_at timestamptz default now();
+alter table inbox_outbound_attempts add column if not exists first_attempt_at timestamptz;
+alter table inbox_outbound_attempts add column if not exists last_attempt_at timestamptz;
+alter table inbox_outbound_attempts add column if not exists next_retry_at timestamptz;
+alter table inbox_outbound_attempts add column if not exists sent_at timestamptz;
+alter table inbox_outbound_attempts add column if not exists last_error text;
+alter table inbox_outbound_attempts add column if not exists last_error_code text;
+alter table inbox_outbound_attempts add column if not exists created_at timestamptz default now();
+alter table inbox_outbound_attempts add column if not exists updated_at timestamptz default now();
+
+do $$
+begin
+  begin
+    alter table inbox_outbound_attempts alter column id set default gen_random_uuid();
+  exception when others then null;
+  end;
+  begin
+    alter table inbox_outbound_attempts alter column tenant_key set default 'neox';
+  exception when others then null;
+  end;
+  begin
+    alter table inbox_outbound_attempts alter column channel set default 'instagram';
+  exception when others then null;
+  end;
+  begin
+    alter table inbox_outbound_attempts alter column provider set default 'meta';
+  exception when others then null;
+  end;
+  begin
+    alter table inbox_outbound_attempts alter column payload set default '{}'::jsonb;
+  exception when others then null;
+  end;
+  begin
+    alter table inbox_outbound_attempts alter column provider_response set default '{}'::jsonb;
+  exception when others then null;
+  end;
+  begin
+    alter table inbox_outbound_attempts alter column status set default 'queued';
+  exception when others then null;
+  end;
+  begin
+    alter table inbox_outbound_attempts alter column attempt_count set default 0;
+  exception when others then null;
+  end;
+  begin
+    alter table inbox_outbound_attempts alter column max_attempts set default 5;
+  exception when others then null;
+  end;
+  begin
+    alter table inbox_outbound_attempts alter column queued_at set default now();
+  exception when others then null;
+  end;
+  begin
+    alter table inbox_outbound_attempts alter column updated_at set default now();
+  exception when others then null;
+  end;
+end$$;
+
+do $$
+begin
+  begin
+    execute 'alter table inbox_outbound_attempts drop constraint if exists inbox_outbound_attempts_status_check';
+  exception when others then null;
+  end;
+
+  begin
+    alter table inbox_outbound_attempts
+      add constraint inbox_outbound_attempts_status_check
+      check (status in ('queued','sending','sent','failed','retrying','dead'));
+  exception when others then null;
+  end;
+end$$;
+
+do $$
+begin
+  if not exists (select 1 from pg_constraint where conname = 'inbox_outbound_attempts_message_id_fkey') then
+    begin
+      alter table inbox_outbound_attempts
+        add constraint inbox_outbound_attempts_message_id_fkey
+        foreign key (message_id) references inbox_messages(id) on delete cascade;
+    exception when others then null;
+    end;
+  end if;
+
+  if not exists (select 1 from pg_constraint where conname = 'inbox_outbound_attempts_thread_id_fkey') then
+    begin
+      alter table inbox_outbound_attempts
+        add constraint inbox_outbound_attempts_thread_id_fkey
+        foreign key (thread_id) references inbox_threads(id) on delete cascade;
+    exception when others then null;
+    end;
+  end if;
+end$$;
+
+create unique index if not exists uq_inbox_outbound_attempts_provider_message_id
+  on inbox_outbound_attempts(provider, provider_message_id)
+  where provider_message_id is not null;
+
+create index if not exists idx_inbox_outbound_attempts_message
+  on inbox_outbound_attempts(message_id, created_at desc);
+
+create index if not exists idx_inbox_outbound_attempts_thread
+  on inbox_outbound_attempts(thread_id, created_at desc);
+
+create index if not exists idx_inbox_outbound_attempts_retry_queue
+  on inbox_outbound_attempts(status, next_retry_at asc, created_at asc);
+
+create index if not exists idx_inbox_outbound_attempts_tenant_status
+  on inbox_outbound_attempts(tenant_key, status, created_at desc);
+
+do $$
+begin
+  if not exists (select 1 from pg_trigger where tgname = 'trg_inbox_outbound_attempts_updated_at') then
+    execute '
+      create trigger trg_inbox_outbound_attempts_updated_at
+      before update on inbox_outbound_attempts
+      for each row execute function set_updated_at();
+    ';
+  end if;
+exception when others then null;
+end$$;
