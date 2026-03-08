@@ -1,72 +1,60 @@
 import express from "express";
 import { okJson, isDbReady, isUuid } from "../../utils/http.js";
 import { requireInternalToken } from "../../utils/auth.js";
-import { deepFix, fixText } from "../../utils/textFix.js";
+import { fixText } from "../../utils/textFix.js";
+import { buildInboxActions } from "../../services/inboxBrain.js";
+import { writeAudit } from "../../utils/auditLog.js";
 
-function toInt(v, fallback) {
-  const n = Number.parseInt(String(v ?? ""), 10);
-  return Number.isFinite(n) ? n : fallback;
-}
+import {
+  clamp,
+  normalizeMessage,
+  normalizeThread,
+  s,
+  toInt,
+  truthy,
+} from "./inbox.shared.js";
 
-function clamp(n, min, max) {
-  return Math.max(min, Math.min(max, n));
-}
+import {
+  findExistingInboundMessage,
+  findExistingOutboundMessage,
+  getTenantByKey,
+  getThreadById,
+  refreshThread,
+} from "./inbox.db.js";
 
-function normalizeThread(row) {
-  if (!row) return row;
-  return {
-    ...row,
-    customer_name: fixText(row.customer_name || ""),
-    external_username: fixText(row.external_username || ""),
-    assigned_to: fixText(row.assigned_to || ""),
-    labels: Array.isArray(row.labels) ? row.labels.map((x) => fixText(String(x))) : [],
-    meta: deepFix(row.meta || {}),
-  };
-}
-
-function normalizeMessage(row) {
-  if (!row) return row;
-  return {
-    ...row,
-    text: fixText(row.text || ""),
-    attachments: Array.isArray(row.attachments) ? deepFix(row.attachments) : [],
-    meta: deepFix(row.meta || {}),
-  };
-}
+import {
+  applyHandoffActions,
+  persistLeadActions,
+} from "./inbox.mutations.js";
 
 export function inboxRoutes({ db, wsHub }) {
   const r = express.Router();
 
-  // POST /api/inbox/ingest
   r.post("/inbox/ingest", async (req, res) => {
     if (!requireInternalToken(req)) {
       return okJson(res, { ok: false, error: "unauthorized" });
     }
-  
-    const tenantKey = String(req.body?.tenantKey || "neox").trim() || "neox";
-    const channel = String(req.body?.channel || "instagram").trim().toLowerCase() || "instagram";
+
+    const tenantKey = s(req.body?.tenantKey || "neox") || "neox";
+    const channel = s(req.body?.channel || "instagram").toLowerCase() || "instagram";
 
     const externalThreadId =
-      fixText(String(req.body?.externalThreadId || req.body?.userId || "").trim()) || null;
+      fixText(s(req.body?.externalThreadId || req.body?.userId)) || null;
 
     const externalUserId =
-      fixText(String(req.body?.externalUserId || req.body?.userId || "").trim()) || null;
+      fixText(s(req.body?.externalUserId || req.body?.userId)) || null;
 
-    const externalUsername =
-      fixText(String(req.body?.externalUsername || "").trim()) || null;
+    const externalUsername = fixText(s(req.body?.externalUsername)) || null;
+    const customerName = fixText(s(req.body?.customerName)) || null;
+    const externalMessageId = fixText(s(req.body?.externalMessageId)) || null;
 
-    const customerName =
-      fixText(String(req.body?.customerName || "").trim()) || null;
-
-    const externalMessageId =
-      fixText(String(req.body?.externalMessageId || "").trim()) || null;
-
-    const text = fixText(String(req.body?.text || "").trim());
+    const text = fixText(s(req.body?.text));
     const timestamp = req.body?.timestamp || null;
 
     const raw = req.body?.raw && typeof req.body.raw === "object" ? req.body.raw : {};
     const meta = {
-      source: fixText(String(req.body?.source || "meta").trim()) || "meta",
+      source: fixText(s(req.body?.source || "meta")) || "meta",
+      platform: fixText(s(req.body?.platform || "instagram")) || "instagram",
       timestamp,
       raw,
     };
@@ -81,9 +69,11 @@ export function inboxRoutes({ db, wsHub }) {
           ok: false,
           error: "db disabled",
           dbDisabled: true,
+          actions: [],
         });
       }
 
+      const tenant = await getTenantByKey(db, tenantKey);
       let thread = null;
 
       if (externalThreadId) {
@@ -190,6 +180,21 @@ export function inboxRoutes({ db, wsHub }) {
             thread: normalizeThread(thread),
           });
         } catch {}
+
+        try {
+          await writeAudit(db, {
+            actor: "meta_gateway",
+            action: "inbox.thread.created",
+            objectType: "inbox_thread",
+            objectId: String(thread?.id || ""),
+            meta: {
+              tenantKey,
+              channel,
+              externalThreadId,
+              externalUserId,
+            },
+          });
+        } catch {}
       } else {
         const updated = await db.query(
           `
@@ -222,15 +227,45 @@ export function inboxRoutes({ db, wsHub }) {
             created_at,
             updated_at
           `,
-          [
-            thread.id,
-            externalUserId,
-            externalUsername,
-            customerName,
-          ]
+          [thread.id, externalUserId, externalUsername, customerName]
         );
 
         thread = updated.rows?.[0] || thread;
+      }
+
+      if (externalMessageId && thread?.id) {
+        const existingMessage = await findExistingInboundMessage({
+          db,
+          tenantKey,
+          threadId: thread.id,
+          externalMessageId,
+        });
+
+        if (existingMessage) {
+          await writeAudit(db, {
+            actor: "meta_gateway",
+            action: "inbox.inbound.deduped",
+            objectType: "inbox_message",
+            objectId: String(existingMessage?.id || ""),
+            meta: {
+              tenantKey,
+              channel,
+              threadId: String(thread?.id || ""),
+              externalMessageId: String(externalMessageId || ""),
+            },
+          });
+
+          return okJson(res, {
+            ok: true,
+            duplicate: true,
+            deduped: true,
+            thread: normalizeThread(thread),
+            message: existingMessage,
+            actions: [],
+            leadResults: [],
+            handoffResults: [],
+          });
+        }
       }
 
       const insertedMessage = await db.query(
@@ -284,7 +319,7 @@ export function inboxRoutes({ db, wsHub }) {
       );
 
       const message = normalizeMessage(insertedMessage.rows?.[0] || null);
-      const normalizedThread = normalizeThread(thread);
+      let normalizedThread = normalizeThread(thread);
 
       try {
         wsHub?.broadcast?.("inbox.message.created", {
@@ -294,8 +329,279 @@ export function inboxRoutes({ db, wsHub }) {
         });
       } catch {}
 
+      try {
+        await writeAudit(db, {
+          actor: "meta_gateway",
+          action: "inbox.inbound.created",
+          objectType: "inbox_message",
+          objectId: String(message?.id || ""),
+          meta: {
+            tenantKey,
+            channel,
+            threadId: String(thread?.id || ""),
+            externalMessageId: String(externalMessageId || ""),
+          },
+        });
+      } catch {}
+
+      const brain = await buildInboxActions({
+        text,
+        channel,
+        externalUserId,
+        tenantKey,
+        thread: normalizedThread,
+        message,
+        tenant,
+      });
+
+      const actions = Array.isArray(brain?.actions) ? brain.actions : [];
+
+      try {
+        await writeAudit(db, {
+          actor: "ai_hq",
+          action: "inbox.brain.executed",
+          objectType: "inbox_message",
+          objectId: String(message?.id || ""),
+          meta: {
+            tenantKey,
+            intent: String(brain?.intent || "general"),
+            leadScore: Number(brain?.leadScore || 0),
+            actionCount: actions.length,
+            threadId: String(thread?.id || ""),
+          },
+        });
+      } catch {}
+
+      const leadResults = await persistLeadActions({
+        db,
+        wsHub,
+        tenantKey,
+        actions,
+      });
+
+      const handoffResults = await applyHandoffActions({
+        db,
+        wsHub,
+        threadId: normalizedThread?.id,
+        actions,
+      });
+
+      if (handoffResults.length && normalizedThread?.id) {
+        normalizedThread = await refreshThread(db, normalizedThread.id, normalizedThread);
+      }
+
       return okJson(res, {
         ok: true,
+        duplicate: false,
+        deduped: false,
+        thread: normalizedThread,
+        message,
+        tenant: tenant
+          ? {
+              tenant_key: tenant.tenant_key,
+              name: tenant.name,
+              timezone: tenant.timezone,
+              inbox_policy: tenant.inbox_policy || {},
+            }
+          : null,
+        intent: brain?.intent || "general",
+        leadScore: Number(brain?.leadScore || 0),
+        policy: brain?.policy || null,
+        actions,
+        leadResults,
+        handoffResults,
+      });
+    } catch (e) {
+      return okJson(res, {
+        ok: false,
+        error: "Error",
+        details: { message: String(e?.message || e) },
+        actions: [],
+      });
+    }
+  });
+
+  r.post("/inbox/outbound", async (req, res) => {
+    if (!requireInternalToken(req)) {
+      return okJson(res, { ok: false, error: "unauthorized" });
+    }
+
+    const threadId = s(req.body?.threadId || "");
+    if (!threadId) return okJson(res, { ok: false, error: "threadId required" });
+    if (!isUuid(threadId)) return okJson(res, { ok: false, error: "threadId must be uuid" });
+
+    try {
+      if (!isDbReady(db)) {
+        return okJson(res, { ok: false, error: "db disabled", dbDisabled: true });
+      }
+
+      const existingThread = await getThreadById(db, threadId);
+      if (!existingThread) {
+        return okJson(res, { ok: false, error: "thread not found" });
+      }
+
+      const tenantKey =
+        s(req.body?.tenantKey || existingThread?.tenant_key || "neox") || "neox";
+
+      const channel =
+        s(req.body?.channel || existingThread?.channel || "instagram").toLowerCase() || "instagram";
+
+      const recipientId = fixText(s(req.body?.recipientId || "")) || null;
+      const senderType = s(req.body?.senderType || "ai").toLowerCase() || "ai";
+      const externalMessageId =
+        fixText(s(req.body?.providerMessageId || req.body?.externalMessageId || "")) || null;
+      const messageType = s(req.body?.messageType || "text").toLowerCase() || "text";
+      const text = fixText(s(req.body?.text || ""));
+      const attachments = Array.isArray(req.body?.attachments) ? req.body.attachments : [];
+      const meta = req.body?.meta && typeof req.body.meta === "object" ? req.body.meta : {};
+
+      if (!text && attachments.length === 0) {
+        return okJson(res, { ok: false, error: "text or attachments required" });
+      }
+
+      if (externalMessageId) {
+        const existingMessage = await findExistingOutboundMessage({
+          db,
+          tenantKey,
+          threadId,
+          externalMessageId,
+        });
+
+        if (existingMessage) {
+          await writeAudit(db, {
+            actor: "meta_gateway",
+            action: "inbox.outbound.deduped",
+            objectType: "inbox_message",
+            objectId: String(existingMessage?.id || ""),
+            meta: {
+              tenantKey,
+              channel,
+              threadId,
+              externalMessageId: String(externalMessageId || ""),
+            },
+          });
+
+          return okJson(res, {
+            ok: true,
+            duplicate: true,
+            deduped: true,
+            thread: existingThread,
+            message: existingMessage,
+          });
+        }
+      }
+
+      const mergedMeta = {
+        ...meta,
+        recipientId,
+        provider: s(req.body?.provider || "meta") || "meta",
+        operatorName: s(req.body?.operatorName || ""),
+      };
+
+      const inserted = await db.query(
+        `
+        insert into inbox_messages (
+          thread_id,
+          tenant_key,
+          direction,
+          sender_type,
+          external_message_id,
+          message_type,
+          text,
+          attachments,
+          meta,
+          sent_at
+        )
+        values (
+          $1::uuid,
+          $2::text,
+          'outbound',
+          $3::text,
+          $4::text,
+          $5::text,
+          $6::text,
+          $7::jsonb,
+          $8::jsonb,
+          now()
+        )
+        returning
+          id,
+          thread_id,
+          tenant_key,
+          direction,
+          sender_type,
+          external_message_id,
+          message_type,
+          text,
+          attachments,
+          meta,
+          sent_at,
+          created_at
+        `,
+        [
+          threadId,
+          tenantKey,
+          senderType,
+          externalMessageId,
+          messageType,
+          text,
+          JSON.stringify(attachments),
+          JSON.stringify(mergedMeta),
+        ]
+      );
+
+      const message = normalizeMessage(inserted.rows?.[0] || null);
+
+      await db.query(
+        `
+        update inbox_threads
+        set
+          last_message_at = now(),
+          last_outbound_at = now(),
+          external_user_id = coalesce($2::text, external_user_id),
+          updated_at = now()
+        where id = $1::uuid
+        `,
+        [threadId, recipientId]
+      );
+
+      const normalizedThread = await refreshThread(db, threadId, existingThread);
+
+      try {
+        wsHub?.broadcast?.("inbox.message.created", {
+          type: "inbox.message.created",
+          threadId,
+          message,
+        });
+      } catch {}
+
+      try {
+        wsHub?.broadcast?.("inbox.thread.updated", {
+          type: "inbox.thread.updated",
+          thread: normalizedThread,
+        });
+      } catch {}
+
+      try {
+        await writeAudit(db, {
+          actor: senderType === "agent" ? "operator" : "meta_gateway",
+          action: "inbox.outbound.created",
+          objectType: "inbox_message",
+          objectId: String(message?.id || ""),
+          meta: {
+            tenantKey,
+            channel,
+            threadId,
+            externalMessageId: String(externalMessageId || ""),
+            senderType,
+          },
+        });
+      } catch {}
+
+      return okJson(res, {
+        ok: true,
+        duplicate: false,
+        deduped: false,
         thread: normalizedThread,
         message,
       });
@@ -308,11 +614,11 @@ export function inboxRoutes({ db, wsHub }) {
     }
   });
 
-  // GET /api/inbox/threads
   r.get("/inbox/threads", async (req, res) => {
     const tenantKey = String(req.query?.tenantKey || "neox").trim() || "neox";
     const status = String(req.query?.status || "").trim().toLowerCase();
     const q = fixText(String(req.query?.q || "").trim());
+    const handoffOnly = truthy(req.query?.handoffOnly);
     const limit = clamp(toInt(req.query?.limit, 30), 1, 200);
 
     try {
@@ -331,6 +637,10 @@ export function inboxRoutes({ db, wsHub }) {
       if (status) {
         values.push(status);
         where += ` and t.status = $${values.length}::text`;
+      }
+
+      if (handoffOnly) {
+        where += ` and coalesce(t.meta->'handoff'->>'active', 'false') = 'true'`;
       }
 
       if (q) {
@@ -396,7 +706,6 @@ export function inboxRoutes({ db, wsHub }) {
     }
   });
 
-  // GET /api/inbox/threads/:id
   r.get("/inbox/threads/:id", async (req, res) => {
     const threadId = String(req.params.id || "").trim();
     if (!threadId) return okJson(res, { ok: false, error: "threadId required" });
@@ -410,35 +719,8 @@ export function inboxRoutes({ db, wsHub }) {
         return okJson(res, { ok: false, error: "threadId must be uuid" });
       }
 
-      const result = await db.query(
-        `
-        select
-          id,
-          tenant_key,
-          channel,
-          external_thread_id,
-          external_user_id,
-          external_username,
-          customer_name,
-          status,
-          last_message_at,
-          last_inbound_at,
-          last_outbound_at,
-          unread_count,
-          assigned_to,
-          labels,
-          meta,
-          created_at,
-          updated_at
-        from inbox_threads
-        where id = $1::uuid
-        limit 1
-        `,
-        [threadId]
-      );
-
-      const row = result.rows?.[0] || null;
-      return okJson(res, { ok: true, thread: normalizeThread(row) });
+      const row = await getThreadById(db, threadId);
+      return okJson(res, { ok: true, thread: row });
     } catch (e) {
       return okJson(res, {
         ok: false,
@@ -448,7 +730,6 @@ export function inboxRoutes({ db, wsHub }) {
     }
   });
 
-  // GET /api/inbox/threads/:id/messages
   r.get("/inbox/threads/:id/messages", async (req, res) => {
     const threadId = String(req.params.id || "").trim();
     const limit = clamp(toInt(req.query?.limit, 200), 1, 1000);
@@ -503,7 +784,6 @@ export function inboxRoutes({ db, wsHub }) {
     }
   });
 
-  // POST /api/inbox/threads
   r.post("/inbox/threads", async (req, res) => {
     const tenantKey = String(req.body?.tenantKey || "neox").trim() || "neox";
     const channel = String(req.body?.channel || "instagram").trim().toLowerCase() || "instagram";
@@ -591,6 +871,20 @@ export function inboxRoutes({ db, wsHub }) {
         });
       } catch {}
 
+      try {
+        await writeAudit(db, {
+          actor: "ai_hq",
+          action: "inbox.thread.manual_created",
+          objectType: "inbox_thread",
+          objectId: String(thread?.id || ""),
+          meta: {
+            tenantKey,
+            channel,
+            externalThreadId: String(externalThreadId || ""),
+          },
+        });
+      } catch {}
+
       return okJson(res, { ok: true, thread });
     } catch (e) {
       return okJson(res, {
@@ -601,7 +895,6 @@ export function inboxRoutes({ db, wsHub }) {
     }
   });
 
-  // POST /api/inbox/threads/:id/messages
   r.post("/inbox/threads/:id/messages", async (req, res) => {
     const threadId = String(req.params.id || "").trim();
     const tenantKey = String(req.body?.tenantKey || "neox").trim() || "neox";
@@ -612,6 +905,7 @@ export function inboxRoutes({ db, wsHub }) {
     const text = fixText(String(req.body?.text || "").trim());
     const attachments = Array.isArray(req.body?.attachments) ? req.body.attachments : [];
     const meta = req.body?.meta && typeof req.body.meta === "object" ? req.body.meta : {};
+    const releaseHandoff = truthy(req.body?.releaseHandoff);
 
     if (!threadId) return okJson(res, { ok: false, error: "threadId required" });
     if (!text && attachments.length === 0) {
@@ -625,6 +919,11 @@ export function inboxRoutes({ db, wsHub }) {
 
       if (!isUuid(threadId)) {
         return okJson(res, { ok: false, error: "threadId must be uuid" });
+      }
+
+      const existingThread = await getThreadById(db, threadId);
+      if (!existingThread) {
+        return okJson(res, { ok: false, error: "thread not found" });
       }
 
       const insert = await db.query(
@@ -692,11 +991,24 @@ export function inboxRoutes({ db, wsHub }) {
           unread_count = case
             when $2::text = 'inbound' then coalesce(unread_count, 0) + 1
             else unread_count
-          end
+          end,
+          meta = case
+            when $3::boolean = true then
+              jsonb_set(
+                coalesce(meta, '{}'::jsonb),
+                '{handoff}',
+                '{"active":false,"reason":"","priority":"","at":null}'::jsonb,
+                true
+              )
+            else coalesce(meta, '{}'::jsonb)
+          end,
+          updated_at = now()
         where id = $1::uuid
         `,
-        [threadId, direction]
+        [threadId, direction, releaseHandoff]
       );
+
+      const thread = await refreshThread(db, threadId, null);
 
       try {
         wsHub?.broadcast?.("inbox.message.created", {
@@ -706,7 +1018,31 @@ export function inboxRoutes({ db, wsHub }) {
         });
       } catch {}
 
-      return okJson(res, { ok: true, message });
+      try {
+        wsHub?.broadcast?.("inbox.thread.updated", {
+          type: "inbox.thread.updated",
+          thread,
+        });
+      } catch {}
+
+      try {
+        await writeAudit(db, {
+          actor: senderType === "agent" ? (s(req.body?.operatorName || "operator")) : "ai_hq",
+          action: "inbox.message.manual_created",
+          objectType: "inbox_message",
+          objectId: String(message?.id || ""),
+          meta: {
+            tenantKey,
+            threadId,
+            direction,
+            senderType,
+            externalMessageId: String(externalMessageId || ""),
+            releaseHandoff,
+          },
+        });
+      } catch {}
+
+      return okJson(res, { ok: true, message, thread });
     } catch (e) {
       return okJson(res, {
         ok: false,
@@ -716,7 +1052,6 @@ export function inboxRoutes({ db, wsHub }) {
     }
   });
 
-  // POST /api/inbox/threads/:id/read
   r.post("/inbox/threads/:id/read", async (req, res) => {
     const threadId = String(req.params.id || "").trim();
     if (!threadId) return okJson(res, { ok: false, error: "threadId required" });
@@ -733,11 +1068,13 @@ export function inboxRoutes({ db, wsHub }) {
       await db.query(
         `
         update inbox_threads
-        set unread_count = 0
+        set unread_count = 0, updated_at = now()
         where id = $1::uuid
         `,
         [threadId]
       );
+
+      const thread = await refreshThread(db, threadId, null);
 
       try {
         wsHub?.broadcast?.("inbox.thread.read", {
@@ -746,7 +1083,360 @@ export function inboxRoutes({ db, wsHub }) {
         });
       } catch {}
 
-      return okJson(res, { ok: true, threadId });
+      try {
+        wsHub?.broadcast?.("inbox.thread.updated", {
+          type: "inbox.thread.updated",
+          thread,
+        });
+      } catch {}
+
+      try {
+        await writeAudit(db, {
+          actor: "ai_hq",
+          action: "inbox.thread.read",
+          objectType: "inbox_thread",
+          objectId: threadId,
+          meta: {},
+        });
+      } catch {}
+
+      return okJson(res, { ok: true, threadId, thread });
+    } catch (e) {
+      return okJson(res, {
+        ok: false,
+        error: "Error",
+        details: { message: String(e?.message || e) },
+      });
+    }
+  });
+
+  r.post("/inbox/threads/:id/assign", async (req, res) => {
+    const threadId = s(req.params.id);
+    const assignedTo = fixText(s(req.body?.assignedTo || ""));
+    const actor = fixText(s(req.body?.actor || assignedTo || "operator")) || "operator";
+
+    if (!threadId) return okJson(res, { ok: false, error: "threadId required" });
+    if (!assignedTo) return okJson(res, { ok: false, error: "assignedTo required" });
+
+    try {
+      if (!isDbReady(db)) {
+        return okJson(res, { ok: false, error: "db disabled", dbDisabled: true });
+      }
+      if (!isUuid(threadId)) {
+        return okJson(res, { ok: false, error: "threadId must be uuid" });
+      }
+
+      const updated = await db.query(
+        `
+        update inbox_threads
+        set
+          assigned_to = $2::text,
+          updated_at = now()
+        where id = $1::uuid
+        returning
+          id,
+          tenant_key,
+          channel,
+          external_thread_id,
+          external_user_id,
+          external_username,
+          customer_name,
+          status,
+          last_message_at,
+          last_inbound_at,
+          last_outbound_at,
+          unread_count,
+          assigned_to,
+          labels,
+          meta,
+          created_at,
+          updated_at
+        `,
+        [threadId, assignedTo]
+      );
+
+      const thread = normalizeThread(updated.rows?.[0] || null);
+      if (!thread) return okJson(res, { ok: false, error: "thread not found" });
+
+      try {
+        wsHub?.broadcast?.("inbox.thread.updated", {
+          type: "inbox.thread.updated",
+          thread,
+        });
+      } catch {}
+
+      try {
+        await writeAudit(db, {
+          actor,
+          action: "inbox.thread.assigned",
+          objectType: "inbox_thread",
+          objectId: threadId,
+          meta: { assignedTo },
+        });
+      } catch {}
+
+      return okJson(res, { ok: true, thread });
+    } catch (e) {
+      return okJson(res, {
+        ok: false,
+        error: "Error",
+        details: { message: String(e?.message || e) },
+      });
+    }
+  });
+
+  r.post("/inbox/threads/:id/handoff/activate", async (req, res) => {
+    const threadId = s(req.params.id);
+    const actor = fixText(s(req.body?.actor || "operator")) || "operator";
+    const assignedTo = fixText(s(req.body?.assignedTo || "")) || "human_handoff";
+    const reason = fixText(s(req.body?.reason || "manual_review")) || "manual_review";
+    const priority = fixText(s(req.body?.priority || "high")).toLowerCase() || "high";
+
+    if (!threadId) return okJson(res, { ok: false, error: "threadId required" });
+
+    try {
+      if (!isDbReady(db)) {
+        return okJson(res, { ok: false, error: "db disabled", dbDisabled: true });
+      }
+      if (!isUuid(threadId)) {
+        return okJson(res, { ok: false, error: "threadId must be uuid" });
+      }
+
+      const existing = await getThreadById(db, threadId);
+      if (!existing) return okJson(res, { ok: false, error: "thread not found" });
+
+      const meta = {
+        ...(existing.meta && typeof existing.meta === "object" ? existing.meta : {}),
+        handoff: {
+          active: true,
+          reason,
+          priority,
+          at: new Date().toISOString(),
+        },
+      };
+
+      const updated = await db.query(
+        `
+        update inbox_threads
+        set
+          assigned_to = coalesce(nullif($2::text, ''), assigned_to),
+          status = 'open',
+          labels = (
+            select jsonb_agg(distinct v)
+            from jsonb_array_elements_text(
+              coalesce(labels, '[]'::jsonb) || to_jsonb(array['handoff', $3::text]::text[])
+            ) as t(v)
+          ),
+          meta = $4::jsonb,
+          updated_at = now()
+        where id = $1::uuid
+        returning
+          id,
+          tenant_key,
+          channel,
+          external_thread_id,
+          external_user_id,
+          external_username,
+          customer_name,
+          status,
+          last_message_at,
+          last_inbound_at,
+          last_outbound_at,
+          unread_count,
+          assigned_to,
+          labels,
+          meta,
+          created_at,
+          updated_at
+        `,
+        [threadId, assignedTo, priority, JSON.stringify(meta)]
+      );
+
+      const thread = normalizeThread(updated.rows?.[0] || null);
+
+      try {
+        wsHub?.broadcast?.("inbox.thread.updated", {
+          type: "inbox.thread.updated",
+          thread,
+        });
+      } catch {}
+
+      try {
+        await writeAudit(db, {
+          actor,
+          action: "inbox.handoff.activated",
+          objectType: "inbox_thread",
+          objectId: threadId,
+          meta: { assignedTo, reason, priority },
+        });
+      } catch {}
+
+      return okJson(res, { ok: true, thread });
+    } catch (e) {
+      return okJson(res, {
+        ok: false,
+        error: "Error",
+        details: { message: String(e?.message || e) },
+      });
+    }
+  });
+
+  r.post("/inbox/threads/:id/handoff/release", async (req, res) => {
+    const threadId = s(req.params.id);
+    const actor = fixText(s(req.body?.actor || "operator")) || "operator";
+
+    if (!threadId) return okJson(res, { ok: false, error: "threadId required" });
+
+    try {
+      if (!isDbReady(db)) {
+        return okJson(res, { ok: false, error: "db disabled", dbDisabled: true });
+      }
+      if (!isUuid(threadId)) {
+        return okJson(res, { ok: false, error: "threadId must be uuid" });
+      }
+
+      const existing = await getThreadById(db, threadId);
+      if (!existing) return okJson(res, { ok: false, error: "thread not found" });
+
+      const meta = {
+        ...(existing.meta && typeof existing.meta === "object" ? existing.meta : {}),
+        handoff: {
+          active: false,
+          reason: "",
+          priority: "",
+          at: null,
+        },
+      };
+
+      const updated = await db.query(
+        `
+        update inbox_threads
+        set
+          meta = $2::jsonb,
+          updated_at = now()
+        where id = $1::uuid
+        returning
+          id,
+          tenant_key,
+          channel,
+          external_thread_id,
+          external_user_id,
+          external_username,
+          customer_name,
+          status,
+          last_message_at,
+          last_inbound_at,
+          last_outbound_at,
+          unread_count,
+          assigned_to,
+          labels,
+          meta,
+          created_at,
+          updated_at
+        `,
+        [threadId, JSON.stringify(meta)]
+      );
+
+      const thread = normalizeThread(updated.rows?.[0] || null);
+
+      try {
+        wsHub?.broadcast?.("inbox.thread.updated", {
+          type: "inbox.thread.updated",
+          thread,
+        });
+      } catch {}
+
+      try {
+        await writeAudit(db, {
+          actor,
+          action: "inbox.handoff.released",
+          objectType: "inbox_thread",
+          objectId: threadId,
+          meta: {},
+        });
+      } catch {}
+
+      return okJson(res, { ok: true, thread });
+    } catch (e) {
+      return okJson(res, {
+        ok: false,
+        error: "Error",
+        details: { message: String(e?.message || e) },
+      });
+    }
+  });
+
+  r.post("/inbox/threads/:id/status", async (req, res) => {
+    const threadId = s(req.params.id);
+    const actor = fixText(s(req.body?.actor || "operator")) || "operator";
+    const status = fixText(s(req.body?.status || "")).toLowerCase();
+
+    if (!threadId) return okJson(res, { ok: false, error: "threadId required" });
+    if (!status) return okJson(res, { ok: false, error: "status required" });
+
+    const allowed = new Set(["open", "pending", "resolved", "closed", "spam"]);
+    if (!allowed.has(status)) {
+      return okJson(res, { ok: false, error: "invalid status" });
+    }
+
+    try {
+      if (!isDbReady(db)) {
+        return okJson(res, { ok: false, error: "db disabled", dbDisabled: true });
+      }
+      if (!isUuid(threadId)) {
+        return okJson(res, { ok: false, error: "threadId must be uuid" });
+      }
+
+      const updated = await db.query(
+        `
+        update inbox_threads
+        set
+          status = $2::text,
+          updated_at = now()
+        where id = $1::uuid
+        returning
+          id,
+          tenant_key,
+          channel,
+          external_thread_id,
+          external_user_id,
+          external_username,
+          customer_name,
+          status,
+          last_message_at,
+          last_inbound_at,
+          last_outbound_at,
+          unread_count,
+          assigned_to,
+          labels,
+          meta,
+          created_at,
+          updated_at
+        `,
+        [threadId, status]
+      );
+
+      const thread = normalizeThread(updated.rows?.[0] || null);
+      if (!thread) return okJson(res, { ok: false, error: "thread not found" });
+
+      try {
+        wsHub?.broadcast?.("inbox.thread.updated", {
+          type: "inbox.thread.updated",
+          thread,
+        });
+      } catch {}
+
+      try {
+        await writeAudit(db, {
+          actor,
+          action: "inbox.thread.status_changed",
+          objectType: "inbox_thread",
+          objectId: threadId,
+          meta: { status },
+        });
+      } catch {}
+
+      return okJson(res, { ok: true, thread });
     } catch (e) {
       return okJson(res, {
         ok: false,

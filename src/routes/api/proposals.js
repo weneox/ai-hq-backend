@@ -1,14 +1,3 @@
-// src/routes/api/proposals.js
-//
-// FINAL v3.1 — FIXED published tab / derived ui status
-//
-// Fix:
-// ✅ GET /api/proposals?status=published no longer depends only on proposals.status
-// ✅ Derived UI status now uses latestContent.status + publish permalink too
-// ✅ Approved / Published tabs work even if proposal.status is not yet updated
-// ✅ Memory + DB fallback both aligned
-// ✅ includeContent + includePack preserved
-
 import express from "express";
 import { cfg } from "../../config.js";
 
@@ -43,267 +32,32 @@ import {
 import { pushBroadcastToCeo } from "../../services/pushBroadcast.js";
 import { notifyN8n } from "../../services/n8nNotify.js";
 
-function asObj(x) {
-  return x && typeof x === "object" && !Array.isArray(x) ? x : {};
-}
+import {
+  safePayload,
+  safeTitle,
+  safeTopic,
+  safeFormat,
+  safeAspectRatio,
+  safeVisualPreset,
+  safeImagePrompt,
+  safeVideoPrompt,
+  safeVoiceoverText,
+  safeNeededAssets,
+  safeReelMeta,
+  normalizeRequestedStatus,
+} from "./proposals.shared.js";
 
-function safePayload(p) {
-  return asObj(p?.payload);
-}
+import {
+  deriveUiStatusFromProposalAndContent,
+  matchesRequestedUiStatus,
+  mapProposalRow,
+} from "./proposals.status.js";
 
-function safeTitle(p) {
-  const payload = safePayload(p);
-  const t =
-    payload?.topic ||
-    payload?.title ||
-    payload?.name ||
-    payload?.summary ||
-    payload?.goal ||
-    p?.title ||
-    "";
-  return fixText(String(t || "").trim());
-}
-
-function safeTopic(p) {
-  const payload = safePayload(p);
-  return fixText(
-    String(payload?.topic || payload?.title || p?.title || "").trim()
-  );
-}
-
-function safeFormat(p) {
-  const payload = safePayload(p);
-  return fixText(
-    String(
-      payload?.format || payload?.postType || payload?.post_type || ""
-    )
-      .trim()
-      .toLowerCase()
-  );
-}
-
-function safeAspectRatio(p) {
-  const payload = safePayload(p);
-  return fixText(
-    String(
-      payload?.aspectRatio ||
-        payload?.aspect_ratio ||
-        payload?.visualPlan?.aspectRatio ||
-        ""
-    ).trim()
-  );
-}
-
-function safeVisualPreset(p) {
-  const payload = safePayload(p);
-  return fixText(
-    String(payload?.visualPlan?.visualPreset || payload?.visualPreset || "").trim()
-  );
-}
-
-function safeImagePrompt(p) {
-  const payload = safePayload(p);
-  return fixText(
-    String(payload?.imagePrompt || payload?.assetBrief?.imagePrompt || "").trim()
-  );
-}
-
-function safeVideoPrompt(p) {
-  const payload = safePayload(p);
-  return fixText(
-    String(payload?.videoPrompt || payload?.assetBrief?.videoPrompt || "").trim()
-  );
-}
-
-function safeVoiceoverText(p) {
-  const payload = safePayload(p);
-  return fixText(
-    String(payload?.voiceoverText || payload?.assetBrief?.voiceoverText || "").trim()
-  );
-}
-
-function safeNeededAssets(p) {
-  const payload = safePayload(p);
-  const arr = payload?.neededAssets || payload?.assetBrief?.neededAssets || [];
-  return Array.isArray(arr)
-    ? arr.map((x) => String(x).trim()).filter(Boolean).slice(0, 12)
-    : [];
-}
-
-function safeReelMeta(p) {
-  const payload = safePayload(p);
-  const rm = asObj(payload?.reelMeta);
-  return Object.keys(rm).length ? deepFix(rm) : null;
-}
-
-function normalizeRequestedStatus(x) {
-  const s = fixText(String(x || "").trim()).toLowerCase() || "draft";
-  const allowed = new Set([
-    "draft",
-    "pending",
-    "in_progress",
-    "approved",
-    "published",
-    "rejected",
-  ]);
-  return allowed.has(s) ? s : "draft";
-}
-
-function lc(x) {
-  return String(x || "").trim().toLowerCase();
-}
-
-function parseMaybeJson(x) {
-  if (!x) return null;
-  if (typeof x === "object") return x;
-  if (typeof x === "string") {
-    try {
-      const o = JSON.parse(x);
-      return o && typeof o === "object" ? o : null;
-    } catch {
-      return null;
-    }
-  }
-  return null;
-}
-
-function hasPublishLink(latestContent) {
-  if (!latestContent) return false;
-
-  const publish = parseMaybeJson(latestContent.publish) || latestContent.publish || null;
-  const contentPack =
-    parseMaybeJson(latestContent.content_pack) || latestContent.content_pack || null;
-
-  return !!(
-    latestContent?.permalink ||
-    publish?.permalink ||
-    contentPack?.permalink ||
-    contentPack?.publish?.permalink
-  );
-}
-
-function deriveUiStatusFromProposalAndContent(proposal, latestContent) {
-  const pStatus = lc(proposal?.status);
-  const cStatus = lc(latestContent?.status);
-  const publishedByLink = hasPublishLink(latestContent);
-
-  // published
-  if (
-    pStatus === "published" ||
-    cStatus === "published" ||
-    cStatus === "posted" ||
-    cStatus === "live" ||
-    cStatus === "publish.done" ||
-    cStatus === "publish.completed" ||
-    publishedByLink
-  ) {
-    return "published";
-  }
-
-  // rejected
-  if (pStatus === "rejected") {
-    return "rejected";
-  }
-
-  // approved
-  if (
-    pStatus === "approved" ||
-    cStatus === "approved" ||
-    cStatus === "asset.ready" ||
-    cStatus === "assets.ready" ||
-    cStatus === "publish.ready" ||
-    cStatus === "ready"
-  ) {
-    return "approved";
-  }
-
-  // everything else belongs to draft pipeline
-  return "draft";
-}
-
-function matchesRequestedUiStatus(requestedStatus, proposal, latestContent) {
-  const uiStatus = deriveUiStatusFromProposalAndContent(proposal, latestContent);
-  return uiStatus === requestedStatus;
-}
-
-function mapLatestContent(row, includePack) {
-  if (!row?.content_id) return null;
-
-  const publishObj = deepFix(row.content_publish || null);
-
-  return {
-    id: row.content_id,
-    status: row.content_status,
-    updated_at: row.content_updated_at,
-    last_feedback: row.content_last_feedback || null,
-    publish: publishObj,
-    ...(includePack ? { content_pack: deepFix(row.content_pack) } : {}),
-  };
-}
-
-function mapProposalRow(row, includeContent, includePack) {
-  const p = {
-    id: row.id,
-    thread_id: row.thread_id,
-    agent: row.agent,
-    type: row.type,
-    status: row.status,
-    title: fixText(row.title),
-    payload: deepFix(row.payload),
-    created_at: row.created_at,
-    decided_at: row.decided_at,
-    decision_by: row.decision_by,
-  };
-
-  if (includeContent) {
-    p.latestContent = mapLatestContent(row, includePack);
-    p.uiStatus = deriveUiStatusFromProposalAndContent(p, p.latestContent);
-  } else {
-    p.uiStatus = deriveUiStatusFromProposalAndContent(p, null);
-  }
-
-  return p;
-}
-
-function buildN8nExtra({
-  tenantId,
-  proposal,
-  jobId = null,
-  reason = "",
-}) {
-  return deepFix({
-    tenantId,
-    proposalId: String(proposal?.id || ""),
-    threadId: String(proposal?.thread_id || ""),
-    jobId: jobId || null,
-    reason: reason || "",
-    title: safeTitle(proposal),
-    topic: safeTopic(proposal),
-    format: safeFormat(proposal),
-    aspectRatio: safeAspectRatio(proposal),
-    visualPreset: safeVisualPreset(proposal),
-    imagePrompt: safeImagePrompt(proposal),
-    videoPrompt: safeVideoPrompt(proposal),
-    voiceoverText: safeVoiceoverText(proposal),
-    neededAssets: safeNeededAssets(proposal),
-    reelMeta: safeReelMeta(proposal),
-    payload: deepFix(proposal?.payload || {}),
-    callback: {
-      url: "/api/executions/callback",
-      tokenHeader: "x-webhook-token",
-    },
-  });
-}
+import { buildN8nExtra } from "./proposals.notify.js";
 
 export function proposalsRoutes({ db, wsHub }) {
   const r = express.Router();
 
-  // GET /api/proposals?status=draft|pending|in_progress|approved|published|rejected
-  // UI-facing behavior:
-  // - draft / pending / in_progress => draft pipeline
-  // - approved => approved UI bucket
-  // - published => published UI bucket
-  // - rejected => rejected UI bucket
   r.get("/proposals", async (req, res) => {
     const rawStatus = normalizeRequestedStatus(req.query.status);
     const uiStatus =
@@ -314,7 +68,6 @@ export function proposalsRoutes({ db, wsHub }) {
     const includePack = String(req.query.includePack || "0") === "1";
 
     try {
-      // ================= MEMORY =================
       if (!isDbReady(db)) {
         const all = memListProposals()
           .map((p) => {
@@ -360,9 +113,6 @@ export function proposalsRoutes({ db, wsHub }) {
         });
       }
 
-      // ================= DB =================
-      // Intentionally fetch recent rows + latest content, then derive UI status in JS.
-      // This avoids missing "published" items when only content_items got updated.
       const q = await db.query(
         `
         select
@@ -422,8 +172,6 @@ export function proposalsRoutes({ db, wsHub }) {
     }
   });
 
-  // POST /api/proposals/:id/decision
-  // body: { decision:"approved"|"rejected", by?, reason?, tenantId? }
   r.post("/proposals/:id/decision", async (req, res) => {
     const id = String(req.params.id || "").trim();
     const decision = normalizeDecision(req.body?.decision);
@@ -446,7 +194,6 @@ export function proposalsRoutes({ db, wsHub }) {
     }
 
     try {
-      // ================= MEMORY =================
       if (!isDbReady(db)) {
         const p = mem.proposals.get(id);
         if (!p) {
@@ -558,7 +305,6 @@ export function proposalsRoutes({ db, wsHub }) {
         });
       }
 
-      // ================= DB =================
       const proposal = await dbGetProposalById(db, id);
       if (!proposal) {
         return okJson(res, { ok: false, error: "proposal not found" });
@@ -713,7 +459,6 @@ export function proposalsRoutes({ db, wsHub }) {
     }
   });
 
-  // POST /api/proposals/:id/request-changes
   r.post("/proposals/:id/request-changes", async (req, res) => {
     const proposalId = String(req.params.id || "").trim();
     const feedbackText = fixText(String(req.body?.feedbackText || "").trim());
@@ -761,7 +506,6 @@ export function proposalsRoutes({ db, wsHub }) {
     }
   });
 
-  // POST /api/proposals/:id/publish
   r.post("/proposals/:id/publish", async (req, res) => {
     const proposalId = String(req.params.id || "").trim();
 

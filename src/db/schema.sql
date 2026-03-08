@@ -1,11 +1,11 @@
 -- src/db/schema.sql
--- AI HQ schema (upgrade-safe + FULL legacy fixes + INBOX + LEADS) — FINAL v7.6
--- ✅ Adds/ensures: threads, messages, proposals, notifications, jobs, audit_log, push_subscriptions, tenants, content_items
--- ✅ NEW: inbox_threads, inbox_messages, leads
--- ✅ Keeps: legacy fixes (messages/proposals conversation_id + agent_key)
--- ✅ FIX: proposals.status includes in_progress + published
--- ✅ FIX: content_items.status is FUTURE-PROOF (draft.* + asset.* + publish.* + exec statuses)
--- ✅ Safe for production: NO DROP TABLE
+-- FINAL v8.0 — AI HQ schema (upgrade-safe + inbox/operator flow hardened)
+-- Key updates:
+-- ✅ inbox_threads has real handoff columns
+-- ✅ tenant-safe unique index for external thread ids
+-- ✅ no duplicate trigger creation blocks
+-- ✅ tenant inbox policy supports suppressAiDuringHandoff + autoReleaseOnOperatorReply
+-- ✅ keeps legacy fixes and prior production-safe upgrades
 
 create extension if not exists pgcrypto;
 
@@ -382,15 +382,25 @@ create table if not exists tenants (
   brand jsonb not null default '{}'::jsonb,
   meta jsonb not null default '{}'::jsonb,
   schedule jsonb not null default '{}'::jsonb,
-  created_at timestamptz not null default now()
+  inbox_policy jsonb not null default '{}'::jsonb,
+  timezone text not null default 'Asia/Baku',
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
 );
+
+alter table tenants add column if not exists brand jsonb default '{}'::jsonb;
+alter table tenants add column if not exists meta jsonb default '{}'::jsonb;
+alter table tenants add column if not exists schedule jsonb default '{}'::jsonb;
+alter table tenants add column if not exists inbox_policy jsonb default '{}'::jsonb;
+alter table tenants add column if not exists timezone text default 'Asia/Baku';
+alter table tenants add column if not exists updated_at timestamptz default now();
 
 create index if not exists idx_tenants_key on tenants(tenant_key);
 
 do $$
 begin
   if not exists (select 1 from tenants where tenant_key='neox') then
-    insert into tenants (tenant_key, name, brand, meta, schedule)
+    insert into tenants (tenant_key, name, brand, meta, schedule, inbox_policy, timezone)
     values (
       'neox',
       'NEOX',
@@ -403,14 +413,52 @@ begin
         'tz', 'Asia/Baku',
         'publishHourLocal', 10,
         'publishMinuteLocal', 0
-      )
+      ),
+      jsonb_build_object(
+        'autoReplyEnabled', true,
+        'createLeadEnabled', true,
+        'handoffEnabled', true,
+        'markSeenEnabled', true,
+        'typingIndicatorEnabled', true,
+        'suppressAiDuringHandoff', true,
+        'autoReleaseOnOperatorReply', false,
+        'allowedChannels', jsonb_build_array('instagram','facebook','whatsapp'),
+        'quietHoursEnabled', false,
+        'quietHoursStart', 0,
+        'quietHoursEnd', 0,
+        'humanKeywords', jsonb_build_array(
+          'operator','menecer','manager','human',
+          'adamla danışım','adamla danisim',
+          'real adam','zəng edin','zeng edin',
+          'call me','əlaqə','elaqe'
+        )
+      ),
+      'Asia/Baku'
     );
+  else
+    update tenants
+    set
+      inbox_policy = coalesce(inbox_policy, '{}'::jsonb),
+      timezone = coalesce(nullif(timezone, ''), 'Asia/Baku')
+    where tenant_key = 'neox';
+  end if;
+exception when others then null;
+end$$;
+
+do $$
+begin
+  if not exists (select 1 from pg_trigger where tgname = 'trg_tenants_updated_at') then
+    execute '
+      create trigger trg_tenants_updated_at
+      before update on tenants
+      for each row execute function set_updated_at();
+    ';
   end if;
 exception when others then null;
 end$$;
 
 -- ============================================================
--- content_items (DRAFT + ASSET + PUBLISH lifecycle)
+-- content_items
 -- ============================================================
 create table if not exists content_items (
   id uuid primary key default gen_random_uuid(),
@@ -443,12 +491,10 @@ create table if not exists content_items (
 alter table content_items add column if not exists proposal_id uuid;
 alter table content_items add column if not exists thread_id uuid;
 alter table content_items add column if not exists job_id uuid;
-
 alter table content_items add column if not exists status text;
 alter table content_items add column if not exists version int;
 alter table content_items add column if not exists content_pack jsonb default '{}'::jsonb;
 alter table content_items add column if not exists last_feedback text;
-
 alter table content_items add column if not exists tenant_key text;
 alter table content_items add column if not exists type text;
 alter table content_items add column if not exists title text;
@@ -460,7 +506,6 @@ alter table content_items add column if not exists approved_at timestamptz;
 alter table content_items add column if not exists approved_by text;
 alter table content_items add column if not exists published_at timestamptz;
 alter table content_items add column if not exists publish jsonb default '{}'::jsonb;
-
 alter table content_items add column if not exists created_at timestamptz default now();
 alter table content_items add column if not exists updated_at timestamptz default now();
 
@@ -595,6 +640,12 @@ create table if not exists inbox_threads (
   labels jsonb not null default '[]'::jsonb,
   meta jsonb not null default '{}'::jsonb,
 
+  handoff_active boolean not null default false,
+  handoff_reason text,
+  handoff_priority text not null default 'normal',
+  handoff_at timestamptz,
+  handoff_by text,
+
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -614,6 +665,11 @@ alter table inbox_threads add column if not exists unread_count int;
 alter table inbox_threads add column if not exists assigned_to text;
 alter table inbox_threads add column if not exists labels jsonb default '[]'::jsonb;
 alter table inbox_threads add column if not exists meta jsonb default '{}'::jsonb;
+alter table inbox_threads add column if not exists handoff_active boolean default false;
+alter table inbox_threads add column if not exists handoff_reason text;
+alter table inbox_threads add column if not exists handoff_priority text default 'normal';
+alter table inbox_threads add column if not exists handoff_at timestamptz;
+alter table inbox_threads add column if not exists handoff_by text;
 alter table inbox_threads add column if not exists created_at timestamptz default now();
 alter table inbox_threads add column if not exists updated_at timestamptz default now();
 
@@ -652,6 +708,14 @@ begin
   exception when others then null;
   end;
   begin
+    alter table inbox_threads alter column handoff_active set default false;
+  exception when others then null;
+  end;
+  begin
+    alter table inbox_threads alter column handoff_priority set default 'normal';
+  exception when others then null;
+  end;
+  begin
     alter table inbox_threads alter column updated_at set default now();
   exception when others then null;
   end;
@@ -682,10 +746,24 @@ begin
       check (channel in ('instagram','facebook','whatsapp','web','email','other'));
   exception when others then null;
   end;
+
+  begin
+    execute 'alter table inbox_threads drop constraint if exists inbox_threads_handoff_priority_check';
+  exception when others then null;
+  end;
+
+  begin
+    alter table inbox_threads
+      add constraint inbox_threads_handoff_priority_check
+      check (handoff_priority in ('low','normal','high','urgent'));
+  exception when others then null;
+  end;
 end$$;
 
-create unique index if not exists uq_inbox_threads_external
-  on inbox_threads(channel, external_thread_id)
+drop index if exists uq_inbox_threads_external;
+
+create unique index if not exists uq_inbox_threads_tenant_channel_external
+  on inbox_threads(tenant_key, channel, external_thread_id)
   where external_thread_id is not null;
 
 create index if not exists idx_inbox_threads_tenant_status_updated
@@ -696,6 +774,9 @@ create index if not exists idx_inbox_threads_last_message
 
 create index if not exists idx_inbox_threads_unread
   on inbox_threads(unread_count desc, updated_at desc);
+
+create index if not exists idx_inbox_threads_handoff_active
+  on inbox_threads(tenant_key, handoff_active, updated_at desc);
 
 do $$
 begin
@@ -831,6 +912,10 @@ begin
   end if;
 end$$;
 
+create unique index if not exists uq_inbox_messages_thread_direction_external
+  on inbox_messages(thread_id, direction, external_message_id)
+  where external_message_id is not null;
+
 create unique index if not exists uq_inbox_messages_external
   on inbox_messages(thread_id, external_message_id)
   where external_message_id is not null;
@@ -840,6 +925,10 @@ create index if not exists idx_inbox_messages_thread_sent
 
 create index if not exists idx_inbox_messages_tenant_created
   on inbox_messages(tenant_key, created_at desc);
+
+create index if not exists idx_inbox_messages_external_lookup
+  on inbox_messages(tenant_key, external_message_id, created_at desc)
+  where external_message_id is not null;
 
 -- ============================================================
 -- leads
@@ -959,7 +1048,7 @@ begin
   begin
     alter table leads
       add constraint leads_status_check
-      check (status in ('open','archived','spam'));
+      check (status in ('open','archived','spam','closed'));
   exception when others then null;
   end;
 end$$;
@@ -1016,21 +1105,6 @@ exception when others then null;
 end$$;
 
 -- ============================================================
--- inbox_threads updated_at trigger
--- ============================================================
-do $$
-begin
-  if not exists (select 1 from pg_trigger where tgname = 'trg_inbox_threads_updated_at') then
-    execute '
-      create trigger trg_inbox_threads_updated_at
-      before update on inbox_threads
-      for each row execute function set_updated_at();
-    ';
-  end if;
-exception when others then null;
-end$$;
-
--- ============================================================
 -- Mojibake repair (best-effort)
 -- ============================================================
 do $$
@@ -1076,6 +1150,5 @@ begin
     where full_name is not null and full_name ~ 'Ã.|Â.|â€|â€™|â€œ|â€�|â€“|â€”|â€¦';
   exception when others then null;
   end;
-
 exception when others then null;
 end$$;
