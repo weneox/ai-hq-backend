@@ -247,4 +247,4 @@ export default {
   hasIndustryPrompt,
   getRawIndustryPrompt,
   getIndustryPrompt,
-};
+}; 
