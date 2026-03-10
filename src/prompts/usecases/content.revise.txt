@@ -7,12 +7,70 @@ Inputs:
 Goal:
 Improve the draft while respecting CEO feedback.
 
-Rules:
-- Keep the SAME JSON schema as previousDraft.
-- Modify only necessary sections.
-- Improve hook, caption clarity, CTA, and visual plan.
-- If caption changes, update matching visual text.
+CORE REVISION PRINCIPLE:
+- This is a revision task, not a full regeneration unless the feedback clearly requires a major rewrite.
+- Preserve what is already strong.
+- Change only what needs to change.
+- Keep the output commercially usable and production-ready.
 
-Important:
-Return STRICT JSON only.
-No explanations.
+RULES:
+- Keep the SAME JSON schema as previousDraft.
+- Preserve the same top-level structure.
+- Preserve the same content type unless the feedback clearly requires a change.
+- Preserve the same format unless the feedback clearly requires a change.
+- Modify only necessary sections.
+- Improve hook, caption clarity, CTA, and visual plan where relevant.
+- If caption direction changes, update matching headline/subtitle/title/subline fields where needed.
+- If the visual direction changes, update visualPlan and all affected slides[].visualPrompt fields consistently.
+- Keep visual prompts aligned with the original visualPreset unless feedback clearly requires switching it.
+- If switching the visualPreset is necessary, keep the whole set coherent.
+
+REVISION PRIORITY ORDER:
+1. explicit CEO feedback
+2. schema preservation
+3. tenant tone / industry fit
+4. clarity, usefulness, polish
+5. minimal necessary changes
+
+CAPTION / COPY REVISION RULES:
+- Make the caption clearer, more natural, and more brand-appropriate
+- Remove robotic or repetitive phrasing
+- Strengthen the hook if weak
+- Make CTA more usable and commercially relevant
+- Keep copy concise and publishable
+- Avoid generic filler
+- Preserve the original business goal unless feedback clearly changes it
+
+VISUAL REVISION RULES:
+- Keep visuals text-free if the original schema/usecase requires text-free visuals
+- Update visualPlan.frames if the creative direction changes
+- Update slides[].visualDirection and slides[].visualPrompt when necessary
+- Keep prompts practical for production asset generation
+- Keep the scene premium, clean, uncluttered, and render-friendly
+- Avoid introducing UI, dashboards, posters, website sections, or readable text unless explicitly requested
+
+SLIDE / FRAME CONSISTENCY RULES:
+- Keep total slide/scene count the same unless feedback clearly requires a structural change
+- Ensure titles, subtitles, and CTA stay consistent with the revised direction
+- Ensure render hints still make sense after revision
+- Ensure the final slide or final scene still pushes CTA clearly
+- Ensure the opening cover or opening scene remains the strongest visual
+
+IF FEEDBACK IS MINIMAL:
+- Make subtle improvements only
+- Do not over-edit the draft
+- Preserve strong sections
+
+IF FEEDBACK IS STRONG:
+- Apply a more visible rewrite
+- Still preserve schema exactly
+- Keep the draft coherent and production-ready
+
+IMPORTANT:
+- Return STRICT JSON only
+- No explanations
+- No markdown
+- No extra wrapper text
+- Keep the SAME JSON schema as previousDraft
+- Do not remove required keys
+- Do not add unrelated new sections

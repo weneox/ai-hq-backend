@@ -1,19 +1,31 @@
 // src/services/n8nNotify.js
-// FINAL — Runway / Draft / Asset / Publish aware routing
+// FINAL v2.2 — tenant-ready / provider-ready routing + scheduler/full-auto support
+//
 // ✅ publish routes to N8N_WEBHOOK_PUBLISH_URL or /aihq-publish
 // ✅ approved/assets route to N8N_WEBHOOK_PROPOSAL_APPROVED_URL or /aihq-approved
 // ✅ supports full URL or base URL
 // ✅ keeps original action while sending normalized event
 // ✅ includes stable callback + prompt bundle + media/reel fields
+// ✅ tenant fallback now uses tenancy helper, not client hardcode
+// ✅ uses normalizePromptInput(...) before buildPromptBundle(...)
+// ✅ passes tenant/today/format/extra into prompt system correctly
+// ✅ tenantKey and tenantId are now separated correctly
+// ✅ NEW: scheduled content + automation mode payload support
 
 import { cfg } from "../config.js";
+import { getDefaultTenantKey, resolveTenantKey } from "../tenancy/index.js";
 import { deepFix } from "../utils/textFix.js";
 import { absoluteCallbackUrl } from "../utils/url.js";
 import { buildPromptBundle } from "./promptBundle.js";
+import { normalizePromptInput } from "./promptInput.js";
 import { postToN8n } from "../utils/n8n.js";
 
 function clean(x) {
   return String(x || "").trim();
+}
+
+function lower(x) {
+  return clean(x).toLowerCase();
 }
 
 function stripTrailingSlashes(u) {
@@ -47,6 +59,16 @@ function normalizeAspectRatio(x, fallbackFormat = "") {
   return "";
 }
 
+function nowIso() {
+  return new Date().toISOString();
+}
+
+function normalizeAutomationMode(v, fallback = "manual") {
+  const x = clean(v || fallback).toLowerCase();
+  if (x === "full_auto") return "full_auto";
+  return "manual";
+}
+
 function normalizeEventForTransport(event, extra = {}) {
   const raw = clean(event);
 
@@ -64,6 +86,11 @@ function normalizeEventForTransport(event, extra = {}) {
     case "content.publish":
     case "publish":
       return "content.publish";
+
+    case "tenant.draft.schedule.trigger":
+    case "scheduled.content":
+    case "scheduled.draft":
+      return "tenant.draft.schedule.trigger";
 
     default:
       return raw;
@@ -101,6 +128,14 @@ function pickWorkflowHint(event, extra = {}) {
     return "draft_auto";
   }
 
+  if (
+    action === "tenant.draft.schedule.trigger" ||
+    action === "scheduled.content" ||
+    action === "scheduled.draft"
+  ) {
+    return "scheduled_content";
+  }
+
   if (clean(event) === "proposal.approved") {
     return "approved";
   }
@@ -115,6 +150,7 @@ function pickWebhookUrl(event, extra = {}) {
   const perEvent = {
     "proposal.approved": clean(cfg.N8N_WEBHOOK_PROPOSAL_APPROVED_URL),
     "content.publish": clean(cfg.N8N_WEBHOOK_PUBLISH_URL),
+    "tenant.draft.schedule.trigger": clean(process.env.N8N_WEBHOOK_SCHEDULE_DRAFT_URL || ""),
   };
 
   if (perEvent[event]) {
@@ -141,6 +177,10 @@ function pickWebhookUrl(event, extra = {}) {
     return `${base}/aihq-publish`;
   }
 
+  if (event === "tenant.draft.schedule.trigger") {
+    return `${base}/aihq-scheduled-draft`;
+  }
+
   return `${base}/aihq-approved`;
 }
 
@@ -152,8 +192,24 @@ function pickThreadId(proposal, extra = {}) {
   return clean(extra.threadId || proposal?.thread_id || proposal?.threadId || "") || null;
 }
 
+function pickTenantKey(extra = {}, proposal = null) {
+  return resolveTenantKey(
+    extra.tenantKey ||
+      extra.tenant_key ||
+      proposal?.tenant_key ||
+      proposal?.tenantKey,
+    getDefaultTenantKey()
+  );
+}
+
 function pickTenantId(extra = {}, proposal = null) {
-  return clean(extra.tenantId || proposal?.tenant_id || cfg.DEFAULT_TENANT_KEY || "default") || "default";
+  return clean(
+    extra.tenantId ||
+      extra.tenant_id ||
+      proposal?.tenant_id ||
+      proposal?.tenantId ||
+      ""
+  ) || null;
 }
 
 function pickDecision(extra = {}, proposal = null) {
@@ -170,6 +226,133 @@ function pickDecidedAt(extra = {}, proposal = null) {
 
 function pickTitle(extra = {}, proposal = null) {
   return proposal?.title || extra.title || null;
+}
+
+function pickLanguage(extra = {}, proposal = null) {
+  return (
+    clean(extra.language || extra.lang || proposal?.language || proposal?.lang) ||
+    "az"
+  );
+}
+
+function buildTenantRuntime(proposal, extra = {}) {
+  const tenantKey = pickTenantKey(extra, proposal);
+  const tenantId = pickTenantId(extra, proposal);
+
+  const brand = isObject(extra.brand) ? extra.brand : {};
+  const tenant = isObject(extra.tenant) ? extra.tenant : {};
+  const proposalObj = isObject(proposal) ? proposal : {};
+  const proposalMeta = isObject(proposalObj.meta) ? proposalObj.meta : {};
+
+  return deepFix({
+    tenantKey,
+    tenantId,
+    companyName:
+      clean(
+        tenant.companyName ||
+          tenant.name ||
+          brand.companyName ||
+          brand.name ||
+          proposalObj.companyName ||
+          proposalMeta.companyName ||
+          extra.companyName
+      ) || tenantKey,
+    industryKey:
+      clean(
+        tenant.industryKey ||
+          tenant.industry ||
+          brand.industryKey ||
+          brand.industry ||
+          extra.industryKey ||
+          extra.industry ||
+          proposalObj.industryKey ||
+          proposalMeta.industryKey
+      ) || "generic_business",
+    defaultLanguage:
+      clean(
+        tenant.defaultLanguage ||
+          tenant.language ||
+          brand.defaultLanguage ||
+          brand.language ||
+          extra.language ||
+          proposalObj.language
+      ) || "az",
+    outputLanguage:
+      clean(
+        tenant.outputLanguage ||
+          brand.outputLanguage ||
+          extra.language ||
+          proposalObj.language
+      ) || "",
+    ctaStyle:
+      clean(
+        tenant.ctaStyle ||
+          brand.ctaStyle ||
+          extra.ctaStyle
+      ) || "contact",
+    visualTheme:
+      clean(
+        tenant.visualTheme ||
+          brand.visualTheme ||
+          extra.visualTheme
+      ) || "premium_modern",
+    brand: {
+      name:
+        clean(brand.name || tenant.brandName || tenant.companyName || extra.companyName) ||
+        undefined,
+      companyName:
+        clean(brand.companyName || tenant.companyName || extra.companyName) || undefined,
+      industryKey:
+        clean(brand.industryKey || tenant.industryKey || extra.industryKey) || undefined,
+      defaultLanguage:
+        clean(brand.defaultLanguage || tenant.defaultLanguage || extra.language) || undefined,
+      outputLanguage:
+        clean(brand.outputLanguage || tenant.outputLanguage || extra.language) || undefined,
+      ctaStyle:
+        clean(brand.ctaStyle || tenant.ctaStyle || extra.ctaStyle) || undefined,
+      visualTheme:
+        clean(brand.visualTheme || tenant.visualTheme || extra.visualTheme) || undefined,
+      tone: Array.isArray(brand.tone) ? brand.tone : Array.isArray(tenant.tone) ? tenant.tone : [],
+      services: Array.isArray(brand.services)
+        ? brand.services
+        : Array.isArray(tenant.services)
+        ? tenant.services
+        : [],
+      audiences: Array.isArray(brand.audiences)
+        ? brand.audiences
+        : Array.isArray(tenant.audiences)
+        ? tenant.audiences
+        : [],
+      requiredHashtags:
+        Array.isArray(brand.requiredHashtags)
+          ? brand.requiredHashtags
+          : Array.isArray(tenant.requiredHashtags)
+          ? tenant.requiredHashtags
+          : [],
+      preferredPresets:
+        Array.isArray(brand.preferredPresets)
+          ? brand.preferredPresets
+          : Array.isArray(tenant.preferredPresets)
+          ? tenant.preferredPresets
+          : [],
+      visualStyle: isObject(brand.visualStyle)
+        ? brand.visualStyle
+        : isObject(tenant.visualStyle)
+        ? tenant.visualStyle
+        : {},
+    },
+    meta: {
+      companyName:
+        clean(extra.companyName || proposalObj.companyName || proposalMeta.companyName) || undefined,
+      industryKey:
+        clean(extra.industryKey || proposalObj.industryKey || proposalMeta.industryKey) ||
+        undefined,
+      defaultLanguage:
+        clean(extra.language || proposalObj.language) || undefined,
+      ctaStyle:
+        clean(extra.ctaStyle) || undefined,
+    },
+  });
 }
 
 function buildMediaPayload(proposal, extra = {}) {
@@ -206,7 +389,10 @@ function buildMediaPayload(proposal, extra = {}) {
 
   const aspectRatio =
     normalizeAspectRatio(
-      extra.aspectRatio || extra.aspect_ratio || contentPack?.aspectRatio || contentPack?.aspect_ratio,
+      extra.aspectRatio ||
+        extra.aspect_ratio ||
+        contentPack?.aspectRatio ||
+        contentPack?.aspect_ratio,
       format || ""
     ) || null;
 
@@ -238,6 +424,106 @@ function buildMediaPayload(proposal, extra = {}) {
   });
 }
 
+function buildPromptExtra({
+  proposal,
+  extra,
+  media,
+  workflowHint,
+  mappedEvent,
+}) {
+  const format =
+    normalizeFormat(
+      extra.format ||
+        media?.format ||
+        proposal?.format ||
+        extra.postType ||
+        extra.post_type
+    ) || "image";
+
+  const automationMode = normalizeAutomationMode(
+    extra.automationMode,
+    extra.autoPublish ? "full_auto" : "manual"
+  );
+
+  const base = deepFix({
+    ...extra,
+    format,
+    language: pickLanguage(extra, proposal),
+    workflowHint,
+    mappedEvent,
+    proposalId: pickProposalId(proposal, extra),
+    threadId: pickThreadId(proposal, extra),
+    tenantKey: pickTenantKey(extra, proposal),
+    tenantId: pickTenantId(extra, proposal),
+    title: pickTitle(extra, proposal),
+    decision: pickDecision(extra, proposal),
+    automationMode,
+    autoPublish: automationMode === "full_auto",
+    scheduledTime: clean(extra.scheduledTime || ""),
+    scheduleTimezone: clean(extra.timezone || extra.scheduleTimezone || ""),
+    dateKey: clean(extra.dateKey || ""),
+    contentPack:
+      extra.contentPack ||
+      extra.content_pack ||
+      proposal?.content_pack ||
+      null,
+    visualPlan: media?.visualPlan || extra.visualPlan || null,
+    slides: media?.slides || extra.slides || [],
+    voiceoverText: media?.voiceoverText || extra.voiceoverText || null,
+    videoPrompt: media?.videoPrompt || extra.videoPrompt || null,
+    aspectRatio: media?.aspectRatio || extra.aspectRatio || null,
+    assetUrls:
+      extra.assetUrls ||
+      extra.generatedAssetUrls ||
+      extra.assets ||
+      [],
+  });
+
+  if (mappedEvent === "content.publish") {
+    base.approvedDraft =
+      extra.approvedDraft ||
+      extra.draft ||
+      extra.content ||
+      extra.contentPack ||
+      proposal?.content_pack ||
+      null;
+  }
+
+  if (mappedEvent === "proposal.approved") {
+    base.approvedProposal =
+      extra.approvedProposal ||
+      extra.proposal ||
+      proposal ||
+      null;
+    base.topicHint =
+      clean(extra.topicHint || extra.topic || proposal?.title) || "";
+    base.goalHint =
+      clean(extra.goalHint || extra.goal) || "";
+  }
+
+  if (mappedEvent === "content.revise") {
+    base.previousDraft =
+      extra.previousDraft ||
+      extra.draft ||
+      extra.content ||
+      proposal?.content_pack ||
+      null;
+    base.feedback = clean(extra.feedback || "");
+  }
+
+  if (mappedEvent === "tenant.draft.schedule.trigger") {
+    base.scheduleTrigger = {
+      dateKey: clean(extra.dateKey || ""),
+      timezone: clean(extra.timezone || extra.scheduleTimezone || ""),
+      scheduledTime: clean(extra.scheduledTime || ""),
+      automationMode,
+      autoPublish: automationMode === "full_auto",
+    };
+  }
+
+  return base;
+}
+
 export function notifyN8n(event, proposal, extra = {}) {
   const action = clean(extra.action || event);
   const mappedEvent = normalizeEventForTransport(event, extra);
@@ -250,15 +536,43 @@ export function notifyN8n(event, proposal, extra = {}) {
 
   const callbackRel = extra?.callback?.url || "/api/executions/callback";
   const callbackAbs = absoluteCallbackUrl(callbackRel);
-  const prompts = buildPromptBundle(action || mappedEvent);
   const media = buildMediaPayload(proposal, extra);
   const workflowHint = pickWorkflowHint(event, { ...extra, action });
+
+  const tenantRuntime = buildTenantRuntime(proposal, extra);
+  const promptExtra = buildPromptExtra({
+    proposal,
+    extra,
+    media,
+    workflowHint,
+    mappedEvent,
+  });
+
+  const normalizedPromptInput = normalizePromptInput(action || mappedEvent, {
+    tenant: tenantRuntime,
+    today: extra.today || nowIso(),
+    format: promptExtra.format || media?.format || proposal?.format || "image",
+    extra: promptExtra,
+  });
+
+  const prompts = buildPromptBundle(action || mappedEvent, {
+    tenant: normalizedPromptInput.tenant,
+    today: normalizedPromptInput.today,
+    format: normalizedPromptInput.format,
+    extra: normalizedPromptInput.extra,
+  });
+
+  const automationMode = normalizeAutomationMode(
+    extra.automationMode,
+    extra.autoPublish ? "full_auto" : "manual"
+  );
 
   const payload = deepFix({
     event: mappedEvent,
     action,
     workflowHint,
 
+    tenantKey: pickTenantKey(extra, proposal),
     tenantId: pickTenantId(extra, proposal),
     proposalId: pickProposalId(proposal, extra),
     threadId: pickThreadId(proposal, extra),
@@ -277,7 +591,23 @@ export function notifyN8n(event, proposal, extra = {}) {
     },
 
     prompts,
+    promptInput: normalizedPromptInput,
     media,
+
+    automation: {
+      mode: automationMode,
+      enabled: automationMode === "full_auto",
+      autoPublish: automationMode === "full_auto",
+    },
+
+    schedule: {
+      dateKey: clean(extra.dateKey || ""),
+      timezone: clean(extra.timezone || extra.scheduleTimezone || ""),
+      scheduledTime: clean(extra.scheduledTime || ""),
+      scheduledHour: extra.scheduledHour ?? null,
+      scheduledMinute: extra.scheduledMinute ?? null,
+      triggerType: clean(extra.triggerType || ""),
+    },
 
     title: pickTitle(extra, proposal),
     decision: pickDecision(extra, proposal),
@@ -289,6 +619,9 @@ export function notifyN8n(event, proposal, extra = {}) {
       provider: media?.video?.provider || extra.provider || null,
       format: media?.format || null,
       aspectRatio: media?.aspectRatio || null,
+      language: normalizedPromptInput?.language || null,
+      automationMode,
+      autoPublish: automationMode === "full_auto",
     }),
 
     ...extra,

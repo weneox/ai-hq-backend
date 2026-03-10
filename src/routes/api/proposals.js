@@ -1,5 +1,5 @@
 import express from "express";
-import { cfg } from "../../config.js";
+import { resolveTenantKeyFromReq } from "../../tenancy/index.js";
 
 import {
   okJson,
@@ -54,6 +54,49 @@ import {
 } from "./proposals.status.js";
 
 import { buildN8nExtra } from "./proposals.notify.js";
+
+function clean(v) {
+  return String(v || "").trim();
+}
+
+function normalizeAutomationMode(v, fallback = "manual") {
+  const x = clean(v || fallback).toLowerCase();
+  if (x === "full_auto") return "full_auto";
+  return "manual";
+}
+
+function pickDecisionActor(req, fallback = "ceo") {
+  return (
+    clean(
+      req.body?.by ||
+        req.body?.actor ||
+        req.headers["x-actor"] ||
+        req.headers["x-user-email"] ||
+        req.auth?.email ||
+        fallback
+    ) || fallback
+  );
+}
+
+function pickAutomationMeta(req) {
+  const mode = normalizeAutomationMode(
+    req.body?.automationMode ||
+      req.body?.mode ||
+      req.headers["x-automation-mode"] ||
+      "manual",
+    "manual"
+  );
+
+  const autoPublish =
+    mode === "full_auto" ||
+    req.body?.autoPublish === true ||
+    String(req.headers["x-auto-publish"] || "").trim() === "1";
+
+  return {
+    mode,
+    autoPublish,
+  };
+}
 
 export function proposalsRoutes({ db, wsHub }) {
   const r = express.Router();
@@ -175,12 +218,10 @@ export function proposalsRoutes({ db, wsHub }) {
   r.post("/proposals/:id/decision", async (req, res) => {
     const id = String(req.params.id || "").trim();
     const decision = normalizeDecision(req.body?.decision);
-    const by = fixText(String(req.body?.by || "ceo").trim()) || "ceo";
+    const by = pickDecisionActor(req, "ceo");
     const reason = fixText(String(req.body?.reason || "").trim());
-    const tenantId =
-      fixText(
-        String(req.body?.tenantId || cfg.DEFAULT_TENANT_KEY || "default").trim()
-      ) || "default";
+    const tenantId = resolveTenantKeyFromReq(req);
+    const automation = pickAutomationMeta(req);
 
     if (!id) {
       return okJson(res, { ok: false, error: "proposalId required" });
@@ -212,6 +253,7 @@ export function proposalsRoutes({ db, wsHub }) {
             ...safePayload(p),
             decision: "rejected",
             reason,
+            automationMode: automation.mode,
           });
 
           const notif = memCreateNotification({
@@ -219,13 +261,21 @@ export function proposalsRoutes({ db, wsHub }) {
             type: "info",
             title: "Proposal rejected",
             body: reason || safeTitle(p),
-            payload: { proposalId: p.id, decision, reason },
+            payload: {
+              proposalId: p.id,
+              decision,
+              reason,
+              automationMode: automation.mode,
+            },
           });
 
           wsHub?.broadcast?.({ type: "proposal.updated", proposal: p });
           wsHub?.broadcast?.({ type: "notification.created", notification: notif });
 
-          memAudit(by, "proposal.reject", "proposal", p.id, { reason });
+          memAudit(by, "proposal.reject", "proposal", p.id, {
+            reason,
+            automationMode: automation.mode,
+          });
 
           try {
             notifyN8n("proposal.rejected", p, {
@@ -234,6 +284,8 @@ export function proposalsRoutes({ db, wsHub }) {
               reason,
               topic: safeTopic(p),
               payload: deepFix(p.payload),
+              automationMode: automation.mode,
+              autoPublish: automation.autoPublish,
             });
           } catch {}
 
@@ -247,6 +299,7 @@ export function proposalsRoutes({ db, wsHub }) {
           ...safePayload(p),
           decision: "approved",
           reason,
+          automationMode: automation.mode,
         });
 
         const job = memCreateJob({
@@ -267,6 +320,8 @@ export function proposalsRoutes({ db, wsHub }) {
             neededAssets: safeNeededAssets(p),
             reelMeta: safeReelMeta(p),
             payload: deepFix(p.payload),
+            automationMode: automation.mode,
+            autoPublish: automation.autoPublish,
           },
         });
 
@@ -274,15 +329,25 @@ export function proposalsRoutes({ db, wsHub }) {
           recipient: "ceo",
           type: "info",
           title: "Drafting started",
-          body: "n8n draft hazırlayır…",
-          payload: { proposalId: p.id, jobId: job.id },
+          body:
+            automation.mode === "full_auto"
+              ? "Auto content draft hazırlanır…"
+              : "n8n draft hazırlayır…",
+          payload: {
+            proposalId: p.id,
+            jobId: job.id,
+            automationMode: automation.mode,
+          },
         });
 
         wsHub?.broadcast?.({ type: "proposal.updated", proposal: p });
         wsHub?.broadcast?.({ type: "execution.updated", execution: job });
         wsHub?.broadcast?.({ type: "notification.created", notification: notif });
 
-        memAudit(by, "proposal.approve", "proposal", p.id, { reason });
+        memAudit(by, "proposal.approve", "proposal", p.id, {
+          reason,
+          automationMode: automation.mode,
+        });
 
         try {
           notifyN8n(
@@ -293,6 +358,8 @@ export function proposalsRoutes({ db, wsHub }) {
               proposal: p,
               jobId: job.id,
               reason,
+              automationMode: automation.mode,
+              autoPublish: automation.autoPublish,
             })
           );
         } catch {}
@@ -319,7 +386,7 @@ export function proposalsRoutes({ db, wsHub }) {
                payload = (coalesce(payload,'{}'::jsonb) || $3::jsonb)
            where id::text = $1::text
            returning id, thread_id, agent, type, status, title, payload, created_at, decided_at, decision_by`,
-          [id, by, deepFix({ decision: "rejected", reason })]
+          [id, by, deepFix({ decision: "rejected", reason, automationMode: automation.mode })]
         );
 
         const p2 = updated.rows?.[0] || null;
@@ -335,7 +402,12 @@ export function proposalsRoutes({ db, wsHub }) {
           type: "info",
           title: "Proposal rejected",
           body: reason || safeTitle(p2),
-          payload: { proposalId: p2.id, decision: "rejected", reason },
+          payload: {
+            proposalId: p2.id,
+            decision: "rejected",
+            reason,
+            automationMode: automation.mode,
+          },
         });
 
         wsHub?.broadcast?.({ type: "proposal.updated", proposal: p2 });
@@ -345,11 +417,16 @@ export function proposalsRoutes({ db, wsHub }) {
           db,
           title: "Rejected",
           body: safeTitle(p2) || "Proposal rejected",
-          data: { type: "proposal.rejected", proposalId: p2.id },
+          data: {
+            type: "proposal.rejected",
+            proposalId: p2.id,
+            automationMode: automation.mode,
+          },
         });
 
         await dbAudit(db, by, "proposal.reject", "proposal", String(p2.id), {
           reason,
+          automationMode: automation.mode,
         });
 
         try {
@@ -359,6 +436,8 @@ export function proposalsRoutes({ db, wsHub }) {
             reason,
             topic: safeTopic(p2),
             payload: deepFix(p2.payload),
+            automationMode: automation.mode,
+            autoPublish: automation.autoPublish,
           });
         } catch {}
 
@@ -373,7 +452,7 @@ export function proposalsRoutes({ db, wsHub }) {
              payload = (coalesce(payload,'{}'::jsonb) || $3::jsonb)
          where id::text = $1::text
          returning id, thread_id, agent, type, status, title, payload, created_at, decided_at, decision_by`,
-        [id, by, deepFix({ decision: "approved", reason })]
+        [id, by, deepFix({ decision: "approved", reason, automationMode: automation.mode })]
       );
 
       const p2 = updatedQ.rows?.[0] || null;
@@ -402,6 +481,8 @@ export function proposalsRoutes({ db, wsHub }) {
           neededAssets: safeNeededAssets(p2),
           reelMeta: safeReelMeta(p2),
           payload: deepFix(p2.payload),
+          automationMode: automation.mode,
+          autoPublish: automation.autoPublish,
         },
       });
 
@@ -409,8 +490,15 @@ export function proposalsRoutes({ db, wsHub }) {
         recipient: "ceo",
         type: "info",
         title: "Drafting started",
-        body: "n8n draft hazırlayır…",
-        payload: { proposalId: p2.id, jobId: job?.id || null },
+        body:
+          automation.mode === "full_auto"
+            ? "Auto content draft hazırlanır…"
+            : "n8n draft hazırlayır…",
+        payload: {
+          proposalId: p2.id,
+          jobId: job?.id || null,
+          automationMode: automation.mode,
+        },
       });
 
       wsHub?.broadcast?.({ type: "proposal.updated", proposal: p2 });
@@ -419,17 +507,19 @@ export function proposalsRoutes({ db, wsHub }) {
 
       await pushBroadcastToCeo({
         db,
-        title: "Drafting başladı",
+        title: automation.mode === "full_auto" ? "Auto drafting başladı" : "Drafting başladı",
         body: safeTitle(p2) || "Draft hazırlanır…",
         data: {
           type: "proposal.in_progress",
           proposalId: p2.id,
           jobId: job?.id || null,
+          automationMode: automation.mode,
         },
       });
 
       await dbAudit(db, by, "proposal.approve", "proposal", String(p2.id), {
         reason,
+        automationMode: automation.mode,
       });
 
       try {
@@ -441,6 +531,8 @@ export function proposalsRoutes({ db, wsHub }) {
             proposal: p2,
             jobId: job?.id || null,
             reason,
+            automationMode: automation.mode,
+            autoPublish: automation.autoPublish,
           })
         );
       } catch {}

@@ -1,7 +1,17 @@
 TASK: Prepare the FINAL publish-ready pack from an approved draft.
 
+Context:
+- You are preparing the final publishing payload from an already approved content draft.
+- The output must be production-usable.
+- The result may be sent to publishing workflows, CMS tools, social schedulers, or platform APIs.
+- Keep the output concise, final, and clean.
+- Do not return analysis.
+- Do not ask follow-up questions.
+- Do not include placeholders.
+
 OUTPUT: STRICT JSON only.
 
+JSON SCHEMA:
 {
   "type": "content_publish_pack",
   "language": "az|tr|ru|en",
@@ -17,18 +27,80 @@ OUTPUT: STRICT JSON only.
   }
 }
 
-Rules:
+PRIMARY GOAL:
+Convert the approved draft into a final publish-ready pack with:
+- final polished caption
+- final cleaned hashtags
+- correct post type
+- usable asset URLs array
+- platform-ready support metadata
 
-Caption:
-- must be final
-- no placeholders
+INPUT INTERPRETATION RULES:
+- Use the approved draft as the source of truth.
+- If content is already strong, refine lightly instead of rewriting aggressively.
+- Preserve the tenant’s language unless another language is explicitly requested.
+- Preserve the brand tone and business relevance.
+- Preserve the business topic and core CTA intent.
+- If the draft contains image / reel / carousel structure, map it correctly to postType.
 
-Hashtags:
-- 8 to 18
-- relevant to topic
+POST TYPE RULES:
+- If the approved draft format is "image", use postType = "feed"
+- If the approved draft format is "carousel", use postType = "carousel"
+- If the approved draft format is "reel", use postType = "reel"
+- Default to "feed" only if the format is unclear and there is clearly one static asset
 
-If assetUrls are missing:
-- return empty array
-- do not add explanations.
+CAPTION RULES:
+- Must be final
+- Must sound natural
+- Must be commercially usable
+- Must not contain placeholders
+- Must be brand-appropriate
+- Keep it concise but complete
+- Keep the structure practical:
+  - hook
+  - value
+  - CTA
+- Avoid robotic phrasing
+- Avoid excessive emoji spam unless the tenant tone clearly supports it
+- Avoid generic empty hype
 
-Return JSON only.
+HASHTAG RULES:
+- 8 to 18 hashtags
+- Relevant to the topic
+- Relevant to the tenant and brand
+- Mix local-language and English hashtags when appropriate
+- Keep them publishable and realistic
+- Remove weak or repetitive hashtags
+- Include tenant-required hashtags when relevant
+- If the tenant is AI / automation related, include #AI and #Automation when relevant
+
+ASSET URL RULES:
+- If assetUrls are available from the approved draft or execution output, include them
+- If assetUrls are missing, return []
+- Do not explain missing assets
+- Do not invent URLs
+
+META RULES:
+- firstComment:
+  - should support engagement or discovery
+  - may contain secondary hashtags or a short follow-up CTA
+  - should be publishable immediately
+- altText:
+  - should describe the actual visual in a helpful, platform-usable way
+  - keep it concise but meaningful
+  - do not mention text overlays unless they truly exist in the final asset
+- utmSuggestion:
+  - should be a short practical suggestion string
+  - keep it simple and safe for marketers
+  - example style:
+    utm_source=instagram&utm_medium=social&utm_campaign=automation_awareness
+  - do not overcomplicate
+
+STRICT OUTPUT RULES:
+- Return STRICT JSON only
+- No markdown
+- No explanations
+- No comments
+- No extra keys
+- No empty placeholder strings like "TBD"
+- If asset URLs are unavailable, return an empty array

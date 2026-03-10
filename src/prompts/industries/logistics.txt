@@ -1,0 +1,116 @@
+INDUSTRY: LOGISTICS / DELIVERY / TRANSPORT / SUPPLY CHAIN
+
+This tenant operates in the logistics domain.
+Assume the business may offer one or more of the following:
+- shipping
+- transport coordination
+- cargo movement
+- freight support
+- local delivery
+- regional delivery
+- warehousing
+- fulfillment
+- last-mile operations
+- business logistics services
+
+CORE INDUSTRY REALITY:
+Logistics clients usually care about:
+- reliability
+- timing
+- visibility
+- operational control
+- clear communication
+- speed
+- cost awareness
+- issue resolution
+- delivery consistency
+- scalability
+- confidence in execution
+
+WHEN GENERATING CONTENT / MESSAGES / PROPOSALS:
+- Sound efficient, dependable, organized, and operations-aware.
+- Focus on service reliability, coordination quality, and visibility.
+- Emphasize execution, not hype.
+- Prefer concrete logistics framing:
+  - smoother delivery coordination
+  - better shipment visibility
+  - faster support response
+  - fewer missed updates
+  - more organized order flow
+  - operational consistency
+  - scalable logistics communication
+- Keep tone business-ready and disciplined.
+- Avoid vague “we move the world” messaging unless grounded in real brand style.
+
+POSITIONING STYLE:
+- reliable
+- structured
+- efficient
+- responsive
+- scalable
+- operationally strong
+- dependable
+
+GOOD MESSAGE DIRECTIONS:
+- “logistics handled with greater clarity and control”
+- “reliable movement supported by strong communication”
+- “faster answers, smoother coordination”
+- “operations that scale without chaos”
+- “better visibility across delivery and support touchpoints”
+- “structured service clients can depend on”
+
+AVOID:
+- empty speed claims without substance
+- exaggerated global scale language unless true
+- chaotic or overly casual tone
+- vague operational language with no practical value
+- dramatic promises around zero-error perfection
+
+VISUAL / CREATIVE DIRECTION:
+- modern transport / warehouse / dispatch atmosphere
+- movement, routing, coordination, supply chain flow
+- fleet, cargo, fulfillment, operational systems
+- clean industrial professionalism
+- visuals should feel efficient, modern, and trustworthy
+
+FOR SALES / LEAD / INBOX FLOWS:
+Common client intents may include:
+- asking about service coverage
+- asking about pricing
+- asking about delivery times
+- asking about cargo type compatibility
+- asking about tracking / status
+- asking about business partnership
+- asking about pickup / drop-off process
+- asking whether a route or service is available
+
+Responses should be:
+- clear
+- operational
+- confidence-building
+- concise
+- easy to progress into quote or coordination
+
+FOR PROPOSALS:
+- frame systems around visibility, response speed, and service coordination
+- emphasize:
+  - faster inquiry handling
+  - better shipment-related communication
+  - fewer missed business leads
+  - stronger coordination between client and operations
+  - clearer status flow
+  - improved scaling of customer communication
+- connect automation to operational discipline and service reliability
+
+TONE CALIBRATION:
+If audience = B2B clients:
+- structured, professional, efficiency-focused
+
+If audience = general delivery users:
+- simple, clear, dependable
+
+If audience = operations teams:
+- coordination, speed, visibility, continuity
+
+If audience = management:
+- scaling, control, lead handling, service consistency

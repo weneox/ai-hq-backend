@@ -1,8 +1,9 @@
 // src/services/inboxBrain.js
-// FINAL v4.0 — inbox reliability layer + AI/fallback decisioning
+// FINAL v5.0 — tenant-safe inbox reliability layer + AI/fallback decisioning
 
 import OpenAI from "openai";
 import { cfg } from "../config.js";
+import { getDefaultTenantKey, resolveTenantKey } from "../tenancy/index.js";
 import { getInboxPolicy, isPolicyQuietHours } from "./inboxPolicy.js";
 
 function s(v) {
@@ -131,6 +132,20 @@ function parseJsonLoose(text) {
   return null;
 }
 
+function getResolvedTenantKey(tenantKey) {
+  return resolveTenantKey(tenantKey, getDefaultTenantKey());
+}
+
+function getTenantBrandName(tenant, tenantKey) {
+  const brandName =
+    tenant?.brand?.displayName ||
+    tenant?.brand?.name ||
+    tenant?.name ||
+    getResolvedTenantKey(tenantKey);
+
+  return s(brandName || "Brand");
+}
+
 function getThreadHandoffState(thread) {
   const metaHandoff =
     thread?.meta && typeof thread.meta === "object" && thread.meta.handoff
@@ -231,7 +246,7 @@ function buildHistorySnippet(messages = [], limit = 6) {
 
 function buildMeta({ tenantKey, thread, message, intent, score = 0, extra = {} }) {
   return {
-    tenantKey: s(tenantKey || "neox"),
+    tenantKey: getResolvedTenantKey(tenantKey),
     threadId: s(thread?.id),
     messageId: s(message?.id),
     intent: s(intent || "general"),
@@ -337,7 +352,10 @@ function getReliabilityFlags({ text, thread, recentMessages = [], quietHoursAppl
   const cooldownMs = Math.max(0, Number(cfg.INBOX_REPLY_COOLDOWN_MS || 45000));
   const operatorCooldownMs = Math.max(0, Number(cfg.INBOX_OPERATOR_REPLY_SUPPRESS_MS || 300000));
 
-  const latestOutboundAgeMs = latestOutbound ? Math.max(0, now - toMs(latestOutbound.sent_at || latestOutbound.created_at)) : null;
+  const latestOutboundAgeMs = latestOutbound
+    ? Math.max(0, now - toMs(latestOutbound.sent_at || latestOutbound.created_at))
+    : null;
+
   const operatorOutboundAgeMs = lastOperatorOutbound
     ? Math.max(0, now - toMs(lastOperatorOutbound.sent_at || lastOperatorOutbound.created_at))
     : null;
@@ -373,6 +391,7 @@ async function aiDecideInbox({
   tenantKey,
   thread,
   message,
+  tenant = null,
   policy,
   quietHoursApplied,
   recentMessages = [],
@@ -384,18 +403,20 @@ async function aiDecideInbox({
   const model = s(cfg.OPENAI_MODEL || "gpt-5") || "gpt-5";
   const max_output_tokens = Number(cfg.OPENAI_MAX_OUTPUT_TOKENS || 800);
   const historySnippet = buildHistorySnippet(recentMessages, 6);
+  const brandName = getTenantBrandName(tenant, tenantKey);
+  const resolvedTenantKey = getResolvedTenantKey(tenantKey);
 
   const prompt = `
-You are an AI inbox copilot for NEOX.
+You are an AI inbox copilot for ${brandName}.
 
 Your task:
 Analyze the incoming customer message and return ONLY valid JSON.
 
 Business context:
-- NEOX offers website development, AI automation, chatbot systems, Instagram/WhatsApp/Messenger automation, SMM-related digital solutions.
+- This brand provides digital services such as website development, AI automation, chatbot systems, Instagram/WhatsApp/Messenger automation, and related business automation solutions.
 - The goal is to be helpful, short, sales-aware, and professional.
 - Keep replies concise, natural, and human-like.
-- Default language should match the user's message. Azerbaijani is common.
+- Default language should match the user's message.
 - Do not invent prices.
 - If user asks pricing, encourage them to briefly describe the needed service.
 - If user wants a human/operator, set handoff=true.
@@ -429,12 +450,13 @@ Rules:
 - if handoff=true then handoffReason should be filled
 
 Context:
-tenantKey=${s(tenantKey || "neox")}
-channel=${s(channel || "instagram")}
-externalUserId=${s(externalUserId || "")}
-threadId=${s(thread?.id || "")}
-messageId=${s(message?.id || "")}
-threadStatus=${s(thread?.status || "open")}
+brandName=${JSON.stringify(brandName)}
+tenantKey=${JSON.stringify(resolvedTenantKey)}
+channel=${JSON.stringify(s(channel || "instagram"))}
+externalUserId=${JSON.stringify(s(externalUserId || ""))}
+threadId=${JSON.stringify(s(thread?.id || ""))}
+messageId=${JSON.stringify(s(message?.id || ""))}
+threadStatus=${JSON.stringify(s(thread?.status || "open"))}
 quietHoursApplied=${quietHoursApplied ? "true" : "false"}
 policy.autoReplyEnabled=${Boolean(policy?.autoReplyEnabled)}
 policy.createLeadEnabled=${Boolean(policy?.createLeadEnabled)}
@@ -448,7 +470,7 @@ ${historySnippet || "(empty)"}
 
 Incoming message:
 ${JSON.stringify(String(text || ""))}
-`.trim();
+  `.trim();
 
   try {
     const resp = await openai.responses.create({
@@ -505,6 +527,7 @@ function buildInboxActionsFallback({
   tenantKey,
   thread,
   message,
+  tenant = null,
   policy,
   quietHoursApplied,
   recentMessages = [],
@@ -512,10 +535,11 @@ function buildInboxActionsFallback({
 }) {
   const incoming = lower(text);
   const actions = [];
+  const brandName = getTenantBrandName(tenant, tenantKey);
 
   let intent = "general";
   let replyText =
-    "Salam. NEOX-a yazdığınız üçün təşəkkür edirik. Sizə məmnuniyyətlə kömək edəcəyik. Xidmət, qiymət və ya layihə detalları yazın.";
+    `Salam. ${brandName}-a yazdığınız üçün təşəkkür edirik. Sizə məmnuniyyətlə kömək edəcəyik. Xidmət, qiymət və ya layihə detalları yazın.`;
   let leadScore = 10;
   let shouldCreateLead = false;
   let shouldHandoff = false;
@@ -556,7 +580,7 @@ function buildInboxActionsFallback({
     leadScore = 85;
     shouldCreateLead = true;
     replyText =
-      "Salam. Qiymət görüləcək işin həcminə görə dəyişir. İstədiyiniz xidməti qısa yazın, sizə uyğun həll və yönləndirmə edək.";
+      "Qiymət görüləcək işin həcminə görə dəyişir. İstədiyiniz xidməti qısa yazın, sizə uyğun həll və yönləndirmə edək.";
   } else if (
     includesAny(incoming, [
       "salam",
@@ -571,7 +595,7 @@ function buildInboxActionsFallback({
     intent = "greeting";
     leadScore = 20;
     replyText =
-      "Salam. NEOX-a xoş gəlmisiniz. Website, AI avtomatlaşdırma, SMM və chatbot həlləri üzrə kömək edə bilərik. Hansı xidmətlə maraqlanırsınız?";
+      `${brandName}-a xoş gəlmisiniz. Website, AI avtomatlaşdırma, SMM və chatbot həlləri üzrə kömək edə bilərik. Hansı xidmətlə maraqlanırsınız?`;
   } else if (
     includesAny(incoming, [
       "sayt",
@@ -673,7 +697,7 @@ function buildInboxActionsFallback({
     leadScore = Math.max(leadScore, 88);
     shouldCreateLead = true;
     replyText =
-      "Bizimlə maraqlandığınız üçün təşəkkür edirik. İstədiyiniz xidməti yazın, komandamız sizə uyğun şəkildə yönləndirsin.";
+      "Maraq göstərdiyiniz üçün təşəkkür edirik. İstədiyiniz xidməti yazın, komandamız sizə uyğun şəkildə yönləndirsin.";
   }
 
   if (reliability?.duplicateOfLastAiReply) {
@@ -701,6 +725,7 @@ function buildInboxActionsFallback({
       policySuppressAiDuringHandoff: Boolean(policy.suppressAiDuringHandoff),
       timezone: s(policy.timezone || "Asia/Baku"),
       engine: "fallback",
+      brandName,
       recentOutboundCooldownActive: Boolean(reliability?.recentOutboundCooldownActive),
       operatorRecentlyReplied: Boolean(reliability?.operatorRecentlyReplied),
       duplicateOfLastAiReply: Boolean(reliability?.duplicateOfLastAiReply),
@@ -789,8 +814,10 @@ export async function buildInboxActions({
   tenant = null,
   recentMessages = [],
 }) {
+  const resolvedTenantKey = getResolvedTenantKey(tenantKey);
+
   const policy = getInboxPolicy({
-    tenantKey,
+    tenantKey: resolvedTenantKey,
     channel,
     tenant,
   });
@@ -807,8 +834,10 @@ export async function buildInboxActions({
     policy,
   });
 
+  const brandName = getTenantBrandName(tenant, resolvedTenantKey);
+
   const metaBase = {
-    tenantKey: s(tenantKey || "neox"),
+    tenantKey: resolvedTenantKey,
     threadId: s(thread?.id),
     messageId: s(message?.id),
     channelAllowed: Boolean(policy.channelAllowed),
@@ -818,6 +847,7 @@ export async function buildInboxActions({
     operatorRecentlyReplied: Boolean(reliability.operatorRecentlyReplied),
     duplicateOfLastAiReply: Boolean(reliability.duplicateOfLastAiReply),
     recentMessageCount: normalizeRecentMessages(recentMessages).length,
+    brandName,
   };
 
   if (!policy.channelAllowed) {
@@ -872,7 +902,7 @@ export async function buildInboxActions({
           channel,
           recipientId: externalUserId,
           meta: buildMeta({
-            tenantKey,
+            tenantKey: resolvedTenantKey,
             thread,
             message,
             intent: "handoff_active",
@@ -891,7 +921,7 @@ export async function buildInboxActions({
       noReplyAction({
         reason: "handoff_active",
         meta: buildMeta({
-          tenantKey,
+          tenantKey: resolvedTenantKey,
           thread,
           message,
           intent: "handoff_active",
@@ -920,7 +950,7 @@ export async function buildInboxActions({
           channel,
           recipientId: externalUserId,
           meta: buildMeta({
-            tenantKey,
+            tenantKey: resolvedTenantKey,
             thread,
             message,
             intent: "ack",
@@ -935,7 +965,7 @@ export async function buildInboxActions({
       noReplyAction({
         reason: "ack_only",
         meta: buildMeta({
-          tenantKey,
+          tenantKey: resolvedTenantKey,
           thread,
           message,
           intent: "ack",
@@ -960,7 +990,7 @@ export async function buildInboxActions({
           channel,
           recipientId: externalUserId,
           meta: buildMeta({
-            tenantKey,
+            tenantKey: resolvedTenantKey,
             thread,
             message,
             intent: "operator_recently_replied",
@@ -975,7 +1005,7 @@ export async function buildInboxActions({
       noReplyAction({
         reason: "operator_recently_replied",
         meta: buildMeta({
-          tenantKey,
+          tenantKey: resolvedTenantKey,
           thread,
           message,
           intent: "operator_recently_replied",
@@ -997,9 +1027,10 @@ export async function buildInboxActions({
     text,
     channel,
     externalUserId,
-    tenantKey,
+    tenantKey: resolvedTenantKey,
     thread,
     message,
+    tenant,
     policy,
     quietHoursApplied,
     recentMessages,
@@ -1041,7 +1072,7 @@ export async function buildInboxActions({
     }
 
     const commonMeta = buildMeta({
-      tenantKey,
+      tenantKey: resolvedTenantKey,
       thread,
       message,
       intent,
@@ -1057,6 +1088,7 @@ export async function buildInboxActions({
         policySuppressAiDuringHandoff: Boolean(policy.suppressAiDuringHandoff),
         timezone: s(policy.timezone || "Asia/Baku"),
         engine: "ai",
+        brandName,
         recentOutboundCooldownActive: Boolean(reliability.recentOutboundCooldownActive),
         operatorRecentlyReplied: Boolean(reliability.operatorRecentlyReplied),
         duplicateOfLastAiReply: Boolean(reliability.duplicateOfLastAiReply),
@@ -1137,9 +1169,10 @@ export async function buildInboxActions({
     text,
     channel,
     externalUserId,
-    tenantKey,
+    tenantKey: resolvedTenantKey,
     thread,
     message,
+    tenant,
     policy,
     quietHoursApplied,
     recentMessages,

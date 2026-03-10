@@ -54,6 +54,77 @@ import {
 
 import { dbGetContentById } from "./content.db.js";
 
+function cleanLower(v) {
+  return String(v || "").trim().toLowerCase();
+}
+
+function clean(v) {
+  return String(v || "").trim();
+}
+
+function normalizeAutomationMode(v, fallback = "manual") {
+  const x = clean(v || fallback).toLowerCase();
+  if (x === "full_auto") return "full_auto";
+  return "manual";
+}
+
+function getAuthTenantKey(req) {
+  return cleanLower(
+    req?.auth?.tenantKey ||
+      req?.auth?.tenant_key ||
+      req?.user?.tenantKey ||
+      req?.user?.tenant_key ||
+      req?.tenant?.key ||
+      req?.tenantKey ||
+      ""
+  );
+}
+
+function pickRuntimeTenantId(...items) {
+  for (const x of items) {
+    const v = String(
+      x?.tenant_id ||
+        x?.tenantId ||
+        ""
+    ).trim();
+    if (v) return v;
+  }
+  return "";
+}
+
+function pickActionActor(req, fallback = "ceo") {
+  return (
+    clean(
+      req.body?.by ||
+        req.body?.actor ||
+        req.headers["x-actor"] ||
+        req.headers["x-user-email"] ||
+        req.auth?.email ||
+        fallback
+    ) || fallback
+  );
+}
+
+function pickAutomationMeta(req) {
+  const mode = normalizeAutomationMode(
+    req.body?.automationMode ||
+      req.body?.mode ||
+      req.headers["x-automation-mode"] ||
+      "manual",
+    "manual"
+  );
+
+  const autoPublish =
+    mode === "full_auto" ||
+    req.body?.autoPublish === true ||
+    String(req.headers["x-auto-publish"] || "").trim() === "1";
+
+  return {
+    mode,
+    autoPublish,
+  };
+}
+
 export function contentRoutes({ db, wsHub }) {
   const r = express.Router();
 
@@ -81,8 +152,10 @@ export function contentRoutes({ db, wsHub }) {
 
   r.post("/content/:id/feedback", async (req, res) => {
     const id = String(req.params.id || "").trim();
-    const tenantId = pickTenantId(req);
+    const tenantKey = getAuthTenantKey(req) || cleanLower(pickTenantId(req));
     const feedbackText = String(req.body?.feedbackText || req.body?.feedback || "").trim();
+    const actor = pickActionActor(req, "ceo");
+    const automation = pickAutomationMeta(req);
 
     if (!id) return okJson(res, { ok: false, error: "contentId required" });
     if (!feedbackText) return okJson(res, { ok: false, error: "feedbackText required" });
@@ -99,6 +172,7 @@ export function contentRoutes({ db, wsHub }) {
         }
 
         const proposal = mem.proposals.get(row.proposal_id) || null;
+        const tenantId = pickRuntimeTenantId(row, proposal);
 
         const jobId = crypto.randomUUID();
         mem.jobs.set(jobId, {
@@ -110,7 +184,10 @@ export function contentRoutes({ db, wsHub }) {
             contentId: row.id,
             proposalId: row.proposal_id,
             feedbackText,
+            tenantKey,
             tenantId,
+            automationMode: automation.mode,
+            autoPublish: automation.autoPublish,
           },
           output: {},
           error: null,
@@ -123,12 +200,15 @@ export function contentRoutes({ db, wsHub }) {
 
         if (proposal) {
           notifyN8n("content.revise", proposal, {
+            tenantKey,
             tenantId,
             proposalId: String(proposal.id),
             threadId: String(proposal.thread_id || proposal.threadId || ""),
             jobId,
             contentId: String(row.id),
             feedbackText,
+            automationMode: automation.mode,
+            autoPublish: automation.autoPublish,
             contentPack: normalizeContentPack(row.content_pack) || {},
             callback: { url: "/api/executions/callback", tokenHeader: "x-webhook-token" },
           });
@@ -139,16 +219,22 @@ export function contentRoutes({ db, wsHub }) {
           type: "info",
           title: "Changes requested",
           body: "Draft yenidən hazırlanır…",
-          payload: { contentId: id, proposalId: row.proposal_id, jobId },
+          payload: {
+            contentId: id,
+            proposalId: row.proposal_id,
+            jobId,
+            automationMode: automation.mode,
+          },
         });
 
         wsHub?.broadcast?.({ type: "content.updated", content: mem.contentItems.get(id) || row });
         wsHub?.broadcast?.({ type: "execution.updated", execution: mem.jobs.get(jobId) });
         wsHub?.broadcast?.({ type: "notification.created", notification: notif });
 
-        memAudit("ceo", "content.feedback", "content", id, {
+        memAudit(actor, "content.feedback", "content", id, {
           proposalId: row.proposal_id,
           jobId,
+          automationMode: automation.mode,
         });
 
         return okJson(res, {
@@ -170,6 +256,7 @@ export function contentRoutes({ db, wsHub }) {
       });
 
       const proposal = await dbGetProposalById(db, String(current.proposal_id));
+      const tenantId = pickRuntimeTenantId(updated, current, proposal);
       let job = null;
 
       if (proposal) {
@@ -181,19 +268,25 @@ export function contentRoutes({ db, wsHub }) {
             contentId: updated.id,
             proposalId: proposal.id,
             feedbackText,
+            tenantKey,
             tenantId,
+            automationMode: automation.mode,
+            autoPublish: automation.autoPublish,
           },
         });
 
         await dbUpdateContentItem(db, updated.id, { job_id: job?.id || updated.job_id });
 
         notifyN8n("content.revise", proposal, {
+          tenantKey,
           tenantId,
           proposalId: String(proposal.id),
           threadId: String(proposal.thread_id),
           jobId: job?.id || null,
           contentId: String(updated.id),
           feedbackText,
+          automationMode: automation.mode,
+          autoPublish: automation.autoPublish,
           contentPack: normalizeContentPack(updated.content_pack) || {},
           callback: { url: "/api/executions/callback", tokenHeader: "x-webhook-token" },
         });
@@ -206,7 +299,12 @@ export function contentRoutes({ db, wsHub }) {
         type: "info",
         title: "Changes requested",
         body: "Draft yenidən hazırlanır…",
-        payload: { contentId: id, proposalId: updated.proposal_id, jobId: job?.id || null },
+        payload: {
+          contentId: id,
+          proposalId: updated.proposal_id,
+          jobId: job?.id || null,
+          automationMode: automation.mode,
+        },
       });
 
       wsHub?.broadcast?.({
@@ -224,12 +322,14 @@ export function contentRoutes({ db, wsHub }) {
           contentId: id,
           proposalId: updated.proposal_id,
           jobId: job?.id || null,
+          automationMode: automation.mode,
         },
       });
 
-      await dbAudit(db, "ceo", "content.feedback", "content", id, {
+      await dbAudit(db, actor, "content.feedback", "content", id, {
         proposalId: updated.proposal_id,
         jobId: job?.id || null,
+        automationMode: automation.mode,
       });
 
       return okJson(res, {
@@ -248,7 +348,9 @@ export function contentRoutes({ db, wsHub }) {
 
   r.post("/content/:id/approve", async (req, res) => {
     const id = String(req.params.id || "").trim();
-    const tenantId = pickTenantId(req);
+    const tenantKey = getAuthTenantKey(req) || cleanLower(pickTenantId(req));
+    const actor = pickActionActor(req, "ceo");
+    const automation = pickAutomationMeta(req);
 
     if (!id) return okJson(res, { ok: false, error: "contentId required" });
 
@@ -289,6 +391,7 @@ export function contentRoutes({ db, wsHub }) {
         const contentPack = normalizeContentPack(row.content_pack) || {};
         const eventName = pickAssetGenerationEvent(contentPack);
         const jobType = pickAssetGenerationJobType(contentPack);
+        const tenantId = pickRuntimeTenantId(row);
         const jobId = crypto.randomUUID();
 
         mem.jobs.set(jobId, {
@@ -308,6 +411,10 @@ export function contentRoutes({ db, wsHub }) {
             voiceoverText: pickVoiceoverText(contentPack),
             neededAssets: pickNeededAssets(contentPack),
             reelMeta: pickReelMeta(contentPack),
+            tenantKey,
+            tenantId,
+            automationMode: automation.mode,
+            autoPublish: automation.autoPublish,
           },
           output: {},
           error: null,
@@ -327,11 +434,14 @@ export function contentRoutes({ db, wsHub }) {
             eventName,
             p,
             buildAssetNotifyExtra({
+              tenantKey,
               tenantId,
               proposal: p,
               row: updated || row,
               jobId,
               contentPack,
+              automationMode: automation.mode,
+              autoPublish: automation.autoPublish,
             })
           );
         }
@@ -343,17 +453,24 @@ export function contentRoutes({ db, wsHub }) {
           body: isReelPack(contentPack)
             ? "Reel/video hazırlanır…"
             : "Şəkil/video/karusel hazırlanır…",
-          payload: { contentId: id, proposalId: row.proposal_id, jobId, jobType },
+          payload: {
+            contentId: id,
+            proposalId: row.proposal_id,
+            jobId,
+            jobType,
+            automationMode: automation.mode,
+          },
         });
 
         wsHub?.broadcast?.({ type: "content.updated", content: updated });
         wsHub?.broadcast?.({ type: "execution.updated", execution: mem.jobs.get(jobId) });
         wsHub?.broadcast?.({ type: "notification.created", notification: notif });
 
-        memAudit("ceo", "content.approve.assets", "content", id, {
+        memAudit(actor, "content.approve.assets", "content", id, {
           proposalId: row.proposal_id,
           jobId,
           jobType,
+          automationMode: automation.mode,
         });
 
         return okJson(res, { ok: true, content: updated, jobId, jobType, dbDisabled: true });
@@ -388,6 +505,7 @@ export function contentRoutes({ db, wsHub }) {
       const contentPack = normalizeContentPack(row.content_pack) || {};
       const eventName = pickAssetGenerationEvent(contentPack);
       const jobType = pickAssetGenerationJobType(contentPack);
+      const tenantId = pickRuntimeTenantId(row, proposal);
 
       const job = await dbCreateJob(db, {
         proposalId: proposal.id,
@@ -405,6 +523,10 @@ export function contentRoutes({ db, wsHub }) {
           voiceoverText: pickVoiceoverText(contentPack),
           neededAssets: pickNeededAssets(contentPack),
           reelMeta: pickReelMeta(contentPack),
+          tenantKey,
+          tenantId,
+          automationMode: automation.mode,
+          autoPublish: automation.autoPublish,
         },
       });
 
@@ -417,11 +539,14 @@ export function contentRoutes({ db, wsHub }) {
         eventName,
         proposal,
         buildAssetNotifyExtra({
+          tenantKey,
           tenantId,
           proposal,
           row: updated || row,
           jobId: job?.id || null,
           contentPack,
+          automationMode: automation.mode,
+          autoPublish: automation.autoPublish,
         })
       );
 
@@ -432,7 +557,13 @@ export function contentRoutes({ db, wsHub }) {
         body: isReelPack(contentPack)
           ? "Reel/video hazırlanır…"
           : "Şəkil/video/karusel hazırlanır…",
-        payload: { contentId: row.id, proposalId: proposal.id, jobId: job?.id || null, jobType },
+        payload: {
+          contentId: row.id,
+          proposalId: proposal.id,
+          jobId: job?.id || null,
+          jobType,
+          automationMode: automation.mode,
+        },
       });
 
       wsHub?.broadcast?.({
@@ -454,13 +585,15 @@ export function contentRoutes({ db, wsHub }) {
           proposalId: proposal.id,
           jobId: job?.id || null,
           jobType,
+          automationMode: automation.mode,
         },
       });
 
-      await dbAudit(db, "ceo", "content.approve.assets", "content", row.id, {
+      await dbAudit(db, actor, "content.approve.assets", "content", row.id, {
         proposalId: proposal.id,
         jobId: job?.id || null,
         jobType,
+        automationMode: automation.mode,
       });
 
       return okJson(res, {
@@ -480,7 +613,9 @@ export function contentRoutes({ db, wsHub }) {
 
   r.post("/content/:id/publish", async (req, res) => {
     const id = String(req.params.id || "").trim();
-    const tenantId = pickTenantId(req);
+    const tenantKey = getAuthTenantKey(req) || cleanLower(pickTenantId(req));
+    const actor = pickActionActor(req, "ceo");
+    const automation = pickAutomationMeta(req);
 
     if (!id) return okJson(res, { ok: false, error: "contentId required" });
 
@@ -515,6 +650,7 @@ export function contentRoutes({ db, wsHub }) {
 
         const assetUrl = pickFirstAssetUrl(contentPack, row);
         const caption = buildCaption(contentPack);
+        const tenantId = pickRuntimeTenantId(row);
 
         if (!assetUrl) {
           return okJson(res, {
@@ -538,6 +674,10 @@ export function contentRoutes({ db, wsHub }) {
             caption,
             format: packType(contentPack),
             aspectRatio: pickAspectRatio(contentPack),
+            tenantKey,
+            tenantId,
+            automationMode: automation.mode,
+            autoPublish: automation.autoPublish,
           },
           output: {},
           error: null,
@@ -554,6 +694,7 @@ export function contentRoutes({ db, wsHub }) {
             "content.publish",
             p,
             buildPublishNotifyExtra({
+              tenantKey,
               tenantId,
               proposal: p,
               row,
@@ -561,6 +702,8 @@ export function contentRoutes({ db, wsHub }) {
               contentPack,
               assetUrl,
               caption,
+              automationMode: automation.mode,
+              autoPublish: automation.autoPublish,
             })
           );
         }
@@ -570,17 +713,23 @@ export function contentRoutes({ db, wsHub }) {
           type: "info",
           title: "Publish started",
           body: "n8n paylaşımı edir…",
-          payload: { contentId: id, proposalId: row.proposal_id, jobId },
+          payload: {
+            contentId: id,
+            proposalId: row.proposal_id,
+            jobId,
+            automationMode: automation.mode,
+          },
         });
 
         wsHub?.broadcast?.({ type: "content.updated", content: mem.contentItems.get(id) });
         wsHub?.broadcast?.({ type: "execution.updated", execution: mem.jobs.get(jobId) });
         wsHub?.broadcast?.({ type: "notification.created", notification: notif });
 
-        memAudit("ceo", "content.publish", "content", id, {
+        memAudit(actor, "content.publish", "content", id, {
           proposalId: row.proposal_id,
           jobId,
           status: st,
+          automationMode: automation.mode,
         });
 
         return okJson(res, { ok: true, jobId, contentId: id, dbDisabled: true });
@@ -618,6 +767,7 @@ export function contentRoutes({ db, wsHub }) {
 
       const assetUrl = pickFirstAssetUrl(contentPack, row);
       const caption = buildCaption(contentPack);
+      const tenantId = pickRuntimeTenantId(row, proposal);
 
       if (!assetUrl) {
         return okJson(res, { ok: false, error: "publish requires assetUrl (missing assets/url)" });
@@ -635,6 +785,10 @@ export function contentRoutes({ db, wsHub }) {
           caption,
           format: packType(contentPack),
           aspectRatio: pickAspectRatio(contentPack),
+          tenantKey,
+          tenantId,
+          automationMode: automation.mode,
+          autoPublish: automation.autoPublish,
         },
       });
 
@@ -647,6 +801,7 @@ export function contentRoutes({ db, wsHub }) {
         "content.publish",
         proposal,
         buildPublishNotifyExtra({
+          tenantKey,
           tenantId,
           proposal,
           row: updated || row,
@@ -654,6 +809,8 @@ export function contentRoutes({ db, wsHub }) {
           contentPack,
           assetUrl,
           caption,
+          automationMode: automation.mode,
+          autoPublish: automation.autoPublish,
         })
       );
 
@@ -662,7 +819,12 @@ export function contentRoutes({ db, wsHub }) {
         type: "info",
         title: "Publish started",
         body: "n8n paylaşımı edir…",
-        payload: { contentId: row.id, proposalId: proposal.id, jobId: job?.id || null },
+        payload: {
+          contentId: row.id,
+          proposalId: proposal.id,
+          jobId: job?.id || null,
+          automationMode: automation.mode,
+        },
       });
 
       wsHub?.broadcast?.({
@@ -681,13 +843,15 @@ export function contentRoutes({ db, wsHub }) {
           contentId: row.id,
           proposalId: proposal.id,
           jobId: job?.id || null,
+          automationMode: automation.mode,
         },
       });
 
-      await dbAudit(db, "ceo", "content.publish", "content", row.id, {
+      await dbAudit(db, actor, "content.publish", "content", row.id, {
         proposalId: proposal.id,
         jobId: job?.id || null,
         status: row.status,
+        automationMode: automation.mode,
       });
 
       return okJson(res, { ok: true, jobId: job?.id || null, contentId: row.id });

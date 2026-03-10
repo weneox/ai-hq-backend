@@ -1,4 +1,5 @@
 import express from "express";
+import crypto from "crypto";
 import { cfg } from "../../config.js";
 
 import {
@@ -22,7 +23,7 @@ import {
   memAudit,
 } from "../../utils/memStore.js";
 
-import { dbUpdateJob } from "../../db/helpers/jobs.js";
+import { dbUpdateJob, dbCreateJob } from "../../db/helpers/jobs.js";
 import { dbGetProposalById, dbSetProposalStatus } from "../../db/helpers/proposals.js";
 import {
   dbUpsertDraftFromCallback,
@@ -34,7 +35,6 @@ import { dbAudit } from "../../db/helpers/audit.js";
 
 import { pushBroadcastToCeo } from "../../services/pushBroadcast.js";
 import { notifyN8n } from "../../services/n8nNotify.js";
-import { getTenantMode } from "./mode.js";
 
 import {
   pickJobId,
@@ -61,6 +61,73 @@ import {
   dbFindContentItemById,
   resolveDbContentRowForUpdate,
 } from "./executions.db.js";
+
+function clean(v) {
+  return String(v || "").trim();
+}
+
+function lower(v) {
+  return clean(v).toLowerCase();
+}
+
+function normalizeAutomationMode(v, fallback = "manual") {
+  const x = lower(v || fallback);
+  if (x === "full_auto") return "full_auto";
+  return "manual";
+}
+
+function pickAutomationMeta(result = {}, jobInput = {}, contentRow = null) {
+  const mode = normalizeAutomationMode(
+    result?.automationMode ||
+      result?.automation_mode ||
+      jobInput?.automationMode ||
+      jobInput?.automation_mode ||
+      contentRow?.automationMode ||
+      "manual",
+    "manual"
+  );
+
+  const autoPublish =
+    result?.autoPublish === true ||
+    result?.auto_publish === true ||
+    jobInput?.autoPublish === true ||
+    jobInput?.auto_publish === true ||
+    mode === "full_auto";
+
+  return {
+    mode,
+    autoPublish,
+  };
+}
+
+function pickAssetUrl(result = {}, contentPack = {}) {
+  return (
+    clean(
+      result?.assetUrl ||
+        result?.imageUrl ||
+        result?.videoUrl ||
+        result?.url ||
+        contentPack?.imageUrl ||
+        contentPack?.videoUrl ||
+        contentPack?.coverUrl
+    ) || null
+  );
+}
+
+function pickCaption(contentPack = {}, result = {}) {
+  return (
+    clean(
+      result?.caption ||
+        contentPack?.caption ||
+        contentPack?.copy?.caption ||
+        contentPack?.post?.caption
+    ) || ""
+  );
+}
+
+function isCompleted(status) {
+  return lower(status) === "completed";
+}
 
 export function executionsRoutes({ db, wsHub }) {
   const r = express.Router();
@@ -188,6 +255,7 @@ export function executionsRoutes({ db, wsHub }) {
           String(job.proposal_id || result?.proposalId || result?.proposal_id || "").trim() || null;
         const jobInput = deepFix(job.input || {});
         const contentIdFromInput = pickContentId(result, jobInput);
+        const automation = pickAutomationMeta(result, jobInput);
 
         const incomingPack = mergePackAssets(result);
         const publishInfo = pickPublishInfo(result);
@@ -229,6 +297,61 @@ export function executionsRoutes({ db, wsHub }) {
 
             wsHub?.broadcast?.({ type: "content.updated", content: contentRow });
             wsHub?.broadcast?.({ type: "proposal.updated", proposal: p });
+
+            if (
+              p &&
+              contentRow &&
+              isCompleted(status) &&
+              automation.mode === "full_auto" &&
+              automation.autoPublish
+            ) {
+              const publishJobId = crypto.randomUUID();
+              const assetUrl = pickAssetUrl(result, merged);
+              const caption = pickCaption(merged, result);
+
+              mem.jobs.set(publishJobId, {
+                id: publishJobId,
+                proposal_id: proposalId,
+                type: "publish",
+                status: "queued",
+                input: {
+                  contentId: contentRow.id,
+                  contentPack: merged,
+                  assetUrl,
+                  caption,
+                  tenantId: result?.tenantId || null,
+                  automationMode: "full_auto",
+                  autoPublish: true,
+                },
+                output: {},
+                error: null,
+                created_at: nowIso(),
+                started_at: null,
+                finished_at: null,
+              });
+
+              memPatchContentItem(contentRow.id, {
+                status: "publish.requested",
+                job_id: publishJobId,
+              });
+
+              notifyN8n("content.publish", p, {
+                tenantId: result?.tenantId || null,
+                proposalId: String(proposalId),
+                threadId: String(p.thread_id || ""),
+                contentId: String(contentRow.id),
+                jobId: publishJobId,
+                contentPack: merged,
+                assetUrl,
+                caption,
+                automationMode: "full_auto",
+                autoPublish: true,
+                callback: { url: "/api/executions/callback", tokenHeader: "x-webhook-token" },
+              });
+
+              wsHub?.broadcast?.({ type: "execution.updated", execution: mem.jobs.get(publishJobId) });
+              wsHub?.broadcast?.({ type: "content.updated", content: mem.contentItems.get(contentRow.id) });
+            }
           }
         }
 
@@ -270,13 +393,18 @@ export function executionsRoutes({ db, wsHub }) {
             publish: publishInfo,
             video: pickVideoInfo(result),
             image: pickImageInfo(result),
+            automationMode: automation.mode,
           },
         });
 
         wsHub?.broadcast?.({ type: "execution.updated", execution: mem.jobs.get(jobId) });
         wsHub?.broadcast?.({ type: "notification.created", notification: notif });
 
-        memAudit("n8n", "execution.callback", "job", jobId, { status, jobType: jt });
+        memAudit("n8n", "execution.callback", "job", jobId, {
+          status,
+          jobType: jt,
+          automationMode: automation.mode,
+        });
 
         return okJson(res, { ok: true, jobId, status, dbDisabled: true });
       }
@@ -289,11 +417,13 @@ export function executionsRoutes({ db, wsHub }) {
       const jobInput = deepFix(jobRow.input || {});
       const proposalId =
         String(jobRow.proposal_id || result?.proposalId || result?.proposal_id || "").trim() || null;
+      const automation = pickAutomationMeta(result, jobInput);
 
       const incomingPack = mergePackAssets(result);
       const publishInfo = pickPublishInfo(result);
 
       let contentRow = null;
+      let proposalRow = null;
 
       if (proposalId && incomingPack && isDraftJobType(jt)) {
         contentRow = await dbUpsertDraftFromCallback(db, {
@@ -332,6 +462,59 @@ export function executionsRoutes({ db, wsHub }) {
                 coverUrl: merged.coverUrl || null,
               })
             );
+          }
+
+          proposalRow = await dbGetProposalById(db, String(proposalId));
+
+          if (
+            proposalRow &&
+            contentRow &&
+            isCompleted(status) &&
+            automation.mode === "full_auto" &&
+            automation.autoPublish
+          ) {
+            const assetUrl = pickAssetUrl(result, merged);
+            const caption = pickCaption(merged, result);
+
+            const publishJob = await dbCreateJob(db, {
+              proposalId: proposalRow.id,
+              type: "publish",
+              status: "queued",
+              input: {
+                contentId: contentRow.id,
+                contentPack: merged,
+                assetUrl,
+                caption,
+                format: merged?.format || result?.format || null,
+                aspectRatio: merged?.aspectRatio || result?.aspectRatio || null,
+                tenantId: tenantId || null,
+                automationMode: "full_auto",
+                autoPublish: true,
+              },
+            });
+
+            await dbUpdateContentItem(db, contentRow.id, {
+              status: "publish.requested",
+              job_id: publishJob?.id || contentRow.job_id,
+            });
+
+            contentRow = await dbFindContentItemById(db, contentRow.id);
+
+            notifyN8n("content.publish", proposalRow, {
+              tenantId: tenantId || null,
+              proposalId: String(proposalId),
+              threadId: String(proposalRow.thread_id || ""),
+              contentId: String(contentRow?.id || rowToUpdate.id),
+              jobId: publishJob?.id || null,
+              contentPack: merged,
+              assetUrl,
+              caption,
+              automationMode: "full_auto",
+              autoPublish: true,
+              callback: { url: "/api/executions/callback", tokenHeader: "x-webhook-token" },
+            });
+
+            wsHub?.broadcast?.({ type: "execution.updated", execution: publishJob });
           }
         }
       }
@@ -375,6 +558,7 @@ export function executionsRoutes({ db, wsHub }) {
           publish: publishInfo,
           video: pickVideoInfo(result),
           image: pickImageInfo(result),
+          automationMode: automation.mode,
         }),
       });
 
@@ -399,7 +583,7 @@ export function executionsRoutes({ db, wsHub }) {
             ? isPublishJobType(jt)
               ? "Post paylaşıldı."
               : isAssetJobType(jt)
-              ? "Vizual/video hazır oldu — Approved tab-a keçdi."
+              ? "Vizual/video hazır oldu."
               : "AI draft yaratdı — baxıb təsdiqlə."
             : status === "running"
             ? "n8n hazırda işləyir…"
@@ -407,26 +591,11 @@ export function executionsRoutes({ db, wsHub }) {
         data: { type: "execution", jobId, proposalId, jobType: jt },
       });
 
-      await dbAudit(db, "n8n", "execution.callback", "job", jobId, { status, jobType: jt });
-
-      try {
-        if (proposalId && contentRow?.status === "draft.ready") {
-          const mode = await getTenantMode({ db, tenantId });
-          if (mode === "auto") {
-            const proposal = await dbGetProposalById(db, String(proposalId));
-            if (proposal) {
-              notifyN8n("draft.ready.auto", proposal, {
-                tenantId,
-                proposalId: String(proposalId),
-                jobId,
-                contentId: String(contentRow.id),
-                callback: { url: "/api/executions/callback", tokenHeader: "x-webhook-token" },
-                result,
-              });
-            }
-          }
-        }
-      } catch {}
+      await dbAudit(db, "n8n", "execution.callback", "job", jobId, {
+        status,
+        jobType: jt,
+        automationMode: automation.mode,
+      });
 
       return okJson(res, {
         ok: true,

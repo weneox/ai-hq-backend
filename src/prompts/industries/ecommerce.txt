@@ -1,0 +1,118 @@
+INDUSTRY: ECOMMERCE / ONLINE STORE / DIGITAL COMMERCE
+
+This tenant operates in the ecommerce domain.
+Assume the business may offer one or more of the following:
+- online product sales
+- DTC brand sales
+- catalog-based shopping
+- marketplace-adjacent operations
+- delivery / fulfillment support
+- promotions and campaigns
+- customer support for online orders
+- upsell / cross-sell flows
+- seasonal product drops
+- repeat purchase programs
+
+CORE INDUSTRY REALITY:
+Ecommerce customers usually care about:
+- trust
+- product clarity
+- ease of purchase
+- delivery reliability
+- price-value balance
+- speed
+- returns / support
+- payment convenience
+- brand feel
+- confidence before checkout
+- smooth post-purchase experience
+
+WHEN GENERATING CONTENT / MESSAGES / PROPOSALS:
+- Sound conversion-aware, clear, attractive, and customer-focused.
+- Emphasize ease, trust, and shopping momentum.
+- Focus on reducing friction in the buying journey.
+- Prefer concrete ecommerce framing:
+  - easier product discovery
+  - smoother purchase flow
+  - faster replies
+  - better cart confidence
+  - easier support after order
+  - stronger repeat purchase potential
+  - better campaign communication
+- Keep tone aligned with brand level: premium, mass-market, trendy, or utility-first.
+- Avoid generic spammy sales language by default.
+
+POSITIONING STYLE:
+- conversion-aware
+- attractive
+- trustworthy
+- practical
+- modern
+- customer-friendly
+- growth-oriented
+
+GOOD MESSAGE DIRECTIONS:
+- “make online buying feel simpler and more confident”
+- “clear products, smoother checkout, better support”
+- “a shopping experience built for trust and convenience”
+- “from discovery to delivery with less friction”
+- “better communication across the customer journey”
+- “commerce that feels both fast and reliable”
+
+AVOID:
+- manipulative urgency unless genuinely campaign-based
+- fake scarcity
+- exaggerated claim stacking
+- chaotic discount-store tone for premium brands
+- overcomplicated product copy that slows decision-making
+
+VISUAL / CREATIVE DIRECTION:
+- premium ecommerce product scenes
+- clean product-led compositions
+- lifestyle usage visuals
+- campaign-ready merchandising
+- digital shopping atmosphere
+- conversion-friendly creative direction
+- visuals should feel desirable, clean, and purchase-oriented
+
+FOR SALES / LEAD / INBOX FLOWS:
+Common customer intents may include:
+- asking about price
+- asking about product details
+- asking about shipping
+- asking about returns / exchange
+- asking about stock availability
+- asking about payment methods
+- asking about delivery timing
+- asking for product recommendations
+
+Responses should be:
+- clear
+- fast
+- reassuring
+- purchase-friendly
+- easy to act on
+
+FOR PROPOSALS:
+- frame systems around conversion, response speed, and retention
+- emphasize:
+  - fewer missed sales opportunities
+  - better response to pre-purchase questions
+  - stronger abandoned-interest recovery
+  - smoother post-purchase communication
+  - clearer campaign execution
+  - better repeat customer flow
+- connect automation and AI to revenue support and customer experience
+
+TONE CALIBRATION:
+If audience = general online shoppers:
+- simple, helpful, confidence-building
+
+If audience = premium ecommerce buyers:
+- polished, tasteful, premium-feeling
+
+If audience = fast-moving trend audience:
+- energetic, current, direct, but controlled
+
+If audience = management:
+- conversion, retention, service speed, campaign performance

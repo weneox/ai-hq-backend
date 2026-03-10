@@ -1,3 +1,5 @@
+// src/routes/api.js
+
 import express from "express";
 
 import { healthRoutes } from "./health.js";
@@ -17,6 +19,9 @@ import { debugRoutes } from "./debug.js";
 import { inboxRoutes } from "./inbox.js";
 import { leadsRoutes } from "./leads.js";
 import { commentsRoutes } from "./comments.js";
+import { settingsRoutes } from "./settings.js";
+import { teamRoutes } from "./team.js";
+import { tenantsRoutes } from "./tenants.js";
 
 export function apiRouter({ db, wsHub }) {
   const r = express.Router();
@@ -25,7 +30,7 @@ export function apiRouter({ db, wsHub }) {
   r.use("/", modeRoutes({ db, wsHub }));
   r.use("/", agentsRoutes());
   r.use("/", renderRoutes());
-  r.use("/", mediaRoutes());
+  r.use("/", mediaRoutes({ db }));
   r.use("/", pushRoutes({ db, wsHub }));
   r.use("/", notificationsRoutes({ db, wsHub }));
   r.use("/", contentRoutes({ db, wsHub }));
@@ -37,7 +42,10 @@ export function apiRouter({ db, wsHub }) {
   r.use("/", inboxRoutes({ db, wsHub }));
   r.use("/", leadsRoutes({ db, wsHub }));
   r.use("/", commentsRoutes({ db, wsHub }));
+  r.use("/", settingsRoutes({ db }));
   r.use("/", debugRoutes());
+  r.use("/", teamRoutes({ db }));
+  r.use("/", tenantsRoutes({ db }));
 
   return r;
 }

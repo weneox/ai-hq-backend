@@ -1,6 +1,6 @@
 // src/render/renderSlides.js
 //
-// FINAL v6.0 — premium clean renderer (reduced left blur / cleaner source image)
+// FINAL v6.1 — premium clean renderer (multi-tenant safe)
 //
 // Goals:
 // ✅ Keep clean source-image handling
@@ -12,6 +12,8 @@
 // ✅ Reduce heavy left blur / muddy overlay mass
 // ✅ Keep left side cleaner without suffocating the image
 // ✅ Preserve premium visual balance and render friendliness
+// ✅ Remove NEOX-specific hardcoded fallbacks
+// ✅ Multi-tenant safe defaults
 
 import fs from "fs";
 import path from "path";
@@ -33,6 +35,21 @@ function esc(input) {
 function safeText(s, max = 220) {
   const t = String(s ?? "").replace(/\s+/g, " ").trim();
   return t.length > max ? t.slice(0, max - 1).trim() + "…" : t;
+}
+
+function safeBrandText(s, fallback = "BRAND", max = 24) {
+  const cleaned = String(s ?? "")
+    .replace(/\s+/g, " ")
+    .trim();
+  return safeText(cleaned || fallback, max);
+}
+
+function defaultCtaByLanguage(lang = "az") {
+  const x = String(lang || "").trim().toLowerCase();
+  if (x === "en") return "Contact us to learn more";
+  if (x === "ru") return "Свяжитесь с нами, чтобы узнать больше";
+  if (x === "tr") return "Daha fazla bilgi için bizimle iletişime geçin";
+  return "Daha çox məlumat üçün bizimlə əlaqə saxlayın";
 }
 
 function normalizeOverlayStrength(v) {
@@ -427,9 +444,9 @@ function decorativeGlowByLayout(layoutFamily) {
 function buildPageHtml(slide, idx, total) {
   const title = esc(safeText(slide.title || "Untitled Slide", 120));
   const subtitle = esc(safeText(slide.subtitle || "", 180));
-  const cta = esc(safeText(slide.cta || "Daha çox məlumat üçün bizimlə əlaqə saxlayın", 72));
-  const badge = esc(safeText(slide.badge || "NEOX", 24));
-  const logoText = esc(safeText(slide.logoText || "NEOX", 18));
+  const cta = esc(safeText(slide.cta || defaultCtaByLanguage(slide.language), 72));
+  const badge = esc(safeBrandText(slide.badge || "BRAND", "BRAND", 24));
+  const logoText = esc(safeBrandText(slide.logoText || "BRAND", "BRAND", 18));
   const bgImageUrl = String(slide.bgImageUrl || "").trim();
 
   const aspectRatio = normalizeAspectRatio(slide.aspectRatio || "1:1");
@@ -861,17 +878,20 @@ export async function renderSlidesToPng({
         "1:1"
     );
 
+    const language = String(slide.language || slide.lang || "az").trim().toLowerCase() || "az";
+
     return {
       title: safeText(slide.title || slide.headline || slide.text || "Untitled Slide", 120),
       subtitle: safeText(slide.subtitle || slide.subline || slide.kicker || "", 180),
-      cta: safeText(slide.cta || "Daha çox məlumat üçün bizimlə əlaqə saxlayın", 72),
-      badge: safeText(slide.badge || "NEOX", 24),
+      cta: safeText(slide.cta || defaultCtaByLanguage(language), 72),
+      badge: safeBrandText(slide.badge || "BRAND", "BRAND", 24),
       align: slide.align || "left",
-      theme: slide.theme || "neox_dark",
+      theme: slide.theme || "premium_dark",
       slideNumber: Number(slide.slideNumber || i + 1),
       totalSlides: Number(slide.totalSlides || slides.length),
       bgImageUrl: String(slide.bgImageUrl || slide.backgroundUrl || "").trim(),
-      logoText: safeText(slide.logoText || "NEOX", 18),
+      logoText: safeBrandText(slide.logoText || slide.brandName || "BRAND", "BRAND", 18),
+      language,
       aspectRatio,
       renderHints: {
         layoutFamily: slide?.renderHints?.layoutFamily || "editorial_left",

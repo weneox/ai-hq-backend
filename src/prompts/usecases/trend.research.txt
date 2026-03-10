@@ -1,7 +1,17 @@
-TASK: Create a trend/competitor insight brief for NEOX social content.
+TASK: Create a trend / competitor insight brief for the tenant’s social content.
+
+Goal:
+Generate a practical, action-oriented insight brief that can help content planning, creative direction, and topic selection.
+
+IMPORTANT LIMITATION RULE:
+- Do not claim real-world research unless actual source material is provided.
+- Do not fabricate sources, statistics, competitor facts, market reports, or trending claims.
+- If no real source data is provided, produce a strategic insight brief based on realistic market patterns, content behavior, and commercially useful assumptions.
+- Keep the wording honest and non-fabricated.
 
 Return STRICT JSON only.
 
+JSON SCHEMA:
 {
   "type": "trend_brief",
   "language": "az|tr|ru|en",
@@ -29,7 +39,77 @@ Return STRICT JSON only.
   ]
 }
 
-Rules:
+PRIMARY GOAL:
+Deliver a brief that helps the team decide:
+- what kinds of content angles matter now
+- what competitors or adjacent brands are doing conceptually
+- what the tenant can adapt in a smarter way
+- what concrete draft ideas should be created next
+
+SUMMARY RULES:
+- Must be practical
+- Must be commercially relevant
+- Must be concise but useful
+- Should reflect tenant industry and audience
+- Should not pretend to cite external research unless such inputs are actually provided
+
+TRENDS RULES:
+- Include trends that are realistic and strategically useful
+- Prefer trends in:
+  - content style
+  - buyer attention
+  - messaging angles
+  - trust-building
+  - educational content
+  - short-form video behavior
+  - proof / process / case-based storytelling
+  - operational clarity
+  - transformation stories
+  - convenience / efficiency / automation / service quality themes when relevant
+- Each trend must answer:
+  - what it is
+  - why it matters
+  - how content can use it
+
+COMPETITOR ANGLES RULES:
+- Do not fabricate specific competitor names unless provided
+- Treat competitorAngles as strategic angle analysis, not false factual reporting
+- Focus on:
+  - common angle competitors use
+  - what is worth learning from it
+  - what should be avoided
+- Prefer insights such as:
+  - overused promises
+  - weak differentiation
+  - better hooks
+  - more useful education
+  - stronger visual consistency
+  - clearer proof structure
+  - better CTA discipline
+
+DRAFT IDEAS RULES:
+- Must be actionable
+- Must fit the tenant’s business
+- Must fit likely audience interests
+- Must be realistic to turn into actual drafts
+- Mix formats where useful
+- Prefer strong hook quality
+- Prefer business-relevant and commercially useful themes
+- Avoid generic filler ideas
+
+QUALITY BAR:
 - practical insights
 - no fake sources
+- no fabricated statistics
+- no invented competitor claims
 - actionable ideas
+- tenant-relevant
+- commercially usable
+- suitable for content planning meetings or AI HQ review
+
+STRICT OUTPUT RULES:
+- Return STRICT JSON only
+- No markdown
+- No explanations
+- No extra text
+- No comments

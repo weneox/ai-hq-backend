@@ -10,12 +10,16 @@ import { cfg } from "./src/config.js";
 import { initDb, getDb, migrate } from "./src/db/index.js";
 import { createWsHub } from "./src/wsHub.js";
 import { apiRouter } from "./src/routes/api.js";
+import { adminAuthRoutes } from "./src/routes/api/adminAuth.js";
 import { startOutboundRetryWorker } from "./src/workers/outboundRetryWorker.js";
+import { createDraftScheduleWorker } from "./src/workers/draftScheduleWorker.js";
 
 async function main() {
   const app = express();
 
-  if (cfg.TRUST_PROXY) app.set("trust proxy", 1);
+  if (cfg.TRUST_PROXY) {
+    app.set("trust proxy", 1);
+  }
 
   app.use(helmet());
 
@@ -24,13 +28,13 @@ async function main() {
       origin: (origin, cb) => {
         if (!origin) return cb(null, true);
 
+        const allowedOrigins = String(cfg.CORS_ORIGIN || "")
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean);
+
         const allowed =
-          cfg.CORS_ORIGIN === "*" ||
-          String(cfg.CORS_ORIGIN || "")
-            .split(",")
-            .map((s) => s.trim())
-            .filter(Boolean)
-            .includes(origin);
+          cfg.CORS_ORIGIN === "*" || allowedOrigins.includes(origin);
 
         return allowed ? cb(null, true) : cb(new Error("CORS blocked"));
       },
@@ -46,23 +50,34 @@ async function main() {
 
   app.get("/", (_req, res) => {
     res.setHeader("Content-Type", "application/json; charset=utf-8");
-    res.status(200).json({
+    return res.status(200).json({
       ok: true,
       service: "ai-hq-backend",
       env: cfg.APP_ENV,
-      endpoints: ["GET /health", "GET /__whoami", "GET /api"],
+      endpoints: [
+        "GET /health",
+        "GET /__whoami",
+        "GET /api/admin-auth/me",
+        "POST /api/admin-auth/login",
+        "POST /api/admin-auth/logout",
+        "GET /api",
+      ],
     });
   });
 
   app.get("/__whoami", (_req, res) => {
     res.setHeader("Content-Type", "application/json; charset=utf-8");
-    res.status(200).json({
+    return res.status(200).json({
       ok: true,
       service: "ai-hq-backend",
       env: cfg.APP_ENV,
       port: cfg.PORT,
       hasDatabaseUrl: Boolean(String(cfg.DATABASE_URL || "").trim()),
       hasOpenAI: Boolean(String(cfg.OPENAI_API_KEY || "").trim()),
+      adminPanelEnabled: !!cfg.ADMIN_PANEL_ENABLED,
+      hasAdminPasscodeHash: Boolean(String(cfg.ADMIN_PANEL_PASSCODE_HASH || "").trim()),
+      hasAdminSessionSecret: Boolean(String(cfg.ADMIN_SESSION_SECRET || "").trim()),
+      hasScheduleWebhook: Boolean(String(process.env.N8N_WEBHOOK_SCHEDULE_DRAFT_URL || "").trim()),
       now: new Date().toISOString(),
     });
   });
@@ -75,7 +90,14 @@ async function main() {
       ok: true,
       service: "ai-hq-backend",
       env: cfg.APP_ENV,
-      db: { enabled: hasDbUrl, ok: false },
+      db: {
+        enabled: hasDbUrl,
+        ok: false,
+      },
+      workers: {
+        outboundRetryEnabled: !!cfg.OUTBOUND_RETRY_ENABLED,
+        draftScheduleEnabled: String(process.env.DRAFT_SCHEDULE_WORKER_ENABLED || "1") !== "0",
+      },
     };
 
     if (!hasDbUrl || !db) {
@@ -99,35 +121,74 @@ async function main() {
     const m = await migrate();
     console.log(
       "[ai-hq] migrate:",
-      m.ok ? "ok" : `skip/fail (${m.reason || m.error || "unknown"})`
+      m?.ok ? "ok" : `skip/fail (${m?.reason || m?.error || "unknown"})`
     );
   } catch (e) {
     console.log("[ai-hq] migrate error:", String(e?.message || e));
   }
 
   const server = http.createServer(app);
-  const wsHub = createWsHub({ server, token: cfg.WS_AUTH_TOKEN });
+  const wsHub = createWsHub({
+    server,
+    token: cfg.WS_AUTH_TOKEN,
+  });
 
-  app.use("/api", apiRouter({ db: getDb(), wsHub }));
+  // Admin auth foundation
+  // IMPORTANT:
+  // This is mounted BEFORE temp auth.
+  app.use("/api", adminAuthRoutes());
+
+  // TEMP AUTH CONTEXT
+  // Real auth hazır olana qədər tenant-locked route-lar üçün.
+  app.use("/api", (req, _res, next) => {
+    req.auth = {
+      tenantKey: "neox",
+      role: "owner",
+      email: "owner@neox.az",
+    };
+    next();
+  });
+
+  app.use(
+    "/api",
+    apiRouter({
+      db: getDb(),
+      wsHub,
+    })
+  );
 
   const outboundRetryWorker = startOutboundRetryWorker({
     db: getDb(),
     wsHub,
   });
 
+  const draftScheduleWorker = createDraftScheduleWorker({
+    db: getDb(),
+  });
+
+  draftScheduleWorker.start();
+
   app.use((req, res) => {
     res.setHeader("Content-Type", "application/json; charset=utf-8");
-    res.status(404).json({ ok: false, error: "Not found", path: req.path });
+    return res.status(404).json({
+      ok: false,
+      error: "Not found",
+      path: req.path,
+    });
   });
 
   app.use((err, _req, res, _next) => {
     console.error("[api] error:", err?.message || err);
     res.setHeader("Content-Type", "application/json; charset=utf-8");
-    res.status(500).json({ ok: false, error: "Server error" });
+    return res.status(500).json({
+      ok: false,
+      error: "Server error",
+    });
   });
 
   server.listen(cfg.PORT, () => {
     const hasDb = Boolean(getDb());
+
     console.log(`[ai-hq] listening on :${cfg.PORT} env=${cfg.APP_ENV}`);
     console.log(`[ai-hq] CORS_ORIGIN=${cfg.CORS_ORIGIN}`);
     console.log(`[ai-hq] DB=${hasDb ? "ON" : "OFF"}`);
@@ -140,23 +201,56 @@ async function main() {
         cfg.OUTBOUND_RETRY_ENABLED ? "ON" : "OFF"
       }`
     );
+    console.log(
+      `[ai-hq] draftScheduleWorker=${
+        String(process.env.DRAFT_SCHEDULE_WORKER_ENABLED || "1") !== "0"
+          ? "ON"
+          : "OFF"
+      } interval=${Number(process.env.DRAFT_SCHEDULE_WORKER_INTERVAL_MS || 60000)}ms webhook=${
+        String(process.env.N8N_WEBHOOK_SCHEDULE_DRAFT_URL || "").trim() ? "ON" : "OFF"
+      }`
+    );
+    console.log(
+      `[ai-hq] adminAuth enabled=${cfg.ADMIN_PANEL_ENABLED ? "ON" : "OFF"} passcodeHash=${
+        cfg.ADMIN_PANEL_PASSCODE_HASH ? "ON" : "OFF"
+      } sessionSecret=${cfg.ADMIN_SESSION_SECRET ? "ON" : "OFF"}`
+    );
+    console.log("[ai-hq] TEMP_AUTH tenant=neox role=owner email=owner@neox.az");
   });
 
-  async function shutdown() {
+  async function shutdown(signal = "SIGTERM") {
+    console.log(`[ai-hq] shutdown signal=${signal}`);
+
     try {
       outboundRetryWorker?.stop?.();
     } catch {}
 
     try {
-      const db = getDb();
-      if (db) await db.end();
+      draftScheduleWorker?.stop?.();
     } catch {}
 
-    process.exit(0);
+    try {
+      const db = getDb();
+      if (db) {
+        await db.end();
+      }
+    } catch {}
+
+    try {
+      server.close(() => {
+        process.exit(0);
+      });
+
+      setTimeout(() => {
+        process.exit(0);
+      }, 3000).unref();
+    } catch {
+      process.exit(0);
+    }
   }
 
-  process.on("SIGTERM", shutdown);
-  process.on("SIGINT", shutdown);
+  process.on("SIGTERM", () => shutdown("SIGTERM"));
+  process.on("SIGINT", () => shutdown("SIGINT"));
 }
 
 main().catch((e) => {

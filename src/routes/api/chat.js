@@ -8,27 +8,39 @@ import { memEnsureThread, memAddMessage } from "../../utils/memStore.js";
 export function chatRoutes({ db, wsHub }) {
   const r = express.Router();
 
-  // POST /api/chat { threadId?, message, agentId? }
+  // POST /api/chat { threadId?, message, agentId?, usecase?, tenant?, today?, format?, extra? }
   r.post("/chat", async (req, res) => {
-    const agentId = String(req.body?.agentId || "orion").trim() || "orion";
+    const agentId = String(req.body?.agentId || "orion").trim().toLowerCase() || "orion";
     const message = fixText(String(req.body?.message || "").trim());
+    const usecase = String(req.body?.usecase || "").trim() || undefined;
+    const tenant =
+      req.body?.tenant && typeof req.body.tenant === "object" && !Array.isArray(req.body.tenant)
+        ? req.body.tenant
+        : null;
+    const today = String(req.body?.today || "").trim() || "";
+    const format = String(req.body?.format || "").trim() || "";
+    const extra =
+      req.body?.extra && typeof req.body.extra === "object" && !Array.isArray(req.body.extra)
+        ? req.body.extra
+        : {};
+
     let threadId = String(req.body?.threadId || "").trim();
 
     if (!message) return okJson(res, { ok: false, error: "message required" });
 
     try {
-      // in-memory thread if not provided
       if (!threadId) threadId = crypto.randomUUID?.() || String(Date.now());
+
       if (!isDbReady(db)) {
         memEnsureThread(threadId);
         memAddMessage(threadId, { role: "user", agent: null, content: message });
       } else {
-        // best effort: if thread doesn't exist, create it
         await db.query(
           `insert into threads (id, title) values ($1::uuid, $2::text)
            on conflict (id) do nothing`,
           [threadId, "Chat"]
         );
+
         await db.query(
           `insert into messages (thread_id, role, agent_key, content, meta)
            values ($1::uuid, 'user', null, $2::text, '{}'::jsonb)`,
@@ -37,23 +49,33 @@ export function chatRoutes({ db, wsHub }) {
       }
 
       const out = await kernelHandle({
-        agentId,
-        input: message,
-        threadId,
+        message,
+        agentHint: agentId,
+        usecase,
+        tenant,
+        today,
+        format,
+        extra,
       });
 
-      const answer = fixText(String(out?.text || out?.output_text || out?.answer || "").trim());
+      const answer = fixText(String(out?.replyText || "").trim());
+      const meta = deepFix(out?.meta || {});
 
       if (!isDbReady(db)) {
-        const row = memAddMessage(threadId, { role: "assistant", agent: agentId, content: answer });
+        const row = memAddMessage(threadId, {
+          role: "assistant",
+          agent: agentId,
+          content: answer,
+        });
         wsHub?.broadcast?.({ type: "thread.message", threadId, message: row });
       } else {
         const q = await db.query(
           `insert into messages (thread_id, role, agent_key, content, meta)
            values ($1::uuid, 'assistant', $2::text, $3::text, $4::jsonb)
            returning id, thread_id, role, agent_key, content, meta, created_at`,
-          [threadId, agentId, answer, deepFix(out?.meta || {})]
+          [threadId, agentId, answer, meta]
         );
+
         const row = q.rows?.[0] || null;
         if (row) {
           row.content = fixText(row.content);
@@ -62,9 +84,19 @@ export function chatRoutes({ db, wsHub }) {
         }
       }
 
-      return okJson(res, { ok: true, threadId, agentId, answer, meta: deepFix(out?.meta || {}) });
+      return okJson(res, {
+        ok: Boolean(out?.ok),
+        threadId,
+        agentId,
+        answer,
+        meta,
+      });
     } catch (e) {
-      return okJson(res, { ok: false, error: "Error", details: { message: String(e?.message || e) } });
+      return okJson(res, {
+        ok: false,
+        error: "Error",
+        details: { message: String(e?.message || e) },
+      });
     }
   });
 

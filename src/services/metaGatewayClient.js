@@ -1,5 +1,11 @@
+// src/services/metaGatewayClient.js
+
 function s(v) {
   return String(v ?? "").trim();
+}
+
+function lower(v) {
+  return s(v).toLowerCase();
 }
 
 function trimSlash(v) {
@@ -16,6 +22,18 @@ async function safeReadJson(res) {
   }
 }
 
+function normalizePayload(input = {}) {
+  const x = input && typeof input === "object" && !Array.isArray(input) ? input : {};
+
+  return {
+    ...x,
+    tenantKey: lower(x.tenantKey || x.tenant_key || ""),
+    tenantId: s(x.tenantId || x.tenant_id || ""),
+    channel: lower(x.channel || "instagram"),
+    provider: lower(x.provider || "meta"),
+  };
+}
+
 export async function sendOutboundViaMetaGateway(payload) {
   const base = trimSlash(process.env.META_GATEWAY_BASE_URL || "");
   const token = s(process.env.META_GATEWAY_INTERNAL_TOKEN || "");
@@ -30,6 +48,8 @@ export async function sendOutboundViaMetaGateway(payload) {
     };
   }
 
+  const bodyPayload = normalizePayload(payload || {});
+
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -41,7 +61,7 @@ export async function sendOutboundViaMetaGateway(payload) {
         Accept: "application/json",
         ...(token ? { "x-internal-token": token } : {}),
       },
-      body: JSON.stringify(payload || {}),
+      body: JSON.stringify(bodyPayload),
       signal: controller.signal,
     });
 

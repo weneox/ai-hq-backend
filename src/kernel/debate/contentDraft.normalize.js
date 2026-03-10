@@ -16,6 +16,58 @@ import {
 
 const ALLOWED_GOALS = ["lead", "awareness", "trust", "offer"];
 
+function s(v) {
+  return String(v ?? "").trim();
+}
+
+function normalizeLang(v, fallback = "az") {
+  const x = s(v).toLowerCase();
+  if (!x) return fallback;
+  if (["az", "aze", "azerbaijani"].includes(x)) return "az";
+  if (["en", "eng", "english"].includes(x)) return "en";
+  if (["ru", "rus", "russian"].includes(x)) return "ru";
+  if (["tr", "tur", "turkish"].includes(x)) return "tr";
+  return x;
+}
+
+function getTenantRuntime(vars = {}) {
+  const tenant = asObj(vars?.tenant);
+  const tenantId = s(vars?.tenantId || tenant?.tenantId || tenant?.tenantKey || "default") || "default";
+  const companyName =
+    s(tenant?.companyName || tenant?.brandName || tenant?.name) || tenantId;
+  const outputLanguage = normalizeLang(
+    tenant?.outputLanguage || tenant?.language || vars?.language || "az",
+    "az"
+  );
+  const industryKey = s(tenant?.industryKey || "generic_business") || "generic_business";
+  const requiredHashtags = asArr(
+    tenant?.requiredHashtags ||
+      tenant?.brand?.requiredHashtags ||
+      []
+  )
+    .map((x) => {
+      const t = String(x || "").trim();
+      if (!t) return "";
+      return t.startsWith("#") ? t : `#${t}`;
+    })
+    .filter(Boolean);
+
+  const audiences = asArr(
+    tenant?.audiences ||
+      tenant?.brand?.audiences ||
+      []
+  ).filter(Boolean);
+
+  return {
+    tenantId,
+    companyName,
+    outputLanguage,
+    industryKey,
+    requiredHashtags,
+    audiences,
+  };
+}
+
 export function normalizeGoal(goal) {
   const g = String(goal || "").trim().toLowerCase();
   return ALLOWED_GOALS.includes(g) ? g : "awareness";
@@ -27,20 +79,45 @@ export function ensureHashtagTag(tag) {
   return t.startsWith("#") ? t : `#${t}`;
 }
 
-export function normalizeHashtags(arr = []) {
-  const tags = uniqStrings(asArr(arr).map(ensureHashtagTag)).slice(0, 18);
+export function normalizeHashtags(arr = [], vars = {}) {
+  const tenant = getTenantRuntime(vars);
+
+  let tags = uniqStrings(asArr(arr).map(ensureHashtagTag)).slice(0, 18);
+
   if (!tags.some((x) => x.toLowerCase() === "#ai")) tags.push("#AI");
   if (!tags.some((x) => x.toLowerCase() === "#automation")) tags.push("#Automation");
-  if (!tags.some((x) => x.toLowerCase() === "#neox")) tags.push("#Neox");
+
+  for (const tag of tenant.requiredHashtags) {
+    if (!tags.some((x) => x.toLowerCase() === tag.toLowerCase())) {
+      tags.push(tag);
+    }
+  }
+
+  if (!tenant.requiredHashtags.length) {
+    const brandTag = `#${tenant.companyName.replace(/[^\p{L}\p{N}]+/gu, "")}`.trim();
+    if (
+      brandTag.length > 1 &&
+      !tags.some((x) => x.toLowerCase() === brandTag.toLowerCase())
+    ) {
+      tags.push(brandTag);
+    }
+  }
+
   return uniqStrings(tags).slice(0, 18);
 }
 
-export function normalizeTopic(src) {
+export function normalizeTopic(src, vars = {}) {
+  const tenant = getTenantRuntime(vars);
+  const fallbackTitle =
+    tenant.companyName && tenant.companyName !== "default"
+      ? `${tenant.companyName} content draft`
+      : "Content draft";
+
   const candidate = truncate(
-    fixMojibake(src.topic || src.title || "NEOX content draft"),
+    fixMojibake(src.topic || src.title || fallbackTitle),
     180
   );
-  return candidate || "NEOX content draft";
+  return candidate || fallbackTitle;
 }
 
 export function normalizeVisualPlan({
@@ -90,48 +167,64 @@ function buildFallbackVideoPrompt({
   slides,
   caption,
   cta,
+  vars = {},
 }) {
+  const tenant = getTenantRuntime(vars);
   const first = asObj(slides[0]);
   const second = asObj(slides[1]);
   const third = asObj(slides[2]);
 
   const lines = [
-    "Create a premium cinematic AI-generated vertical brand video for NEOX, an AI automation and digital technology brand.",
+    `Create a premium cinematic AI-generated vertical brand video for ${tenant.companyName}.`,
     "Output format: 9:16 vertical short-form commercial video.",
     topic ? `Core topic: ${topic}.` : "",
     hook ? `Opening emotional direction: ${hook}.` : "",
     caption ? `Narrative direction: ${caption}.` : "",
     cta ? `Ending intent: ${cta}.` : "",
     `Visual preset: ${visualPreset}.`,
+    tenant.industryKey ? `Industry context: ${tenant.industryKey}.` : "",
     visualPlan?.style ? `Overall visual style: ${visualPlan.style}.` : "",
     visualPlan?.composition ? `Composition direction: ${visualPlan.composition}.` : "",
     visualPlan?.colorNotes ? `Color direction: ${visualPlan.colorNotes}.` : "",
     first?.visualPrompt ? `Scene 1: ${first.visualPrompt}` : "",
     second?.visualPrompt ? `Scene 2: ${second.visualPrompt}` : "",
     third?.visualPrompt ? `Scene 3: ${third.visualPrompt}` : "",
-    "The result must feel like a premium technology commercial, not a slideshow and not a template.",
-    "Use coherent scene-to-scene continuity, elegant motion, controlled lighting, cinematic camera movement, believable depth, premium industrial design language, and realistic material rendering.",
+    "The result must feel like a premium commercial micro-film, not a slideshow and not a template.",
+    "Use coherent scene-to-scene continuity, elegant motion, controlled lighting, cinematic camera movement, believable depth, premium material rendering, and commercially usable visual storytelling.",
     "No readable text inside the video.",
     "No subtitles, no title cards, no fake UI, no dashboards, no app screens, no browser windows, no website sections, no posters, no infographic layouts.",
     "Avoid social media graphic look. Avoid flat marketing poster look. Avoid fake interface elements.",
-    "Focus on one strong story arc with premium futuristic business-tech visuals.",
+    "Focus on one strong story arc with premium, brand-appropriate business visuals.",
   ];
 
   return truncate(lines.filter(Boolean).join(" "), 2600);
 }
 
-function buildFallbackVoiceoverText({ hook, caption, cta, topic }) {
+function buildFallbackVoiceoverText({ hook, caption, cta, topic, vars = {} }) {
+  const tenant = getTenantRuntime(vars);
+  const lang = tenant.outputLanguage;
   const parts = [];
+
   if (hook) parts.push(hook);
   if (caption) parts.push(caption);
+
   if (!caption && topic) {
-    parts.push(`${topic} üçün NEOX ilə daha ağıllı və daha sürətli həll qurmaq mümkündür.`);
+    if (lang === "az") {
+      parts.push(`${topic} üçün ${tenant.companyName} ilə daha ağıllı və daha sistemli həll qurmaq mümkündür.`);
+    } else {
+      parts.push(`${tenant.companyName} helps build a smarter and more structured solution around ${topic}.`);
+    }
   }
+
   if (cta) parts.push(cta);
 
+  const fallback =
+    lang === "az"
+      ? `${tenant.companyName} ilə biznesiniz üçün daha ağıllı, daha sürətli və daha sistemli həllər qurun.`
+      : `Build smarter, faster, and more structured business systems with ${tenant.companyName}.`;
+
   return truncate(
-    parts.filter(Boolean).join(" ").replace(/\s+/g, " ").trim() ||
-      "NEOX ilə biznesiniz üçün daha ağıllı, daha sürətli və daha sistemli AI avtomatlaşdırma həlləri qurun.",
+    parts.filter(Boolean).join(" ").replace(/\s+/g, " ").trim() || fallback,
     900
   );
 }
@@ -211,16 +304,22 @@ function normalizeReelFramesAndSlides(payload) {
 
 export function normalizeContentDraftPayload(rawPayload, vars = {}) {
   const src = asObj(rawPayload);
+  const tenant = getTenantRuntime(vars);
   const format = normalizeFormat(src.format || vars.format || "image");
-  const language = String(src.language || "az").trim().toLowerCase() || "az";
+  const language = String(src.language || tenant.outputLanguage || "az").trim().toLowerCase() || "az";
   const tenantKey =
-    String(src.tenantKey || vars.tenantId || "default").trim() || "default";
+    String(src.tenantKey || vars.tenantId || tenant.tenantId || "default").trim() || "default";
 
-  const topic = normalizeTopic(src);
+  const topic = normalizeTopic(src, vars);
   const hook = truncate(fixMojibake(src.hook || ""), 220);
   const caption = truncate(fixMojibake(src.caption || ""), 1200);
   const cta = truncate(
-    fixMojibake(src.cta || "Daha çox məlumat üçün bizimlə əlaqə saxlayın"),
+    fixMojibake(
+      src.cta ||
+        (language === "az"
+          ? "Daha çox məlumat üçün bizimlə əlaqə saxlayın"
+          : "Contact us to learn more")
+    ),
     180
   );
 
@@ -242,6 +341,11 @@ export function normalizeContentDraftPayload(rawPayload, vars = {}) {
 
   const assetBriefSrc = asObj(src.assetBrief);
 
+  const defaultAudience =
+    tenant.audiences.length
+      ? tenant.audiences.join(", ")
+      : "business owners, decision makers, operators, customers";
+
   const payload = {
     type: "content_draft",
     tenantKey,
@@ -250,16 +354,13 @@ export function normalizeContentDraftPayload(rawPayload, vars = {}) {
     topic,
     goal: normalizeGoal(src.goal),
     targetAudience: truncate(
-      fixMojibake(
-        src.targetAudience ||
-          "startup founders, SMEs, tech founders, entrepreneurs, business owners interested in automation"
-      ),
+      fixMojibake(src.targetAudience || defaultAudience),
       220
     ),
     hook,
     caption,
     cta,
-    hashtags: normalizeHashtags(src.hashtags),
+    hashtags: normalizeHashtags(src.hashtags, vars),
     visualPlan,
     slides: [],
     assetBrief: {
@@ -274,6 +375,7 @@ export function normalizeContentDraftPayload(rawPayload, vars = {}) {
             cta,
             visualPlan,
             format,
+            vars,
           }),
         2400
       ),
@@ -290,7 +392,6 @@ export function normalizeContentDraftPayload(rawPayload, vars = {}) {
     complianceNotes: uniqStrings(asArr(src.complianceNotes)).slice(0, 10),
     reviewQuestionsForCEO: uniqStrings(asArr(src.reviewQuestionsForCEO)).slice(0, 8),
 
-    // ✅ top-level stable fields for n8n / runway / execution layer
     imagePrompt: "",
     videoPrompt: "",
     voiceoverText: "",
@@ -300,19 +401,33 @@ export function normalizeContentDraftPayload(rawPayload, vars = {}) {
   };
 
   if (!payload.reviewQuestionsForCEO.length) {
-    payload.reviewQuestionsForCEO = [
-      "Bu mövzu bu gün üçün kifayət qədər aktual və dəyərlidirmi?",
-      "Seçilmiş vizual preset NEOX-un premium texnologiya dilinə uyğundurmu?",
-      "CTA daha direkt olmalıdır, yoxsa daha yumşaq satış yanaşması saxlanmalıdır?",
-    ];
+    payload.reviewQuestionsForCEO =
+      language === "az"
+        ? [
+            "Bu mövzu bu tenant üçün kifayət qədər aktual və dəyərlidirmi?",
+            "Seçilmiş vizual preset brendin premium vizual dilinə uyğundurmu?",
+            "CTA daha direkt olmalıdır, yoxsa daha yumşaq satış yanaşması saxlanmalıdır?",
+          ]
+        : [
+            "Is this topic relevant and valuable enough for this tenant right now?",
+            "Does the selected visual preset fit the brand’s premium visual language?",
+            "Should the CTA be more direct, or should the softer sales approach remain?",
+          ];
   }
 
   if (!payload.complianceNotes.length) {
-    payload.complianceNotes = [
-      "Brend tonu premium, peşəkar və inandırıcı qalmalıdır.",
-      "Şişirdilmiş və sübutsuz nəticə vədlərindən qaçılmalıdır.",
-      "Final render zamanı oxunaqlılıq və təmiz hierarchy qorunmalıdır.",
-    ];
+    payload.complianceNotes =
+      language === "az"
+        ? [
+            "Brend tonu premium, peşəkar və inandırıcı qalmalıdır.",
+            "Şişirdilmiş və sübutsuz nəticə vədlərindən qaçılmalıdır.",
+            "Final render zamanı oxunaqlılıq və təmiz hierarchy qorunmalıdır.",
+          ]
+        : [
+            "The brand tone should remain premium, professional, and credible.",
+            "Avoid exaggerated or unsupported outcome promises.",
+            "Preserve readability and clean hierarchy during final rendering.",
+          ];
   }
 
   payload.slides = buildSlidesFromFrames(payload);
@@ -323,12 +438,12 @@ export function normalizeContentDraftPayload(rawPayload, vars = {}) {
         id: "slide_1",
         index: 1,
         frameType: format === "reel" ? "scene" : "cover",
-        title: payload.topic || "NEOX",
+        title: payload.topic || tenant.companyName || "Draft",
         subtitle: payload.hook || "",
         cta: payload.cta || "",
-        badge: format === "reel" ? "REEL" : "NEOX",
+        badge: format === "reel" ? "REEL" : (tenant.companyName || "BRAND").toUpperCase(),
         align: "left",
-        theme: "neox_dark",
+        theme: "premium_dark",
         slideNumber: 1,
         totalSlides: 1,
         renderHints: {
@@ -339,7 +454,7 @@ export function normalizeContentDraftPayload(rawPayload, vars = {}) {
           focalBias: format === "reel" ? "center" : "right",
         },
         visualDirection:
-          "Clean premium technology scene with one dominant subject, calmer left side, refined studio depth, reduced blur mass",
+          "Clean premium branded scene with one dominant subject, calmer left side, refined depth, reduced blur mass",
         visualPrompt: payload.assetBrief.imagePrompt,
       },
     ];
@@ -357,6 +472,7 @@ export function normalizeContentDraftPayload(rawPayload, vars = {}) {
         slides: payload.slides,
         caption: payload.caption,
         cta: payload.cta,
+        vars,
       });
     }
 
@@ -366,6 +482,7 @@ export function normalizeContentDraftPayload(rawPayload, vars = {}) {
         caption: payload.caption,
         cta: payload.cta,
         topic: payload.topic,
+        vars,
       });
     }
 

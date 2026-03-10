@@ -5,6 +5,7 @@ import { requireInternalToken } from "../../utils/auth.js";
 import { deepFix, fixText } from "../../utils/textFix.js";
 import { writeAudit } from "../../utils/auditLog.js";
 import { classifyComment } from "../../services/commentBrain.js";
+import { resolveTenantKeyFromReq } from "../../tenancy/index.js";
 
 function s(v) {
   return String(v ?? "").trim();
@@ -87,7 +88,7 @@ async function forwardCommentReplyToMetaGateway({
   );
 
   const payload = {
-    tenantKey: s(tenantKey || "neox") || "neox",
+    tenantKey: s(tenantKey || ""),
     actions: [
       {
         type: "reply_comment",
@@ -95,7 +96,7 @@ async function forwardCommentReplyToMetaGateway({
         commentId: s(comment?.external_comment_id || ""),
         text: s(replyText || ""),
         meta: {
-          tenantKey: s(tenantKey || "neox") || "neox",
+          tenantKey: s(tenantKey || ""),
           commentId: s(comment?.id || ""),
           externalCommentId: s(comment?.external_comment_id || ""),
           externalPostId: s(comment?.external_post_id || ""),
@@ -104,7 +105,7 @@ async function forwardCommentReplyToMetaGateway({
       },
     ],
     context: {
-      tenantKey: s(tenantKey || "neox") || "neox",
+      tenantKey: s(tenantKey || ""),
       channel: s(channel || comment?.channel || "instagram").toLowerCase() || "instagram",
       commentId: s(comment?.external_comment_id || ""),
       externalCommentId: s(comment?.external_comment_id || ""),
@@ -491,7 +492,7 @@ export function commentsRoutes({ db, wsHub }) {
       return okJson(res, { ok: false, error: "unauthorized" });
     }
 
-    const tenantKey = s(req.body?.tenantKey || "neox") || "neox";
+    const tenantKey = resolveTenantKeyFromReq(req);
     const source = s(req.body?.source || "meta") || "meta";
     const platform = s(req.body?.platform || "instagram") || "instagram";
     const channel = (s(req.body?.channel || platform || "instagram") || "instagram").toLowerCase();
@@ -713,7 +714,7 @@ export function commentsRoutes({ db, wsHub }) {
   });
 
   r.get("/comments", async (req, res) => {
-    const tenantKey = fixText(s(req.query?.tenantKey || "neox")) || "neox";
+    const tenantKey = resolveTenantKeyFromReq(req);
     const channel = fixText(s(req.query?.channel || "")).toLowerCase();
     const category = fixText(s(req.query?.category || "")).toLowerCase();
     const q = fixText(s(req.query?.q || ""));

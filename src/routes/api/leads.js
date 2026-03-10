@@ -3,6 +3,7 @@ import { okJson, clamp, isDbReady, isUuid } from "../../utils/http.js";
 import { requireInternalToken } from "../../utils/auth.js";
 import { deepFix, fixText } from "../../utils/textFix.js";
 import { writeAudit } from "../../utils/auditLog.js";
+import { getDefaultTenantKey, resolveTenantKey } from "../../tenancy/index.js";
 
 function s(v) {
   return String(v ?? "").trim();
@@ -11,6 +12,10 @@ function s(v) {
 function num(v, fallback = 0) {
   const n = Number(v);
   return Number.isFinite(n) ? n : fallback;
+}
+
+function getResolvedTenantKey(tenantKey) {
+  return resolveTenantKey(tenantKey, getDefaultTenantKey());
 }
 
 function normalizePriority(v) {
@@ -32,6 +37,7 @@ function normalizeLead(row) {
   if (!row) return row;
   return {
     ...row,
+    tenant_key: getResolvedTenantKey(row.tenant_key),
     full_name: fixText(row.full_name || ""),
     username: fixText(row.username || ""),
     company: fixText(row.company || ""),
@@ -53,6 +59,7 @@ function normalizeLeadEvent(row) {
   if (!row) return row;
   return {
     ...row,
+    tenant_key: getResolvedTenantKey(row.tenant_key),
     actor: fixText(row.actor || ""),
     type: fixText(row.type || ""),
     payload: deepFix(row.payload || {}),
@@ -61,7 +68,7 @@ function normalizeLeadEvent(row) {
 
 function cleanLeadPayload(body = {}) {
   return {
-    tenantKey: fixText(s(body?.tenantKey || "neox")) || "neox",
+    tenantKey: getResolvedTenantKey(body?.tenantKey),
     source: fixText(s(body?.source || "manual")) || "manual",
     sourceRef: fixText(s(body?.sourceRef || "")) || null,
     inboxThreadId: s(body?.inboxThreadId || "") || null,
@@ -87,14 +94,19 @@ function cleanLeadPayload(body = {}) {
   };
 }
 
-async function insertLeadEvent(db, {
-  leadId,
-  tenantKey = "neox",
-  type,
-  actor = "ai_hq",
-  payload = {},
-}) {
+async function insertLeadEvent(
+  db,
+  {
+    leadId,
+    tenantKey,
+    type,
+    actor = "ai_hq",
+    payload = {},
+  }
+) {
   if (!leadId || !isUuid(leadId) || !type) return null;
+
+  const resolvedTenantKey = getResolvedTenantKey(tenantKey);
 
   const result = await db.query(
     `
@@ -123,7 +135,7 @@ async function insertLeadEvent(db, {
     `,
     [
       leadId,
-      tenantKey,
+      resolvedTenantKey,
       fixText(s(type)),
       fixText(s(actor || "ai_hq")) || "ai_hq",
       JSON.stringify(payload || {}),
@@ -293,7 +305,7 @@ export function leadsRoutes({ db, wsHub }) {
             notes = case
               when nullif($10::text, '') is null then notes
               when coalesce(notes, '') = '' then $10::text
-              else concat(notes, E'\n\n', $10::text)
+              else concat(notes, E'\\n\\n', $10::text)
             end,
             stage = coalesce(nullif($11::text, ''), stage),
             score = greatest(coalesce(score, 0), $12::int),
@@ -549,7 +561,7 @@ export function leadsRoutes({ db, wsHub }) {
   });
 
   r.get("/leads", async (req, res) => {
-    const tenantKey = fixText(String(req.query?.tenantKey || "neox").trim()) || "neox";
+    const tenantKey = getResolvedTenantKey(req.query?.tenantKey);
     const stage = fixText(String(req.query?.stage || "").trim()).toLowerCase();
     const status = fixText(String(req.query?.status || "").trim()).toLowerCase();
     const owner = fixText(String(req.query?.owner || "").trim());
@@ -1061,7 +1073,7 @@ export function leadsRoutes({ db, wsHub }) {
 
       const event = await insertLeadEvent(db, {
         leadId: lead?.id,
-        tenantKey: lead?.tenant_key || "neox",
+        tenantKey: lead?.tenant_key,
         type: "lead.updated",
         actor: "ai_hq",
         payload: {
@@ -1081,6 +1093,7 @@ export function leadsRoutes({ db, wsHub }) {
           objectType: "lead",
           objectId: String(lead?.id || ""),
           meta: {
+            tenantKey: lead?.tenant_key,
             stage: lead?.stage,
             status: lead?.status,
             score: lead?.score,
@@ -1158,7 +1171,7 @@ export function leadsRoutes({ db, wsHub }) {
 
       const event = await insertLeadEvent(db, {
         leadId: id,
-        tenantKey: lead?.tenant_key || before?.tenant_key || "neox",
+        tenantKey: lead?.tenant_key || before?.tenant_key,
         type: "lead.stage_changed",
         actor,
         payload: {
@@ -1178,6 +1191,7 @@ export function leadsRoutes({ db, wsHub }) {
           objectType: "lead",
           objectId: id,
           meta: {
+            tenantKey: lead?.tenant_key || before?.tenant_key,
             from: before?.stage || null,
             to: lead?.stage || stage,
             reason,
@@ -1252,7 +1266,7 @@ export function leadsRoutes({ db, wsHub }) {
 
       const event = await insertLeadEvent(db, {
         leadId: id,
-        tenantKey: lead?.tenant_key || before?.tenant_key || "neox",
+        tenantKey: lead?.tenant_key || before?.tenant_key,
         type: "lead.status_changed",
         actor,
         payload: {
@@ -1272,6 +1286,7 @@ export function leadsRoutes({ db, wsHub }) {
           objectType: "lead",
           objectId: id,
           meta: {
+            tenantKey: lead?.tenant_key || before?.tenant_key,
             from: before?.status || null,
             to: lead?.status || status,
             reason,
@@ -1345,7 +1360,7 @@ export function leadsRoutes({ db, wsHub }) {
 
       const event = await insertLeadEvent(db, {
         leadId: id,
-        tenantKey: lead?.tenant_key || before?.tenant_key || "neox",
+        tenantKey: lead?.tenant_key || before?.tenant_key,
         type: "lead.owner_changed",
         actor,
         payload: {
@@ -1364,6 +1379,7 @@ export function leadsRoutes({ db, wsHub }) {
           objectType: "lead",
           objectId: id,
           meta: {
+            tenantKey: lead?.tenant_key || before?.tenant_key,
             from: before?.owner || null,
             to: lead?.owner || null,
           },
@@ -1438,7 +1454,7 @@ export function leadsRoutes({ db, wsHub }) {
 
       const event = await insertLeadEvent(db, {
         leadId: id,
-        tenantKey: lead?.tenant_key || before?.tenant_key || "neox",
+        tenantKey: lead?.tenant_key || before?.tenant_key,
         type: "lead.followup_set",
         actor,
         payload: {
@@ -1459,6 +1475,7 @@ export function leadsRoutes({ db, wsHub }) {
           objectType: "lead",
           objectId: id,
           meta: {
+            tenantKey: lead?.tenant_key || before?.tenant_key,
             followUpAt: lead?.follow_up_at || null,
             nextAction: lead?.next_action || null,
           },
@@ -1496,7 +1513,7 @@ export function leadsRoutes({ db, wsHub }) {
         set
           notes = case
             when coalesce(notes, '') = '' then $2::text
-            else concat(notes, E'\n\n', $2::text)
+            else concat(notes, E'\\n\\n', $2::text)
           end,
           updated_at = now()
         where id = $1::uuid
@@ -1535,7 +1552,7 @@ export function leadsRoutes({ db, wsHub }) {
 
       const event = await insertLeadEvent(db, {
         leadId: id,
-        tenantKey: lead?.tenant_key || before?.tenant_key || "neox",
+        tenantKey: lead?.tenant_key || before?.tenant_key,
         type: "lead.note_added",
         actor,
         payload: {
@@ -1553,6 +1570,7 @@ export function leadsRoutes({ db, wsHub }) {
           objectType: "lead",
           objectId: id,
           meta: {
+            tenantKey: lead?.tenant_key || before?.tenant_key,
             notePreview: note.slice(0, 200),
           },
         });

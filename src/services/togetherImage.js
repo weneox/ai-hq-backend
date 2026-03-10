@@ -1,6 +1,6 @@
 // src/services/togetherImage.js
 //
-// FINAL v4.0 — premium tech-scene-first Together image generation
+// FINAL v4.1 — premium tech-scene-first Together image generation
 //
 // Goals:
 // ✅ Stop poster / website / dashboard / UI associations harder
@@ -10,6 +10,10 @@
 // ✅ Reduce left blur / left fog / muddy overlay look
 // ✅ Reduce fake typography / fake UI / baked branding risk
 // ✅ Keep prompts commercially usable for render-later pipeline
+// ✅ Tenant-aware Together credentials support
+// ✅ Falls back to global env if tenant secret not set
+
+import { getTenantTogetherConfig } from "./tenantProviderSecrets.js";
 
 function clean(s) {
   return String(s || "")
@@ -35,7 +39,6 @@ function stripForbiddenTerms(input) {
   let t = clean(input);
 
   const patterns = [
-    // website / ui / layout
     /\bwebsite\b/gi,
     /\bweb page\b/gi,
     /\blanding page\b/gi,
@@ -78,7 +81,6 @@ function stripForbiddenTerms(input) {
     /\bfigma mockup\b/gi,
     /\bdribbble shot\b/gi,
 
-    // poster / ad / branding language
     /\bposter\b/gi,
     /\bad poster\b/gi,
     /\bcampaign\b/gi,
@@ -97,7 +99,6 @@ function stripForbiddenTerms(input) {
     /\bcover design\b/gi,
     /\bposter design\b/gi,
 
-    // readable text / labels / typography
     /\breadable text\b/gi,
     /\btext\b/gi,
     /\btypography\b/gi,
@@ -119,7 +120,6 @@ function stripForbiddenTerms(input) {
     /\btext area\b/gi,
     /\bnegative space\b/gi,
 
-    // branding marks
     /\blogo\b/gi,
     /\blogomark\b/gi,
     /\bmonogram\b/gi,
@@ -194,7 +194,7 @@ Stable premium composition.
 One dominant focal subject.
 Keep the composition balanced and uncluttered.
 Avoid heavy left-side blur or fog.
-    `);
+  `);
 }
 
 function detectVisualPreset(prompt, visualPreset) {
@@ -310,7 +310,7 @@ Preset focus: abstract_tech_scene.
 Create a premium high-tech environment or spatial technology scene.
 Elegant futuristic architecture, engineered structures, refined light forms, spatial depth.
 Atmospheric but still clean, minimal, and commercially usable.
-    `);
+  `);
 }
 
 function buildTopicBlock(topicFamily) {
@@ -523,6 +523,8 @@ function buildMeta({
   aspectRatio,
   width,
   height,
+  credentialSource,
+  tenantKey,
 }) {
   return {
     topic: clean(topic),
@@ -532,6 +534,47 @@ function buildMeta({
     requestedWidth: Number(width) || null,
     requestedHeight: Number(height) || null,
     normalizedInputPrompt: normalizeCorePrompt(prompt),
+    credentialSource: clean(credentialSource || "env"),
+    tenantKey: clean(tenantKey || ""),
+  };
+}
+
+async function resolveTogetherCredentials({ db, tenantKey }) {
+  const envApiKey = String(process.env.TOGETHER_API_KEY || "").trim();
+  const envModel = String(
+    process.env.TOGETHER_IMAGE_MODEL || "ideogram/ideogram-3.0"
+  ).trim();
+
+  const safeTenantKey = clean(tenantKey);
+
+  if (!db || !safeTenantKey) {
+    return {
+      apiKey: envApiKey,
+      model: envModel,
+      credentialSource: "env",
+    };
+  }
+
+  try {
+    const tenantCfg = await getTenantTogetherConfig(db, safeTenantKey);
+    const tenantApiKey = clean(tenantCfg?.apiKey);
+    const tenantModel = clean(tenantCfg?.model);
+
+    if (tenantApiKey) {
+      return {
+        apiKey: tenantApiKey,
+        model: tenantModel || envModel,
+        credentialSource: "tenant_secret",
+      };
+    }
+  } catch {
+    // fallback
+  }
+
+  return {
+    apiKey: envApiKey,
+    model: envModel,
+    credentialSource: "env",
   };
 }
 
@@ -543,13 +586,17 @@ export async function togetherGenerateImage({
   width,
   height,
   aspectRatio = "1:1",
+  db = null,
+  tenantKey = "",
 }) {
-  const apiKey = String(process.env.TOGETHER_API_KEY || "").trim();
-  if (!apiKey) throw new Error("TOGETHER_API_KEY not set");
+  const creds = await resolveTogetherCredentials({ db, tenantKey });
+  const apiKey = clean(creds.apiKey);
 
-  const model = String(
-    process.env.TOGETHER_IMAGE_MODEL || "ideogram/ideogram-3.0"
-  ).trim();
+  if (!apiKey) {
+    throw new Error("TOGETHER_API_KEY not set and tenant secret not found");
+  }
+
+  const model = clean(creds.model || "ideogram/ideogram-3.0");
 
   const finalAspectRatio = detectAspectRatio(aspectRatio, width, height);
   const finalPreset = detectVisualPreset(prompt, visualPreset);
@@ -622,6 +669,8 @@ export async function togetherGenerateImage({
       aspectRatio: finalAspectRatio,
       width: explicitSize.width,
       height: explicitSize.height,
+      credentialSource: creds.credentialSource,
+      tenantKey,
     }),
   };
-}
+} 

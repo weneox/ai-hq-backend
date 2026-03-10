@@ -1,4 +1,5 @@
 import { isDbReady, isUuid } from "../../utils/http.js";
+import { getDefaultTenantKey, resolveTenantKey } from "../../tenancy/index.js";
 import {
   normalizeMessage,
   normalizeTenant,
@@ -20,6 +21,8 @@ function toAttempt(row) {
 export async function getTenantByKey(db, tenantKey) {
   if (!isDbReady(db)) return null;
 
+  const resolvedTenantKey = resolveTenantKey(tenantKey);
+
   try {
     const result = await db.query(
       `
@@ -27,16 +30,21 @@ export async function getTenantByKey(db, tenantKey) {
         id,
         tenant_key,
         name,
-        timezone,
-        inbox_policy,
+        active,
+        brand,
         meta,
+        schedule,
+        inbox_policy,
+        providers,
+        features,
+        timezone,
         created_at,
         updated_at
       from tenants
       where tenant_key = $1::text
       limit 1
       `,
-      [tenantKey]
+      [resolvedTenantKey]
     );
 
     return normalizeTenant(result.rows?.[0] || null);
@@ -54,6 +62,8 @@ export async function findExistingInboundMessage({
   if (!isDbReady(db)) return null;
   if (!threadId || !isUuid(threadId)) return null;
   if (!externalMessageId) return null;
+
+  const resolvedTenantKey = resolveTenantKey(tenantKey);
 
   const result = await db.query(
     `
@@ -78,7 +88,7 @@ export async function findExistingInboundMessage({
     order by created_at desc
     limit 1
     `,
-    [tenantKey, threadId, externalMessageId]
+    [resolvedTenantKey, threadId, externalMessageId]
   );
 
   return normalizeMessage(result.rows?.[0] || null);
@@ -93,6 +103,8 @@ export async function findExistingOutboundMessage({
   if (!isDbReady(db)) return null;
   if (!threadId || !isUuid(threadId)) return null;
   if (!externalMessageId) return null;
+
+  const resolvedTenantKey = resolveTenantKey(tenantKey);
 
   const result = await db.query(
     `
@@ -117,7 +129,7 @@ export async function findExistingOutboundMessage({
     order by created_at desc
     limit 1
     `,
-    [tenantKey, threadId, externalMessageId]
+    [resolvedTenantKey, threadId, externalMessageId]
   );
 
   return normalizeMessage(result.rows?.[0] || null);
@@ -275,7 +287,7 @@ export async function createOutboundAttempt({
   db,
   messageId,
   threadId,
-  tenantKey = "neox",
+  tenantKey = getDefaultTenantKey(),
   channel = "instagram",
   provider = "meta",
   recipientId = null,
@@ -287,6 +299,8 @@ export async function createOutboundAttempt({
   if (!isDbReady(db)) return null;
   if (!messageId || !isUuid(messageId)) return null;
   if (!threadId || !isUuid(threadId)) return null;
+
+  const resolvedTenantKey = resolveTenantKey(tenantKey);
 
   const result = await db.query(
     `
@@ -341,7 +355,7 @@ export async function createOutboundAttempt({
     [
       messageId,
       threadId,
-      tenantKey,
+      resolvedTenantKey,
       channel,
       provider,
       recipientId,
@@ -779,10 +793,15 @@ export async function markOutboundAttemptDead(db, attemptId) {
   return toAttempt(result.rows?.[0] || null);
 }
 
-export async function getOutboundAttemptsSummary(db, tenantKey = "neox") {
+export async function getOutboundAttemptsSummary(
+  db,
+  tenantKey = getDefaultTenantKey()
+) {
+  const resolvedTenantKey = resolveTenantKey(tenantKey);
+
   if (!isDbReady(db)) {
     return {
-      tenantKey,
+      tenantKey: resolvedTenantKey,
       queued: 0,
       sending: 0,
       sent: 0,
@@ -806,12 +825,12 @@ export async function getOutboundAttemptsSummary(db, tenantKey = "neox") {
     from inbox_outbound_attempts
     where tenant_key = $1::text
     `,
-    [tenantKey]
+    [resolvedTenantKey]
   );
 
   const row = result.rows?.[0] || {};
   return {
-    tenantKey,
+    tenantKey: resolvedTenantKey,
     queued: Number(row.queued || 0),
     sending: Number(row.sending || 0),
     sent: Number(row.sent || 0),
@@ -822,17 +841,21 @@ export async function getOutboundAttemptsSummary(db, tenantKey = "neox") {
   };
 }
 
-export async function listFailedOutboundAttempts(db, {
-  tenantKey = "neox",
-  limit = 50,
-  status = "",
-} = {}) {
+export async function listFailedOutboundAttempts(
+  db,
+  {
+    tenantKey = getDefaultTenantKey(),
+    limit = 50,
+    status = "",
+  } = {}
+) {
   if (!isDbReady(db)) return [];
 
+  const resolvedTenantKey = resolveTenantKey(tenantKey);
   const allowed = new Set(["failed", "retrying", "dead", "queued", "sending", "sent"]);
   const useStatus = allowed.has(String(status || "").trim()) ? String(status).trim() : "";
 
-  const values = [tenantKey];
+  const values = [resolvedTenantKey];
   let where = `where a.tenant_key = $1::text`;
 
   if (useStatus) {

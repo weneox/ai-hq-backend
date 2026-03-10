@@ -1,11 +1,43 @@
 // src/prompts/index.js
 //
-// FINAL v2.0 — template vars + dot keys + safe file loading + cache helpers
+// FINAL v3.1 — tenant-ready templates + dot vars + safe file loading + registry helpers
+//
+// ✅ safe prompt root resolution
+// ✅ safe relative path handling
+// ✅ dot var template rendering
+// ✅ global policy loader
+// ✅ usecase prompt loader
+// ✅ usecase existence helpers
+// ✅ cache helpers
+// ✅ future-proof for multi-tenant prompt architecture
 
 import fs from "fs";
 import path from "path";
+import { fileURLToPath } from "url";
 
-const ROOT = path.resolve(process.cwd(), "src", "prompts");
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+function resolvePromptRoot() {
+  const candidates = [
+    path.resolve(process.cwd(), "src", "prompts"),
+    path.resolve(__dirname),
+  ];
+
+  for (const p of candidates) {
+    try {
+      if (fs.existsSync(p) && fs.statSync(p).isDirectory()) {
+        return p;
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  return path.resolve(process.cwd(), "src", "prompts");
+}
+
+const ROOT = resolvePromptRoot();
 const cache = new Map();
 
 function clean(x) {
@@ -19,9 +51,21 @@ function normalizeRel(relPath) {
     .trim();
 }
 
+function isSafeInsideRoot(fullPath) {
+  const rel = path.relative(ROOT, fullPath);
+  return !!rel && !rel.startsWith("..") && !path.isAbsolute(rel);
+}
+
 function readRel(relPath) {
   const rel = normalizeRel(relPath);
-  const full = path.join(ROOT, rel);
+  if (!rel) return "";
+
+  const full = path.resolve(ROOT, rel);
+
+  if (!isSafeInsideRoot(full)) {
+    console.error("[prompts] blocked unsafe path:", rel);
+    return "";
+  }
 
   if (cache.has(full)) return cache.get(full);
 
@@ -55,22 +99,46 @@ function escapeVal(v) {
   }
 }
 
+function getByPath(obj, dottedKey) {
+  const parts = String(dottedKey || "").split(".");
+  let cur = obj;
+
+  for (const p of parts) {
+    if (!cur || typeof cur !== "object") return "";
+    cur = cur[p];
+  }
+
+  return cur;
+}
+
 // supports {{key}} and dot keys like {{a.b.c}}
 function renderTemplate(tpl, vars = {}) {
   const src = String(tpl || "");
   const ctx = vars && typeof vars === "object" ? vars : {};
 
   return src.replace(/\{\{\s*([a-zA-Z0-9_.-]+)\s*\}\}/g, (_m, key) => {
-    const parts = String(key || "").split(".");
-    let cur = ctx;
-
-    for (const p of parts) {
-      if (!cur || typeof cur !== "object") return "";
-      cur = cur[p];
-    }
-
-    return escapeVal(cur);
+    const value = getByPath(ctx, key);
+    return escapeVal(value);
   });
+}
+
+function normalizeUsecaseKey(usecase) {
+  return clean(usecase)
+    .replace(/\\/g, "/")
+    .replace(/^\/+/, "")
+    .replace(/\.txt$/i, "")
+    .trim();
+}
+
+function getUsecaseRelPath(usecase) {
+  const uc = normalizeUsecaseKey(usecase);
+  if (!uc) return "";
+
+  // only allow names like content.draft, meta.comment_reply, content/publish
+  const safe = uc.replace(/[^a-zA-Z0-9._/-]/g, "").trim();
+  if (!safe) return "";
+
+  return `usecases/${safe}.txt`;
 }
 
 export function getGlobalPolicy(vars) {
@@ -78,15 +146,48 @@ export function getGlobalPolicy(vars) {
   return vars ? renderTemplate(base, vars) : base;
 }
 
+export function hasUsecasePrompt(usecase) {
+  const rel = getUsecaseRelPath(usecase);
+  if (!rel) return false;
+
+  const full = path.resolve(ROOT, rel);
+  if (!isSafeInsideRoot(full)) return false;
+
+  try {
+    return fs.existsSync(full);
+  } catch {
+    return false;
+  }
+}
+
+export function getRawUsecasePrompt(usecase) {
+  const rel = getUsecaseRelPath(usecase);
+  if (!rel) return "";
+  return readRel(rel).trim();
+}
+
 // usecase: "content.draft" => "usecases/content.draft.txt"
 export function getUsecasePrompt(usecase, vars) {
-  const uc = clean(usecase);
-  if (!uc) return "";
-
-  const rel = `usecases/${uc}.txt`;
-  const base = readRel(rel).trim();
-
+  const base = getRawUsecasePrompt(usecase);
   return vars ? renderTemplate(base, vars) : base;
+}
+
+export function listKnownUsecases() {
+  const dir = path.resolve(ROOT, "usecases");
+
+  try {
+    if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) {
+      return [];
+    }
+
+    return fs
+      .readdirSync(dir, { withFileTypes: true })
+      .filter((d) => d.isFile() && d.name.endsWith(".txt"))
+      .map((d) => d.name.replace(/\.txt$/i, ""))
+      .sort();
+  } catch {
+    return [];
+  }
 }
 
 export function clearPromptCache() {
@@ -95,4 +196,8 @@ export function clearPromptCache() {
 
 export function getPromptRoot() {
   return ROOT;
+}
+
+export function renderPromptTemplate(template, vars = {}) {
+  return renderTemplate(template, vars);
 }

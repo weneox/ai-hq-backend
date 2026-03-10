@@ -4,6 +4,7 @@ import { requireInternalToken } from "../../utils/auth.js";
 import { fixText } from "../../utils/textFix.js";
 import { buildInboxActions } from "../../services/inboxBrain.js";
 import { writeAudit } from "../../utils/auditLog.js";
+import { resolveTenantKeyFromReq } from "../../tenancy/index.js";
 
 import {
   clamp,
@@ -62,7 +63,7 @@ function buildOutboundAttemptPayload({
 }) {
   return {
     threadId: s(threadId || ""),
-    tenantKey: s(tenantKey || "neox") || "neox",
+    tenantKey: s(tenantKey || ""),
     channel: s(channel || "instagram").toLowerCase() || "instagram",
     recipientId: fixText(s(recipientId || "")) || null,
     senderType: s(senderType || "ai").toLowerCase() || "ai",
@@ -81,7 +82,7 @@ export function inboxRoutes({ db, wsHub }) {
       return okJson(res, { ok: false, error: "unauthorized" });
     }
 
-    const tenantKey = s(req.body?.tenantKey || "neox") || "neox";
+    const tenantKey = resolveTenantKeyFromReq(req);
     const channel = s(req.body?.channel || "instagram").toLowerCase() || "instagram";
 
     const externalThreadId =
@@ -642,8 +643,7 @@ export function inboxRoutes({ db, wsHub }) {
         return okJson(res, { ok: false, error: "thread not found" });
       }
 
-      const tenantKey =
-        s(req.body?.tenantKey || existingThread?.tenant_key || "neox") || "neox";
+      const tenantKey = resolveTenantKeyFromReq(req, existingThread?.tenant_key);
 
       const channel =
         s(req.body?.channel || existingThread?.channel || "instagram").toLowerCase() || "instagram";
@@ -889,7 +889,7 @@ export function inboxRoutes({ db, wsHub }) {
   });
 
   r.get("/inbox/threads", async (req, res) => {
-    const tenantKey = String(req.query?.tenantKey || "neox").trim() || "neox";
+    const tenantKey = resolveTenantKeyFromReq(req);
     const status = String(req.query?.status || "").trim().toLowerCase();
     const q = fixText(String(req.query?.q || "").trim());
     const handoffOnly = truthy(req.query?.handoffOnly);
@@ -1236,7 +1236,7 @@ export function inboxRoutes({ db, wsHub }) {
   });
 
   r.post("/inbox/threads", async (req, res) => {
-    const tenantKey = String(req.body?.tenantKey || "neox").trim() || "neox";
+    const tenantKey = resolveTenantKeyFromReq(req);
     const channel = String(req.body?.channel || "instagram").trim().toLowerCase() || "instagram";
     const externalThreadId = fixText(String(req.body?.externalThreadId || "").trim()) || null;
     const externalUserId = fixText(String(req.body?.externalUserId || "").trim()) || null;
@@ -1353,7 +1353,7 @@ export function inboxRoutes({ db, wsHub }) {
 
   r.post("/inbox/threads/:id/messages", async (req, res) => {
     const threadId = String(req.params.id || "").trim();
-    const tenantKey = String(req.body?.tenantKey || "neox").trim() || "neox";
+    const tenantKey = resolveTenantKeyFromReq(req);
     const direction = String(req.body?.direction || "inbound").trim().toLowerCase() || "inbound";
     const senderType = String(req.body?.senderType || "customer").trim().toLowerCase() || "customer";
     const externalMessageId = fixText(String(req.body?.externalMessageId || "").trim()) || null;
@@ -1944,7 +1944,7 @@ export function inboxRoutes({ db, wsHub }) {
   });
 
     r.get("/inbox/outbound/summary", async (req, res) => {
-    const tenantKey = s(req.query?.tenantKey || "neox") || "neox";
+    const tenantKey = resolveTenantKeyFromReq(req);
 
     try {
       if (!isDbReady(db)) {
@@ -1980,7 +1980,7 @@ export function inboxRoutes({ db, wsHub }) {
   });
 
   r.get("/inbox/outbound/failed", async (req, res) => {
-    const tenantKey = s(req.query?.tenantKey || "neox") || "neox";
+    const tenantKey = resolveTenantKeyFromReq(req);
     const status = s(req.query?.status || "");
     const limit = clamp(toInt(req.query?.limit, 50), 1, 500);
 

@@ -1,3 +1,5 @@
+// src/routes/api/content.notify.js
+
 import { deepFix } from "../../utils/textFix.js";
 import {
   packType,
@@ -11,19 +13,25 @@ import {
 } from "./content.shared.js";
 import { pickThumbnailUrl } from "./content.assets.js";
 
+function s(v) {
+  return String(v ?? "").trim();
+}
+
 export function buildAssetNotifyExtra({
-  tenantId,
+  tenantKey,
+  tenantId = "",
   proposal,
   row,
   jobId,
   contentPack,
 }) {
   return deepFix({
-    tenantId,
-    proposalId: String(proposal?.id || row?.proposal_id || ""),
-    threadId: String(proposal?.thread_id || row?.thread_id || ""),
+    tenantKey: s(tenantKey),
+    tenantId: s(tenantId),
+    proposalId: s(proposal?.id || row?.proposal_id || ""),
+    threadId: s(proposal?.thread_id || row?.thread_id || ""),
     jobId: jobId || null,
-    contentId: String(row?.id || ""),
+    contentId: s(row?.id || ""),
     postType: packType(contentPack),
     format: packType(contentPack),
     aspectRatio: pickAspectRatio(contentPack),
@@ -39,7 +47,8 @@ export function buildAssetNotifyExtra({
 }
 
 export function buildPublishNotifyExtra({
-  tenantId,
+  tenantKey,
+  tenantId = "",
   proposal,
   row,
   jobId,
@@ -51,11 +60,12 @@ export function buildPublishNotifyExtra({
   const kind = packType(contentPack);
 
   return deepFix({
-    tenantId,
-    proposalId: String(proposal?.id || row?.proposal_id || ""),
-    threadId: String(proposal?.thread_id || row?.thread_id || ""),
+    tenantKey: s(tenantKey),
+    tenantId: s(tenantId),
+    proposalId: s(proposal?.id || row?.proposal_id || ""),
+    threadId: s(proposal?.thread_id || row?.thread_id || ""),
     jobId: jobId || null,
-    contentId: String(row?.id || ""),
+    contentId: s(row?.id || ""),
     postType: kind,
     format: kind,
     aspectRatio: pickAspectRatio(contentPack),

@@ -1,7 +1,18 @@
-// src/kernel/agentKernel.js (FINAL v2.3 — UTF fix + prompts folder support)
+// src/kernel/agentKernel.js
+// FINAL v3.0 — UTF fix + prompt bundle pipeline + tenant/industry/usecase support
+//
+// ✅ keeps AGENTS behavior
+// ✅ keeps mojibake repair
+// ✅ uses normalizePromptInput(...)
+// ✅ uses buildPromptBundle(...)
+// ✅ supports tenant/today/format/extra runtime context
+// ✅ supports plain agent chat + structured usecase prompt flow
+// ✅ debug path updated too
+
 import OpenAI from "openai";
 import { cfg } from "../config.js";
-import { getGlobalPolicy, getUsecasePrompt } from "../prompts/index.js";
+import { normalizePromptInput } from "../services/promptInput.js";
+import { buildPromptBundle } from "../services/promptBundle.js";
 
 const AGENTS = {
   orion: {
@@ -49,6 +60,10 @@ function pickStringDeep(x) {
     if (typeof x.text === "string") return x.text;
   }
   return "";
+}
+
+function obj(v) {
+  return v && typeof v === "object" && !Array.isArray(v) ? v : {};
 }
 
 // ✅ Mojibake repair (UTF-8 shown as latin1 -> "gÃ¼nlÃ¼k")
@@ -105,7 +120,6 @@ function extractText(resp) {
     if (joined) return fixMojibake(joined);
   }
 
-  // legacy fallback
   const choices = resp?.choices;
   if (Array.isArray(choices)) {
     const parts = [];
@@ -150,36 +164,71 @@ function makeEmptyHelp(resp, model) {
   return `Cavab boş gəldi (model=${model}, status=${status}, id=${id}, outTok=${outTok}, reasoningTok=${reasonTok}). ${hint}`;
 }
 
-function buildSystem({ agentId, usecase }) {
-  const globalPolicy = getGlobalPolicy();
-  const usecaseTxt = usecase ? getUsecasePrompt(usecase) : "";
-
-  // Agent base system + global rules + optional usecase rules
-  const parts = [
+function buildAgentSystem(agentId) {
+  return [
     `AGENT_ID: ${agentId}`,
-    "",
-    "GLOBAL POLICY:",
-    globalPolicy || "(missing policy.global.txt)",
     "",
     "AGENT SYSTEM:",
     AGENTS[agentId]?.system || "",
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+function buildSystem({
+  agentId,
+  usecase,
+  tenant = null,
+  today = "",
+  format = "",
+  extra = {},
+}) {
+  const normalized = normalizePromptInput(usecase || "", {
+    tenant,
+    today,
+    format,
+    extra,
+  });
+
+  const bundle = buildPromptBundle(usecase || "", {
+    tenant: normalized.tenant,
+    today: normalized.today,
+    format: normalized.format,
+    extra: normalized.extra,
+  });
+
+  const parts = [
+    buildAgentSystem(agentId),
   ];
 
-  if (usecaseTxt) {
-    parts.push("", `USECASE: ${usecase}`, usecaseTxt);
+  if (bundle?.fullPrompt) {
+    parts.push("", "PROMPT BUNDLE:", bundle.fullPrompt);
   }
 
   return parts.filter(Boolean).join("\n");
 }
 
-export async function kernelHandle({ message, agentHint, usecase } = {}) {
+export async function kernelHandle({
+  message,
+  agentHint,
+  usecase,
+  tenant = null,
+  today = "",
+  format = "",
+  extra = {},
+} = {}) {
   const text = normalizeUserMessage(message);
   const agentId = String(agentHint || "orion").trim().toLowerCase() || "orion";
   const agent = AGENTS[agentId] ? agentId : "orion";
 
   const openai = ensureOpenAI();
   if (!openai) {
-    return { ok: false, agent, replyText: "OpenAI aktiv deyil. OPENAI_API_KEY yoxdur.", proposal: null };
+    return {
+      ok: false,
+      agent,
+      replyText: "OpenAI aktiv deyil. OPENAI_API_KEY yoxdur.",
+      proposal: null,
+    };
   }
 
   const model = clampModelName(cfg.OPENAI_MODEL);
@@ -192,7 +241,17 @@ export async function kernelHandle({ message, agentHint, usecase } = {}) {
       text: { format: { type: "text" } },
       max_output_tokens: maxTok,
       input: [
-        { role: "system", content: buildSystem({ agentId: agent, usecase }) },
+        {
+          role: "system",
+          content: buildSystem({
+            agentId: agent,
+            usecase,
+            tenant,
+            today,
+            format,
+            extra,
+          }),
+        },
         { role: "user", content: text },
       ],
     });
@@ -200,7 +259,12 @@ export async function kernelHandle({ message, agentHint, usecase } = {}) {
     const replyText = fixMojibake(extractText(resp));
 
     if (!String(replyText || "").trim()) {
-      return { ok: true, agent, replyText: makeEmptyHelp(resp, model), proposal: null };
+      return {
+        ok: true,
+        agent,
+        replyText: makeEmptyHelp(resp, model),
+        proposal: null,
+      };
     }
 
     return { ok: true, agent, replyText, proposal: null };
@@ -210,9 +274,25 @@ export async function kernelHandle({ message, agentHint, usecase } = {}) {
   }
 }
 
-export async function debugOpenAI({ agent = "orion", message = "ping", usecase } = {}) {
+export async function debugOpenAI({
+  agent = "orion",
+  message = "ping",
+  usecase,
+  tenant = null,
+  today = "",
+  format = "",
+  extra = {},
+} = {}) {
   const openai = ensureOpenAI();
-  if (!openai) return { ok: false, status: null, agent, extractedText: "", raw: "OpenAI disabled" };
+  if (!openai) {
+    return {
+      ok: false,
+      status: null,
+      agent,
+      extractedText: "",
+      raw: "OpenAI disabled",
+    };
+  }
 
   const model = clampModelName(cfg.OPENAI_MODEL);
   const a = AGENTS[agent] ? agent : "orion";
@@ -220,12 +300,36 @@ export async function debugOpenAI({ agent = "orion", message = "ping", usecase }
   try {
     const maxTok = Number(cfg.OPENAI_MAX_OUTPUT_TOKENS || 800);
 
+    const normalized = normalizePromptInput(usecase || "", {
+      tenant,
+      today,
+      format,
+      extra,
+    });
+
+    const bundle = buildPromptBundle(usecase || "", {
+      tenant: normalized.tenant,
+      today: normalized.today,
+      format: normalized.format,
+      extra: normalized.extra,
+    });
+
     const resp = await openai.responses.create({
       model,
       text: { format: { type: "text" } },
       max_output_tokens: maxTok,
       input: [
-        { role: "system", content: buildSystem({ agentId: a, usecase }) },
+        {
+          role: "system",
+          content: [
+            buildAgentSystem(a),
+            "",
+            "PROMPT BUNDLE:",
+            bundle?.fullPrompt || "",
+          ]
+            .filter(Boolean)
+            .join("\n"),
+        },
         { role: "user", content: normalizeUserMessage(message) },
       ],
     });
@@ -237,6 +341,8 @@ export async function debugOpenAI({ agent = "orion", message = "ping", usecase }
       status: resp?.status || null,
       agent: a,
       extractedText,
+      promptBundle: bundle,
+      normalizedPromptInput: normalized,
       raw: JSON.stringify(resp, null, 2),
     };
   } catch (e) {

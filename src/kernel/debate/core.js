@@ -2,7 +2,8 @@
 
 import OpenAI from "openai";
 import { cfg } from "../../config.js";
-import { getGlobalPolicy, getUsecasePrompt } from "../../prompts/index.js";
+import { normalizePromptInput } from "../../services/promptInput.js";
+import { buildPromptBundle } from "../../services/promptBundle.js";
 import {
   clamp,
   extractJsonFromText,
@@ -13,7 +14,7 @@ import {
 } from "./utils.js";
 import { normalizeDraftProposalObject } from "./contentDraft.normalize.js";
 
-export const DEBATE_ENGINE_VERSION = "final-v8.1-modular";
+export const DEBATE_ENGINE_VERSION = "final-v9.0-multitenant";
 console.log(`[debateEngine] LOADED ${DEBATE_ENGINE_VERSION}`);
 
 const DEFAULT_AGENTS = ["orion", "nova", "atlas", "echo"];
@@ -24,7 +25,143 @@ function ensureOpenAI() {
   return new OpenAI({ apiKey: key });
 }
 
-function agentPrompt(agentId, message, round, notesSoFar) {
+function s(v) {
+  return String(v ?? "").trim();
+}
+
+function obj(v) {
+  return v && typeof v === "object" && !Array.isArray(v) ? v : {};
+}
+
+function normalizeMode(mode) {
+  const m0 = String(mode || "").trim().toLowerCase();
+
+  if (
+    m0 === "content_publish" ||
+    m0 === "publish_pack" ||
+    m0 === "content.publish"
+  ) return "publish";
+
+  if (m0 === "content_revise" || m0 === "content.revise") return "revise";
+  if (m0 === "content_draft" || m0 === "content.draft") return "draft";
+  if (m0 === "trend_research" || m0 === "trend.research") return "trend";
+
+  if (
+    m0 === "comment" ||
+    m0 === "meta_comment_reply" ||
+    m0 === "meta.comment_reply"
+  ) return "meta_comment";
+
+  return m0;
+}
+
+function pickUsecaseFromMode(mode) {
+  const m = normalizeMode(mode);
+  if (m === "draft") return "content.draft";
+  if (m === "revise") return "content.revise";
+  if (m === "publish") return "content.publish";
+  if (m === "trend") return "trend.research";
+  if (m === "meta_comment") return "meta.comment_reply";
+  return null;
+}
+
+function modeExpectsJson(mode) {
+  const m0 = normalizeMode(mode);
+  if (m0 === "meta_comment") return false;
+  return ["proposal", "draft", "trend", "publish", "revise"].includes(m0);
+}
+
+function buildTenantRuntime(tenantInput, tenantId) {
+  const t = obj(tenantInput);
+  const brand = obj(t.brand);
+  const meta = obj(t.meta);
+
+  const resolvedTenantId =
+    s(tenantId || t.tenantId || t.tenantKey || t.tenant_key) || "default";
+
+  return {
+    tenantId: resolvedTenantId,
+    tenantKey: resolvedTenantId,
+    companyName:
+      s(t.companyName || t.name || brand.companyName || brand.name || meta.companyName) ||
+      resolvedTenantId,
+    industryKey:
+      s(t.industryKey || t.industry || brand.industryKey || brand.industry || meta.industryKey) ||
+      "generic_business",
+    defaultLanguage:
+      s(t.defaultLanguage || t.language || brand.defaultLanguage || brand.language) || "az",
+    outputLanguage:
+      s(t.outputLanguage || brand.outputLanguage || t.language || brand.language) || "",
+    ctaStyle:
+      s(t.ctaStyle || brand.ctaStyle || meta.ctaStyle) || "contact",
+    visualTheme:
+      s(t.visualTheme || brand.visualTheme) || "premium_modern",
+    brand: {
+      name: s(brand.name),
+      companyName: s(brand.companyName),
+      industryKey: s(brand.industryKey),
+      defaultLanguage: s(brand.defaultLanguage || brand.language),
+      outputLanguage: s(brand.outputLanguage),
+      ctaStyle: s(brand.ctaStyle),
+      visualTheme: s(brand.visualTheme),
+      tone: Array.isArray(brand.tone) ? brand.tone : [],
+      services: Array.isArray(brand.services) ? brand.services : [],
+      audiences: Array.isArray(brand.audiences) ? brand.audiences : [],
+      requiredHashtags: Array.isArray(brand.requiredHashtags) ? brand.requiredHashtags : [],
+      preferredPresets: Array.isArray(brand.preferredPresets) ? brand.preferredPresets : [],
+      visualStyle: obj(brand.visualStyle),
+    },
+    tone: Array.isArray(t.tone) ? t.tone : [],
+    services: Array.isArray(t.services) ? t.services : [],
+    audiences: Array.isArray(t.audiences) ? t.audiences : [],
+    requiredHashtags: Array.isArray(t.requiredHashtags) ? t.requiredHashtags : [],
+    preferredPresets: Array.isArray(t.preferredPresets) ? t.preferredPresets : [],
+    meta,
+  };
+}
+
+function buildDebateExtra({
+  mode,
+  formatHint,
+  threadId,
+  extra,
+}) {
+  const x = obj(extra);
+  const normMode = normalizeMode(mode);
+
+  const out = {
+    ...x,
+    threadId: s(threadId),
+    format: s(x.format || formatHint),
+    mode: normMode,
+  };
+
+  if (normMode === "draft") {
+    out.format = s(x.format || formatHint || "image");
+  }
+
+  if (normMode === "revise") {
+    out.previousDraft = x.previousDraft || x.draft || x.content || null;
+    out.feedback = s(x.feedback);
+  }
+
+  if (normMode === "publish") {
+    out.approvedDraft = x.approvedDraft || x.draft || x.content || x.contentPack || null;
+    out.assetUrls = x.assetUrls || x.generatedAssetUrls || [];
+    out.platform = s(x.platform || "instagram").toLowerCase() || "instagram";
+  }
+
+  if (normMode === "meta_comment") {
+    out.commentText = s(x.commentText || x.comment || x.text);
+    out.authorName = s(x.authorName || x.username || x.author);
+    out.postTopic = s(x.postTopic || x.topic);
+    out.platform = s(x.platform || "instagram").toLowerCase() || "instagram";
+  }
+
+  return out;
+}
+
+function agentPrompt(agentId, message, round, notesSoFar, mode) {
   const roles = {
     orion: "Strategist: məhsul strategiyası, roadmap, KPI, risklər.",
     nova: "Creative: marketinq, kontent, offer, CTA, funnel.",
@@ -43,6 +180,7 @@ QAYDALAR:
 - Lazımsız uzun izah vermə.
 - Heç bir halda JSON, kod bloku, {...} yazma.
 - Round ${round}.
+- Mode: ${normalizeMode(mode) || "answer"}.
 
 İSTİFADƏÇİ MESAJI:
 ${message}
@@ -91,8 +229,9 @@ async function askAgent({
   round,
   notesSoFar,
   timeoutMs,
+  mode,
 }) {
-  const prompt = agentPrompt(agentId, message, round, notesSoFar);
+  const prompt = agentPrompt(agentId, message, round, notesSoFar, mode);
   const maxOut = Number(cfg.OPENAI_DEBATE_AGENT_TOKENS || 900);
 
   const req = {
@@ -113,6 +252,7 @@ async function askAgent({
     timeoutMs,
     `OpenAI timeout (${agentId})`
   );
+
   let text = extractText(resp);
 
   console.log(
@@ -144,82 +284,28 @@ function fallbackSynthesis(agentNotes = []) {
   return parts.join("\n\n").trim();
 }
 
-function pickUsecaseFromMode(mode) {
-  const m0 = String(mode || "").trim().toLowerCase();
-
-  const m =
-    m0 === "content_publish" ||
-    m0 === "publish_pack" ||
-    m0 === "content.publish"
-      ? "publish"
-      : m0 === "content_revise" || m0 === "content.revise"
-      ? "revise"
-      : m0 === "content_draft" || m0 === "content.draft"
-      ? "draft"
-      : m0 === "trend_research" || m0 === "trend.research"
-      ? "trend"
-      : m0 === "comment" ||
-        m0 === "meta_comment_reply" ||
-        m0 === "meta.comment_reply"
-      ? "meta_comment"
-      : m0;
-
-  if (m === "draft") return "content.draft";
-  if (m === "revise") return "content.revise";
-  if (m === "publish") return "content.publish";
-  if (m === "trend") return "trend.research";
-  if (m === "meta_comment") return "meta.comment_reply";
-
-  return null;
-}
-
-function normalizeMode(mode) {
-  const m0 = String(mode || "").trim().toLowerCase();
-  if (
-    m0 === "content_publish" ||
-    m0 === "publish_pack" ||
-    m0 === "content.publish"
-  )
-    return "publish";
-  if (m0 === "content_revise" || m0 === "content.revise") return "revise";
-  if (m0 === "content_draft" || m0 === "content.draft") return "draft";
-  if (m0 === "trend_research" || m0 === "trend.research") return "trend";
-  if (
-    m0 === "comment" ||
-    m0 === "meta_comment_reply" ||
-    m0 === "meta.comment_reply"
-  )
-    return "meta_comment";
-  return m0;
-}
-
-function modeExpectsJson(mode) {
-  const m0 = String(mode || "").trim().toLowerCase();
-  if (m0 === "meta_comment") return false;
-  return ["proposal", "draft", "trend", "publish", "revise"].includes(m0);
-}
-
-function buildSynthesisSystem({ mode, vars }) {
-  const global = getGlobalPolicy(vars);
+function buildSynthesisSystem({ mode, normalizedPromptInput, bundle }) {
   const usecase = pickUsecaseFromMode(mode);
-  const ucText = usecase ? getUsecasePrompt(usecase, vars) : "";
 
   const base = `
 You are AI HQ Kernel.
-Follow GLOBAL POLICY and USECASE instructions strictly.
+Follow PROMPT BUNDLE instructions strictly.
 Return clean outputs.
-If USECASE requires STRICT JSON: output ONLY valid JSON (no markdown, no extra text).
-If USECASE requires plain text: output ONLY plain text.
+If the usecase requires STRICT JSON: output ONLY valid JSON with no markdown and no extra text.
+If the usecase requires plain text: output ONLY plain text.
 `.trim();
 
   return [
     base,
     "",
-    "GLOBAL POLICY:",
-    global || "(missing policy.global.txt)",
-    "",
+    `MODE: ${normalizeMode(mode)}`,
     usecase ? `USECASE: ${usecase}` : "",
-    usecase ? ucText : "",
+    "",
+    "PROMPT INPUT:",
+    JSON.stringify(normalizedPromptInput || {}, null, 2),
+    "",
+    "PROMPT BUNDLE:",
+    bundle?.fullPrompt || "",
   ]
     .filter((x) => String(x || "").trim())
     .join("\n");
@@ -249,6 +335,7 @@ Rules:
     timeoutMs,
     "OpenAI timeout (json-repair)"
   );
+
   const fixed = fixMojibake(extractText(respFix));
   return extractJsonFromText(fixed);
 }
@@ -262,13 +349,32 @@ async function synthesizeFinal({
   vars,
 }) {
   const normMode = normalizeMode(mode);
+  const usecase = pickUsecaseFromMode(normMode);
 
   const notesText = (agentNotes || [])
     .map((n) => `### ${n.agentId}\n${String(n.text || "").trim()}`)
     .join("\n\n");
 
+  const normalizedPromptInput = normalizePromptInput(usecase || normMode, {
+    tenant: vars.tenant,
+    today: vars.today,
+    format: vars.format,
+    extra: vars.extra,
+  });
+
+  const bundle = buildPromptBundle(usecase || normMode, {
+    tenant: normalizedPromptInput.tenant,
+    today: normalizedPromptInput.today,
+    format: normalizedPromptInput.format,
+    extra: normalizedPromptInput.extra,
+  });
+
   const maxOut = Number(cfg.OPENAI_DEBATE_SYNTH_TOKENS || 2600);
-  const sysText = buildSynthesisSystem({ mode: normMode, vars });
+  const sysText = buildSynthesisSystem({
+    mode: normMode,
+    normalizedPromptInput,
+    bundle,
+  });
 
   const userText = `
 USER_REQUEST:
@@ -293,6 +399,7 @@ ${notesText || "(empty)"}
     timeoutMs,
     "OpenAI timeout (synthesis)"
   );
+
   let outText = extractText(respText);
 
   if (!String(outText || "").trim()) {
@@ -306,7 +413,12 @@ ${notesText || "(empty)"}
   const expectsJson = modeExpectsJson(normMode);
 
   if (!expectsJson) {
-    return { finalAnswer: outText, proposal: null };
+    return {
+      finalAnswer: outText,
+      proposal: null,
+      promptBundle: bundle,
+      normalizedPromptInput,
+    };
   }
 
   let obj = extractJsonFromText(outText);
@@ -319,18 +431,34 @@ ${notesText || "(empty)"}
 
   if (normMode === "proposal") {
     if (!obj || typeof obj !== "object") obj = null;
-    return { finalAnswer: outText, proposal: obj };
+    return {
+      finalAnswer: outText,
+      proposal: obj,
+      promptBundle: bundle,
+      normalizedPromptInput,
+    };
   }
 
   if (normMode === "draft") {
-    const proposal = normalizeDraftProposalObject(obj || { raw: outText }, vars);
-    return { finalAnswer: outText, proposal };
+    const proposal = normalizeDraftProposalObject(obj || { raw: outText }, normalizedPromptInput);
+    return {
+      finalAnswer: outText,
+      proposal,
+      promptBundle: bundle,
+      normalizedPromptInput,
+    };
   }
 
   if (obj && typeof obj === "object") {
     if (obj.type && obj.payload) {
-      return { finalAnswer: outText, proposal: obj };
+      return {
+        finalAnswer: outText,
+        proposal: obj,
+        promptBundle: bundle,
+        normalizedPromptInput,
+      };
     }
+
     return {
       finalAnswer: outText,
       proposal: {
@@ -340,6 +468,8 @@ ${notesText || "(empty)"}
         ).slice(0, 120),
         payload: obj,
       },
+      promptBundle: bundle,
+      normalizedPromptInput,
     };
   }
 
@@ -350,6 +480,8 @@ ${notesText || "(empty)"}
       title: "Draft",
       payload: { raw: outText },
     },
+    promptBundle: bundle,
+    normalizedPromptInput,
   };
 }
 
@@ -359,8 +491,10 @@ export async function runDebate({
   rounds = 2,
   mode = "answer",
   tenantId = "default",
+  tenant = null,
   threadId = "",
   formatHint = null,
+  extra = {},
 }) {
   const openai = ensureOpenAI();
   if (!openai) {
@@ -395,6 +529,7 @@ export async function runDebate({
             round,
             notesSoFar,
             timeoutMs,
+            mode,
           });
           return { agentId, text: fixMojibake(text || "") };
         } catch (e) {
@@ -407,12 +542,22 @@ export async function runDebate({
     notesSoFar = agentNotes.map((n) => `[${n.agentId}] ${n.text}`).join("\n\n");
   }
 
+  const tenantRuntime = buildTenantRuntime(tenant, tenantId);
+  const debateExtra = buildDebateExtra({
+    mode,
+    formatHint,
+    threadId,
+    extra,
+  });
+
   const vars = {
-    tenantId: String(tenantId || "default"),
+    tenantId: tenantRuntime.tenantId,
+    tenant: tenantRuntime,
     threadId: String(threadId || ""),
-    format: String(formatHint || "").trim() || "auto",
+    format: String(formatHint || debateExtra.format || "").trim() || "auto",
     today: new Date().toISOString().slice(0, 10),
     mode: normalizeMode(mode),
+    extra: debateExtra,
   };
 
   const synth = await synthesizeFinal({
@@ -431,5 +576,7 @@ export async function runDebate({
       text: fixMojibake(n.text),
     })),
     proposal: synth.proposal,
+    promptBundle: synth.promptBundle || null,
+    normalizedPromptInput: synth.normalizedPromptInput || null,
   };
 }

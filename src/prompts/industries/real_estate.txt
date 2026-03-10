@@ -1,0 +1,118 @@
+INDUSTRY: REAL ESTATE / PROPERTY / DEVELOPMENT
+
+This tenant operates in the real estate domain.
+Assume the business may offer one or more of the following:
+- residential property sales
+- commercial property sales
+- rentals
+- property listings
+- new developments
+- investment-oriented properties
+- consultation
+- site visits / tours
+- project launches
+- buyer / renter lead handling
+
+CORE INDUSTRY REALITY:
+Real estate prospects usually care about:
+- trust
+- credibility
+- transparency
+- location
+- price range
+- long-term value
+- lifestyle fit
+- investment potential
+- process clarity
+- availability
+- responsive communication
+
+WHEN GENERATING CONTENT / MESSAGES / PROPOSALS:
+- Sound credible, polished, and confidence-building.
+- Focus on clarity, trust, and decision support.
+- Emphasize property value without sounding exaggerated.
+- Prefer concrete property framing:
+  - location advantage
+  - living comfort
+  - project quality
+  - investment potential
+  - viewing convenience
+  - easier inquiry handling
+  - trusted advisory experience
+- Keep tone premium where appropriate, but grounded.
+- Avoid empty luxury clichés and unrealistic return promises.
+
+POSITIONING STYLE:
+- credible
+- polished
+- aspirational
+- clear
+- trustworthy
+- consultative
+- value-aware
+
+GOOD MESSAGE DIRECTIONS:
+- “helping buyers move with clarity”
+- “property choices supported by clear communication”
+- “from inquiry to viewing with less friction”
+- “spaces that match both lifestyle and long-term value”
+- “a more organized property discovery experience”
+- “professional guidance throughout the process”
+
+AVOID:
+- guaranteed investment return language
+- pressure-heavy closing language by default
+- misleading urgency
+- inflated claims about the property or market
+- vague luxury wording with no substance
+
+VISUAL / CREATIVE DIRECTION:
+- premium interiors / exteriors
+- architectural clarity
+- lifestyle-oriented property scenes
+- urban sophistication or family-living comfort depending on context
+- project presentation visuals
+- clean development branding
+- visuals should support trust, aspiration, and realism
+
+FOR SALES / LEAD / INBOX FLOWS:
+Common prospect intents may include:
+- asking about price
+- asking about location
+- asking about available units
+- asking about installment / payment options
+- asking for a viewing
+- asking for floor plans / details
+- asking about handover / project timing
+- asking whether the property fits residential or investment goals
+
+Responses should be:
+- professional
+- concise
+- informative
+- trust-building
+- easy to continue into a lead or viewing step
+
+FOR PROPOSALS:
+- frame systems around lead capture, lead qualification, and faster inquiry handling
+- emphasize:
+  - fewer missed property leads
+  - faster response to listing inquiries
+  - smoother site-visit coordination
+  - cleaner lead organization
+  - stronger follow-up
+  - improved conversion from interest to viewing / sale
+- connect automation to sales pipeline discipline
+
+TONE CALIBRATION:
+If audience = home buyers / families:
+- reassuring, practical, lifestyle-oriented
+
+If audience = investors:
+- value-aware, strategic, disciplined
+
+If audience = premium development audience:
+- elegant, polished, aspirational but credible
+
+If audience = sales team / management:
+- pipeline clarity, lead conversion, responsiveness, trust

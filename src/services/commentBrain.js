@@ -1,5 +1,9 @@
+// src/services/commentBrain.js
+// FINAL v2.0 — tenant-safe public comment classifier
+
 import OpenAI from "openai";
 import { cfg } from "../config.js";
+import { getDefaultTenantKey, resolveTenantKey } from "../tenancy/index.js";
 
 function s(v) {
   return String(v ?? "").trim();
@@ -140,6 +144,20 @@ function normalizeSentiment(v) {
     : "neutral";
 }
 
+function getResolvedTenantKey(tenantKey) {
+  return resolveTenantKey(tenantKey, getDefaultTenantKey());
+}
+
+function getTenantBrandName(tenant, tenantKey) {
+  const brandName =
+    tenant?.brand?.displayName ||
+    tenant?.brand?.name ||
+    tenant?.name ||
+    getResolvedTenantKey(tenantKey);
+
+  return s(brandName || "Brand");
+}
+
 let openaiSingleton = null;
 
 function ensureOpenAI() {
@@ -153,8 +171,10 @@ function ensureOpenAI() {
   return openaiSingleton;
 }
 
-function fallbackClassification(text) {
+function fallbackClassification(text, { tenantKey, tenant } = {}) {
   const incoming = lower(text);
+  const resolvedTenantKey = getResolvedTenantKey(tenantKey);
+  const brandName = getTenantBrandName(tenant, resolvedTenantKey);
 
   let category = "normal";
   let priority = "low";
@@ -347,25 +367,37 @@ function fallbackClassification(text) {
     replySuggestion,
     reason,
     engine: "fallback",
+    meta: {
+      tenantKey: resolvedTenantKey,
+      brandName,
+    },
   };
 }
 
-function normalizeOutput(parsed) {
+function normalizeOutput(parsed, { tenantKey, tenant } = {}) {
+  const resolvedTenantKey = getResolvedTenantKey(tenantKey);
+  const brandName = getTenantBrandName(tenant, resolvedTenantKey);
+
   return {
     category: normalizeCategory(parsed?.category),
     priority: normalizePriority(parsed?.priority),
     sentiment: normalizeSentiment(parsed?.sentiment),
     requiresHuman: Boolean(parsed?.requiresHuman),
     shouldCreateLead: Boolean(parsed?.shouldCreateLead),
-    shouldReply: false, // public comments üçün konservativ saxlayırıq
+    shouldReply: false,
     replySuggestion: cleanReplySuggestion(parsed?.replySuggestion || ""),
     reason: cleanReason(parsed?.reason || "ai_classified"),
     engine: "ai",
+    meta: {
+      tenantKey: resolvedTenantKey,
+      brandName,
+    },
   };
 }
 
 export async function classifyComment({
   tenantKey,
+  tenant = null,
   channel,
   externalUserId,
   externalUsername,
@@ -373,6 +405,8 @@ export async function classifyComment({
   text,
 }) {
   const cleanText = fixMojibake(s(text || ""));
+  const resolvedTenantKey = getResolvedTenantKey(tenantKey);
+  const brandName = getTenantBrandName(tenant, resolvedTenantKey);
 
   if (!cleanText) {
     return {
@@ -385,22 +419,29 @@ export async function classifyComment({
       replySuggestion: "",
       reason: "empty_text",
       engine: "rule",
+      meta: {
+        tenantKey: resolvedTenantKey,
+        brandName,
+      },
     };
   }
 
   const openai = ensureOpenAI();
   if (!openai) {
-    return fallbackClassification(cleanText);
+    return fallbackClassification(cleanText, {
+      tenantKey: resolvedTenantKey,
+      tenant,
+    });
   }
 
   const model = s(cfg.OPENAI_MODEL || "gpt-5") || "gpt-5";
   const max_output_tokens = Number(cfg.OPENAI_MAX_OUTPUT_TOKENS || 500);
 
   const prompt = `
-You are a strict JSON classifier for PUBLIC social media comments for NEOX.
+You are a strict JSON classifier for PUBLIC social media comments for ${brandName}.
 
 Business context:
-- NEOX offers website development, AI automation, chatbots, WhatsApp/Instagram automation, and digital systems.
+- This brand provides digital services such as website development, AI automation, chatbot systems, WhatsApp/Instagram/Messenger automation, and related business automation solutions.
 - This input is a PUBLIC COMMENT, not a DM.
 - Be conservative and avoid aggressive lead tagging.
 - We are only classifying, not executing actions.
@@ -438,15 +479,16 @@ Rules:
 - reason must be short snake_case
 
 Context:
-tenantKey=${s(tenantKey || "neox")}
-channel=${s(channel || "instagram")}
-externalUserId=${s(externalUserId || "")}
-externalUsername=${s(externalUsername || "")}
-customerName=${s(customerName || "")}
+brandName=${JSON.stringify(brandName)}
+tenantKey=${JSON.stringify(resolvedTenantKey)}
+channel=${JSON.stringify(s(channel || "instagram"))}
+externalUserId=${JSON.stringify(s(externalUserId || ""))}
+externalUsername=${JSON.stringify(s(externalUsername || ""))}
+customerName=${JSON.stringify(s(customerName || ""))}
 
 Comment:
 ${JSON.stringify(cleanText)}
-`.trim();
+  `.trim();
 
   try {
     const resp = await openai.responses.create({
@@ -469,11 +511,20 @@ ${JSON.stringify(cleanText)}
     const parsed = parseJsonLoose(raw);
 
     if (!parsed || typeof parsed !== "object") {
-      return fallbackClassification(cleanText);
+      return fallbackClassification(cleanText, {
+        tenantKey: resolvedTenantKey,
+        tenant,
+      });
     }
 
-    return normalizeOutput(parsed);
+    return normalizeOutput(parsed, {
+      tenantKey: resolvedTenantKey,
+      tenant,
+    });
   } catch {
-    return fallbackClassification(cleanText);
+    return fallbackClassification(cleanText, {
+      tenantKey: resolvedTenantKey,
+      tenant,
+    });
   }
 }

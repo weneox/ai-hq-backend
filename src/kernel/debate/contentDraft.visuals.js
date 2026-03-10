@@ -21,6 +21,46 @@ const ALLOWED_VISUAL_PRESETS = [
   "workflow_engine",
 ];
 
+function s(v) {
+  return String(v ?? "").trim();
+}
+
+function normalizeLang(v, fallback = "az") {
+  const x = s(v).toLowerCase();
+  if (!x) return fallback;
+  if (["az", "aze", "azerbaijani"].includes(x)) return "az";
+  if (["en", "eng", "english"].includes(x)) return "en";
+  if (["ru", "rus", "russian"].includes(x)) return "ru";
+  if (["tr", "tur", "turkish"].includes(x)) return "tr";
+  return x;
+}
+
+function getTenantRuntime(payloadOrVars = {}) {
+  const src = asObj(payloadOrVars);
+  const tenant = asObj(src.tenant || src.vars?.tenant || {});
+  const tenantId = s(src.tenantId || src.vars?.tenantId || tenant.tenantId || tenant.tenantKey || "default") || "default";
+  const companyName =
+    s(tenant.companyName || tenant.brandName || tenant.name) || tenantId;
+  const outputLanguage = normalizeLang(
+    tenant.outputLanguage || tenant.language || src.language || src.vars?.language || "az",
+    "az"
+  );
+  const visualTheme = s(tenant.visualTheme || "premium_modern") || "premium_modern";
+
+  return {
+    tenantId,
+    companyName,
+    outputLanguage,
+    visualTheme,
+  };
+}
+
+function defaultBrandBadge(companyName = "") {
+  const clean = s(companyName).replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+  if (!clean) return "BRAND";
+  return truncate(clean.toUpperCase(), 18);
+}
+
 export function normalizeFormat(format) {
   const f = String(format || "").trim().toLowerCase();
   if (ALLOWED_FORMATS.includes(f)) return f;
@@ -404,29 +444,60 @@ export function buildFallbackFrame({
   topic,
   preset,
   topicFamily,
+  vars = {},
 }) {
+  const tenant = getTenantRuntime(vars);
+  const lang = tenant.outputLanguage;
   const presetPack = presetStyleBlock(preset);
   const topicEls = topicFamilyElements(topicFamily);
 
   const isCover = idx === 1;
   const isLast = idx === total;
 
-  let headline = "NEOX ilə daha ağıllı sistem";
-  let subline = "AI və avtomatlaşdırma ilə sürət, sistem və keyfiyyət qazanın";
+  let headline =
+    lang === "az"
+      ? "Daha ağıllı sistem qurun"
+      : "Build a smarter system";
+
+  let subline =
+    lang === "az"
+      ? "Daha sürətli, daha sistemli və daha keyfiyyətli iş axını qurun"
+      : "Create a faster, more structured, and higher-quality workflow";
 
   if (isCover) {
-    headline = topic && topic.length > 4 ? truncate(topic, 110) : "AI biznesdə harada işləyir?";
+    headline = topic && topic.length > 4
+      ? truncate(topic, 110)
+      : lang === "az"
+      ? "Bu proses daha ağıllı ola bilər"
+      : "This process can be smarter";
+
     subline =
-      "Praktik istifadə sahələri, sistemli axınlar və real avtomatlaşdırma imkanları";
+      lang === "az"
+        ? "Praktik istifadə sahələri, sistemli axınlar və real avtomatlaşdırma imkanları"
+        : "Practical use cases, structured flows, and real automation opportunities";
   } else if (isLast) {
-    headline = "Sistemi biznesinizə uyğun quraq";
+    headline =
+      lang === "az"
+        ? "Sistemi biznesinizə uyğun quraq"
+        : "Let’s shape the right system for your business";
+
     subline = truncate(
-      cta || "NEOX ilə uyğun AI avtomatlaşdırma həllərini qurmaq üçün əlaqə saxlayın",
+      cta ||
+        (lang === "az"
+          ? `Daha uyğun həll üçün ${tenant.companyName} ilə əlaqə saxlayın`
+          : `Contact ${tenant.companyName} to explore the right solution`),
       180
     );
   } else {
-    headline = `İstifadə sahəsi ${idx - 1}`;
-    subline = "Manual işi azaldan və prosesi sürətləndirən ağıllı avtomatlaşdırma axını";
+    headline =
+      lang === "az"
+        ? `İstifadə sahəsi ${idx - 1}`
+        : `Use case ${idx - 1}`;
+
+    subline =
+      lang === "az"
+        ? "Manual işi azaldan və prosesi sürətləndirən ağıllı avtomatlaşdırma axını"
+        : "A smart automation flow that reduces manual work and speeds up the process";
   }
 
   return normalizeFrame(
@@ -438,7 +509,7 @@ export function buildFallbackFrame({
           ? "clean premium composition with dominant subject on right side, calm refined left side, reduced left blur, elegant studio depth"
           : isLast
           ? "clean composition with strong focal device and clear premium balance, open left side without heavy fog"
-          : "clean technology scene with one dominant object, right-biased focal subject, controlled atmosphere, minimal left-side haze",
+          : "clean technology or branded scene with one dominant object, right-biased focal subject, controlled atmosphere, minimal left-side haze",
       headline,
       subline,
       visualElements: uniqStrings([...presetPack.elements, ...topicEls]).slice(0, 6),
@@ -463,7 +534,8 @@ export function ensureFrames(
   cta = "",
   topic = "",
   preset = "",
-  topicFamily = ""
+  topicFamily = "",
+  vars = {}
 ) {
   let out = asArr(frames)
     .map((f, i) => normalizeFrame(f, i + 1, format))
@@ -480,6 +552,7 @@ export function ensureFrames(
           topic,
           preset,
           topicFamily,
+          vars,
         }),
       ];
     }
@@ -500,6 +573,7 @@ export function ensureFrames(
             topic,
             preset,
             topicFamily,
+            vars,
           })
         );
       }
@@ -529,6 +603,7 @@ export function ensureFrames(
             topic,
             preset,
             topicFamily,
+            vars,
           })
         );
       }
@@ -621,6 +696,7 @@ export function buildRenderHints(frame, format, idx, totalSlides) {
 
 export function buildFallbackImagePrompt(payload) {
   const p = asObj(payload);
+  const tenant = getTenantRuntime(payload);
   const format = normalizeFormat(p.format || "image");
   const visualPlan = asObj(p.visualPlan);
   const frames = asArr(visualPlan.frames);
@@ -640,7 +716,7 @@ export function buildFallbackImagePrompt(payload) {
   const presetBlock = presetStyleBlock(preset);
 
   const lines = [
-    "Create a premium text-free futuristic technology scene for NEOX, an AI automation and digital technology brand.",
+    `Create a premium text-free futuristic or brand-appropriate commercial scene for ${tenant.companyName}.`,
     p.topic ? `Topic context: ${p.topic}.` : "",
     p.hook ? `Message mood reference: ${p.hook}.` : "",
     first.headline ? `Primary frame emotion: ${first.headline}.` : "",
@@ -651,7 +727,7 @@ export function buildFallbackImagePrompt(payload) {
       : `Style direction: ${presetBlock.style}.`,
     visualPlan.colorNotes
       ? `Color palette: ${sanitizeVisualText(visualPlan.colorNotes, 180)}.`
-      : "Color palette: deep graphite, cyan highlights, cool blue glow, premium dark contrast, subtle silver reflections.",
+      : "Color palette: deep graphite, cyan highlights, cool blue glow, premium dark contrast, subtle metallic reflections.",
     visualPlan.composition
       ? `Composition: ${sanitizeVisualText(visualPlan.composition, 240)}.`
       : `Composition: ${presetBlock.composition}.`,
@@ -660,7 +736,7 @@ export function buildFallbackImagePrompt(payload) {
       ? `Elements: ${asArr(first.visualElements).join(", ")}.`
       : `Elements: ${presetBlock.elements.join(", ")}.`,
     "Prefer one dominant focal subject, not many competing objects.",
-    "Use premium industrial materials, engineered surfaces, controlled reflections, refined atmosphere, and cinematic depth.",
+    "Use premium materials, engineered or refined surfaces, controlled reflections, elegant atmosphere, and cinematic depth.",
     "Keep the left side cleaner and calmer, but do not bury it under fog, blur mass, or muddy black overlays.",
     "Avoid poster layout, website hero look, dashboard look, app UI, floating interface cards, software screens, or UX mockup aesthetics.",
     "If a device appears, its display must remain abstract and unreadable, using only ambient gradients or non-readable luminous surfaces.",
@@ -679,6 +755,7 @@ export function buildSlideVisualPrompt({
   visualPreset,
 }) {
   const p = asObj(payload);
+  const tenant = getTenantRuntime(payload);
   const f = asObj(frame);
   const visualPlan = asObj(p.visualPlan);
   const preset = String(visualPreset || visualPlan.visualPreset || "abstract_tech_scene");
@@ -693,10 +770,10 @@ export function buildSlideVisualPrompt({
 
   const lines = [
     format === "carousel"
-      ? `Create a premium text-free futuristic technology scene for NEOX carousel slide ${f.index} of ${totalSlides}.`
+      ? `Create a premium text-free branded scene for ${tenant.companyName} carousel slide ${f.index} of ${totalSlides}.`
       : format === "reel"
-      ? `Create a premium text-free cinematic technology scene for NEOX reel scene ${f.index} of ${totalSlides}.`
-      : "Create a premium text-free futuristic technology scene for a NEOX social post.",
+      ? `Create a premium text-free cinematic branded scene for ${tenant.companyName} reel scene ${f.index} of ${totalSlides}.`
+      : `Create a premium text-free branded scene for ${tenant.companyName}.`,
     p.topic ? `Topic context: ${p.topic}.` : "",
     `Visual preset: ${preset}.`,
     f.headline ? `Message mood reference: ${f.headline}.` : "",
@@ -718,7 +795,7 @@ export function buildSlideVisualPrompt({
       ? "This must feel like one scene from a coherent premium commercial video with believable continuity and cinematic motion."
       : "Scene only. Final readable text will be placed later by a separate render engine.",
     "Prefer one dominant focal subject and a minimal number of supporting elements.",
-    "Use premium industrial materials, refined depth separation, controlled glow, elegant studio or high-tech atmosphere, and realistic cinematic lighting.",
+    "Use premium materials, refined depth separation, controlled glow, elegant studio or high-end atmosphere, and realistic cinematic lighting.",
     "Keep the left side calmer and more open without heavy blur wall, oversized fog, or muddy dark overlay.",
     "Avoid website sections, landing pages, dashboard scenes, app screens, social template layout, poster composition, UX shots, or interface details.",
     "If a screen or device appears, keep it abstract and unreadable with ambient light only.",
@@ -731,10 +808,16 @@ export function buildSlideVisualPrompt({
 
 export function buildSlidesFromFrames(payload) {
   const p = asObj(payload);
+  const tenant = getTenantRuntime(payload);
   const format = normalizeFormat(p.format || "image");
   const frames = asArr(asObj(p.visualPlan).frames);
   const totalSlides = frames.length;
   const visualPreset = String(asObj(p.visualPlan).visualPreset || "abstract_tech_scene");
+  const brandBadge = defaultBrandBadge(tenant.companyName);
+  const defaultCta =
+    tenant.outputLanguage === "az"
+      ? "Daha çox məlumat üçün bizimlə əlaqə saxlayın"
+      : "Contact us to learn more";
 
   return frames.map((frame, i) => {
     const idx = i + 1;
@@ -744,16 +827,16 @@ export function buildSlidesFromFrames(payload) {
     const badge =
       format === "carousel"
         ? idx === 1
-          ? "NEOX"
+          ? brandBadge
           : isLast
           ? "CTA"
-          : "AI HQ"
+          : "CONTENT"
         : format === "reel"
         ? "REEL"
-        : "NEOX";
+        : brandBadge;
 
     const cta = isLast
-      ? truncate(p.cta || "Daha çox məlumat üçün bizimlə əlaqə saxlayın", 80)
+      ? truncate(p.cta || defaultCta, 80)
       : "";
 
     return {
@@ -762,12 +845,12 @@ export function buildSlidesFromFrames(payload) {
       frameType: String(
         f.frameType || (format === "reel" ? "scene" : idx === 1 ? "cover" : "slide")
       ),
-      title: truncate(f.headline || p.topic || "NEOX", 120),
+      title: truncate(f.headline || p.topic || tenant.companyName || "Draft", 120),
       subtitle: truncate(f.subline || p.hook || "", 180),
       cta,
       badge,
       align: "left",
-      theme: "neox_dark",
+      theme: s(p.theme || tenant.visualTheme || "premium_modern"),
       slideNumber: idx,
       totalSlides,
       renderHints: buildRenderHints(f, format, idx, totalSlides),

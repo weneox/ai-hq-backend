@@ -1,6 +1,6 @@
 // src/routes/api/render.js
 //
-// FINAL v2.0 — robust render route normalization
+// FINAL v3.0 — tenant-safe + robust render route normalization
 //
 // Goals:
 // ✅ Accept slides from direct body, contentPack, payload, proposal.payload
@@ -9,6 +9,8 @@
 // ✅ Keep renderHints stable for renderer
 // ✅ Work cleanly with renderSlides.js final renderer
 // ✅ Return consistent render payload
+// ✅ Remove hardcoded brand fallback
+// ✅ Resolve tenantKey safely
 
 import express from "express";
 import crypto from "crypto";
@@ -20,6 +22,7 @@ import { okJson } from "../../utils/http.js";
 import { fixText } from "../../utils/textFix.js";
 import { baseUrl } from "../../utils/url.js";
 import { renderSlidesToPng } from "../../render/renderSlides.js";
+import { getDefaultTenantKey, resolveTenantKey } from "../../tenancy/index.js";
 
 function asObj(x) {
   return x && typeof x === "object" && !Array.isArray(x) ? x : {};
@@ -31,6 +34,10 @@ function asArr(x) {
 
 function clean(x) {
   return String(x || "").trim();
+}
+
+function resolveTenant(v) {
+  return resolveTenantKey(v, getDefaultTenantKey());
 }
 
 function pickAspectRatioFromFormat(format) {
@@ -130,12 +137,20 @@ function pickGlobalLogoText(body) {
 
   return clean(
     b.logoText ||
+      b.brandName ||
+      asObj(b.brand).logoText ||
+      asObj(b.brand).name ||
       contentPack.logoText ||
+      contentPack.brandName ||
       payload.logoText ||
+      payload.brandName ||
       proposalPayload.logoText ||
+      proposalPayload.brandName ||
       result.logoText ||
+      result.brandName ||
       resultContentPack.logoText ||
-      "NEOX"
+      resultContentPack.brandName ||
+      "Brand"
   );
 }
 
@@ -150,7 +165,7 @@ function pickGlobalBadge(body) {
       proposalPayload.badge ||
       result.badge ||
       resultContentPack.badge ||
-      "NEOX"
+      ""
   );
 }
 
@@ -165,7 +180,7 @@ function pickGlobalCta(body) {
       proposalPayload.cta ||
       result.cta ||
       resultContentPack.cta ||
-      "Daha çox məlumat üçün bizimlə əlaqə saxlayın"
+      "Contact us for details"
   );
 }
 
@@ -261,6 +276,15 @@ function normalizeSlides(rawSlides, body) {
     const slideNumber = Number(s.slideNumber || s.index || i + 1) || i + 1;
     const totalSlides = Number(s.totalSlides || total) || total;
 
+    const defaultBadge =
+      format === "reel"
+        ? "REEL"
+        : slideNumber === 1
+        ? globalBadge || globalLogoText
+        : slideNumber === totalSlides
+        ? "CTA"
+        : "SLIDE";
+
     return {
       ...s,
       title: clean(s.title || s.headline || s.text || globalTitleFallback || "Untitled Slide"),
@@ -268,19 +292,10 @@ function normalizeSlides(rawSlides, body) {
         s.subtitle || s.subline || s.kicker || globalSubtitleFallback || ""
       ),
       cta: clean(s.cta || (slideNumber === totalSlides ? globalCta : "")),
-      badge: clean(
-        s.badge ||
-          (format === "reel"
-            ? "REEL"
-            : slideNumber === 1
-            ? globalBadge || "NEOX"
-            : slideNumber === totalSlides
-            ? "CTA"
-            : "AI HQ")
-      ),
-      logoText: clean(s.logoText || globalLogoText || "NEOX"),
+      badge: clean(s.badge || defaultBadge),
+      logoText: clean(s.logoText || globalLogoText || "Brand"),
       align: clean(s.align || "left") || "left",
-      theme: clean(s.theme || "neox_dark") || "neox_dark",
+      theme: clean(s.theme || "brand_dark") || "brand_dark",
       slideNumber,
       totalSlides,
       aspectRatio: normalizeAspectRatio(
@@ -297,8 +312,8 @@ export function renderRoutes() {
   const r = express.Router();
 
   r.post("/render/slides", async (req, res) => {
-    const tenantId = fixText(
-      clean(req.body?.tenantId || cfg.DEFAULT_TENANT_KEY || "default")
+    const tenantKey = resolveTenant(
+      clean(req.body?.tenantKey || req.body?.tenantId || cfg.DEFAULT_TENANT_KEY)
     );
 
     const rawSlides = pickSlides(req.body);
@@ -319,6 +334,8 @@ export function renderRoutes() {
         });
       }
 
+      const format = pickFormat(req.body);
+      const aspectRatio = pickAspectRatio(req.body, format);
       const slides = normalizeSlides(rawSlides, req.body);
 
       const renderId = crypto.randomUUID();
@@ -326,7 +343,7 @@ export function renderRoutes() {
         process.cwd(),
         "uploads",
         "renders",
-        tenantId,
+        tenantKey,
         renderId
       );
 
@@ -340,9 +357,10 @@ export function renderRoutes() {
 
       return okJson(res, {
         ok: true,
+        tenantKey,
         renderId,
-        format: pickFormat(req.body),
-        aspectRatio: pickAspectRatio(req.body, pickFormat(req.body)),
+        format,
+        aspectRatio,
         count: assets.length,
         assets,
       });

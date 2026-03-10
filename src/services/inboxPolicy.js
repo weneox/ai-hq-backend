@@ -1,5 +1,7 @@
 // src/services/inboxPolicy.js
-// FINAL v2.0 — tenant timezone aware + channel aliases + stricter normalization
+// FINAL v3.0 — tenant-safe + timezone aware + channel aliases + stricter normalization
+
+import { getDefaultTenantKey, resolveTenantKey } from "../tenancy/index.js";
 
 function s(v) {
   return String(v ?? "").trim();
@@ -24,6 +26,10 @@ function toHour(v, d = 0) {
   if (n < 0) return 0;
   if (n > 23) return 23;
   return Math.floor(n);
+}
+
+function getDefaultTimezone() {
+  return "Asia/Baku";
 }
 
 export function normalizeInboxChannel(v) {
@@ -120,10 +126,10 @@ export function normalizePolicy(raw = {}) {
   };
 }
 
-export function getLocalHourForTimezone(timezone = "Asia/Baku") {
+export function getLocalHourForTimezone(timezone = getDefaultTimezone()) {
   try {
     const parts = new Intl.DateTimeFormat("en-US", {
-      timeZone: timezone || "Asia/Baku",
+      timeZone: timezone || getDefaultTimezone(),
       hour: "2-digit",
       hour12: false,
     }).formatToParts(new Date());
@@ -143,7 +149,7 @@ export function isPolicyQuietHours(policy) {
 
   const start = toHour(policy?.quietHoursStart, 0);
   const end = toHour(policy?.quietHoursEnd, 0);
-  const nowHour = getLocalHourForTimezone(policy?.timezone || "Asia/Baku");
+  const nowHour = getLocalHourForTimezone(policy?.timezone || getDefaultTimezone());
 
   if (start === end) return false;
 
@@ -162,11 +168,15 @@ export function getInboxPolicy({ tenantKey, channel, tenant = null } = {}) {
 
   const policy = normalizePolicy(policyFromTenant);
   const ch = normalizeInboxChannel(channel);
-  const timezone = s(tenant?.timezone || "Asia/Baku") || "Asia/Baku";
+  const timezone = s(tenant?.timezone || getDefaultTimezone()) || getDefaultTimezone();
+  const resolvedTenantKey = resolveTenantKey(
+    tenantKey || tenant?.tenant_key,
+    getDefaultTenantKey()
+  );
 
   return {
     ...policy,
-    tenantKey: s(tenantKey || tenant?.tenant_key || "neox"),
+    tenantKey: resolvedTenantKey,
     channel: ch,
     timezone,
     channelAllowed: !ch || policy.allowedChannels.includes(ch),

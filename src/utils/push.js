@@ -9,7 +9,8 @@ function ensureConfigured() {
 
   const pub = String(cfg.VAPID_PUBLIC_KEY || "").trim();
   const priv = String(cfg.VAPID_PRIVATE_KEY || "").trim();
-  const subj = String(cfg.VAPID_SUBJECT || "").trim() || "mailto:info@weneox.com";
+  const subj =
+    String(cfg.VAPID_SUBJECT || "").trim() || "mailto:notifications@local.invalid";
 
   if (!pub || !priv) return false;
 
@@ -32,7 +33,7 @@ export async function pushSendOne(subscription, payloadObj, options = {}) {
   if (!cfg.PUSH_ENABLED) return { ok: true, skipped: "PUSH_ENABLED=0" };
   if (!ensureConfigured()) return { ok: false, error: "missing VAPID keys" };
 
-  const ttl = Number.isFinite(Number(options.ttl)) ? Number(options.ttl) : 60; // seconds
+  const ttl = Number.isFinite(Number(options.ttl)) ? Number(options.ttl) : 60;
   const payload = safeStringify(payloadObj || {});
 
   try {
@@ -41,8 +42,6 @@ export async function pushSendOne(subscription, payloadObj, options = {}) {
   } catch (e) {
     const statusCode = e?.statusCode || e?.status || null;
     const body = e?.body || null;
-
-    // Common: 410 Gone / 404 Not Found => subscription expired/invalid
     const expired = statusCode === 410 || statusCode === 404;
 
     return {

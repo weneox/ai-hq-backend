@@ -1,5 +1,5 @@
-import { cfg } from "../../config.js";
 import { deepFix, fixText } from "../../utils/textFix.js";
+import { resolveTenantKeyFromReq } from "../../tenancy/index.js";
 
 export function normalizeContentPack(x) {
   if (!x) return null;
@@ -30,11 +30,7 @@ export function normalizeLooseObject(x) {
 }
 
 export function pickTenantId(req) {
-  return (
-    fixText(
-      String(req.body?.tenantId || req.query?.tenantId || cfg.DEFAULT_TENANT_KEY || "default").trim()
-    ) || "default"
-  );
+  return resolveTenantKeyFromReq(req);
 }
 
 export function asObj(x) {
