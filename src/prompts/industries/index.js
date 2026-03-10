@@ -1,30 +1,32 @@
 // src/prompts/industries/index.js
-// FINAL v1.0 — industry prompt registry + normalization
+// FINAL v1.1 — industry prompt registry + normalization (Node ESM safe)
 //
 // ✅ central industry registry
 // ✅ alias normalization
 // ✅ safe fallback to generic_business
 // ✅ vars passthrough into template renderer
 // ✅ future-proof for many industries
+// ✅ FIX: Node backend cannot import .txt directly
+// ✅ Reads .txt prompts from filesystem safely
 
-import genericBusiness from "./generic_business.txt";
-import technology from "./technology.txt";
-import clinic from "./clinic.txt";
-import restaurant from "./restaurant.txt";
-import hospitality from "./hospitality.txt";
-import retail from "./retail.txt";
-import realEstate from "./real_estate.txt";
-import education from "./education.txt";
-import beauty from "./beauty.txt";
-import finance from "./finance.txt";
-import legal from "./legal.txt";
-import automotive from "./automotive.txt";
-import logistics from "./logistics.txt";
-import creativeAgency from "./creative_agency.txt";
-import ecommerce from "./ecommerce.txt";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 function s(v) {
   return String(v ?? "").trim();
+}
+
+function readTextFile(filename) {
+  try {
+    return fs.readFileSync(path.join(__dirname, filename), "utf8");
+  } catch (err) {
+    console.error(`[prompts/industries] failed to read ${filename}:`, err?.message || err);
+    return "";
+  }
 }
 
 function applyVars(template, vars = {}) {
@@ -68,7 +70,6 @@ function applyVars(template, vars = {}) {
       return String(map[k] ?? "");
     }
 
-    // support dot access like tenant.companyName / extra.foo
     const parts = k.split(".");
     let cur = {
       vars,
@@ -91,21 +92,21 @@ function applyVars(template, vars = {}) {
 }
 
 const INDUSTRY_REGISTRY = {
-  generic_business: genericBusiness,
-  technology,
-  clinic,
-  restaurant,
-  hospitality,
-  retail,
-  real_estate: realEstate,
-  education,
-  beauty,
-  finance,
-  legal,
-  automotive,
-  logistics,
-  creative_agency: creativeAgency,
-  ecommerce,
+  generic_business: readTextFile("generic_business.txt"),
+  technology: readTextFile("technology.txt"),
+  clinic: readTextFile("clinic.txt"),
+  restaurant: readTextFile("restaurant.txt"),
+  hospitality: readTextFile("hospitality.txt"),
+  retail: readTextFile("retail.txt"),
+  real_estate: readTextFile("real_estate.txt"),
+  education: readTextFile("education.txt"),
+  beauty: readTextFile("beauty.txt"),
+  finance: readTextFile("finance.txt"),
+  legal: readTextFile("legal.txt"),
+  automotive: readTextFile("automotive.txt"),
+  logistics: readTextFile("logistics.txt"),
+  creative_agency: readTextFile("creative_agency.txt"),
+  ecommerce: readTextFile("ecommerce.txt"),
 };
 
 const INDUSTRY_ALIASES = {
@@ -239,3 +240,11 @@ export function getIndustryPrompt(industryKey = "", vars = {}) {
   const raw = getRawIndustryPrompt(industryKey);
   return applyVars(raw, vars);
 }
+
+export default {
+  listIndustryKeys,
+  normalizeIndustryKey,
+  hasIndustryPrompt,
+  getRawIndustryPrompt,
+  getIndustryPrompt,
+};
