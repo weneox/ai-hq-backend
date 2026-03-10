@@ -1,7 +1,8 @@
+// src/routes/api/team.js
+
 import express from "express";
-import {
-  dbGetTenantByKey,
-} from "../../db/helpers/settings.js";
+import { hashUserPassword } from "../../utils/adminAuth.js";
+import { dbGetTenantByKey } from "../../db/helpers/settings.js";
 import {
   dbListTenantUsers,
   dbGetTenantUserById,
@@ -12,15 +13,6 @@ import {
   dbDeleteTenantUser,
 } from "../../db/helpers/tenantUsers.js";
 import { dbAudit } from "../../db/helpers/audit.js";
-import {
-  getAuthTenantKey,
-  getAuthRole,
-  getAuthActor,
-} from "../../utils/auth.js";
-import {
-  canReadUsers,
-  canWriteUsers,
-} from "../../utils/roles.js";
 
 function ok(res, data = {}) {
   return res.status(200).json({ ok: true, ...data });
@@ -57,8 +49,36 @@ function cleanString(v, fallback = "") {
   return s;
 }
 
+function cleanNullableString(v) {
+  if (v === null || v === undefined) return null;
+  const s = String(v).trim();
+  if (!s) return null;
+  if (s.toLowerCase() === "null" || s.toLowerCase() === "undefined") return null;
+  return s;
+}
+
 function cleanLower(v, fallback = "") {
   return cleanString(v, fallback).toLowerCase();
+}
+
+function getAuthTenantKey(req) {
+  return cleanLower(req.auth?.tenantKey || "");
+}
+
+function getAuthRole(req) {
+  return cleanLower(req.auth?.role || "member");
+}
+
+function getAuthActor(req) {
+  return cleanString(req.auth?.email || req.auth?.userId || "user");
+}
+
+function canReadUsers(role) {
+  return ["owner", "admin", "operator"].includes(cleanLower(role));
+}
+
+function canWriteUsers(role) {
+  return ["owner", "admin"].includes(cleanLower(role));
 }
 
 function requireTenant(req, res) {
@@ -90,6 +110,11 @@ function buildUserInput(body = {}) {
     status: cleanLower(input.status || "invited"),
     permissions: safeJsonObj(input.permissions, {}),
     meta: safeJsonObj(input.meta, {}),
+    password_hash: Object.prototype.hasOwnProperty.call(input, "password")
+      ? (cleanString(input.password) ? hashUserPassword(cleanString(input.password)) : null)
+      : undefined,
+    auth_provider: "local",
+    email_verified: true,
     last_seen_at: input.last_seen_at || null,
   };
 }
@@ -216,11 +241,13 @@ export function teamRoutes({ db }) {
         return res.status(404).json({ ok: false, error: "User not found" });
       }
 
-      const input = buildUserInput({
+      const patch = safeJsonObj(req.body, {});
+      const merged = {
         ...current,
-        ...safeJsonObj(req.body, {}),
-      });
+        ...patch,
+      };
 
+      const input = buildUserInput(merged);
       const user = await dbUpdateTenantUser(db, tenant.id, req.params.id, input);
 
       await auditSafe(db, req, tenant, "team.user.updated", "tenant_user", user?.id, {
@@ -267,6 +294,51 @@ export function teamRoutes({ db }) {
       return ok(res, { user });
     } catch (err) {
       return serverErr(res, err?.message || "Failed to update user status");
+    }
+  });
+
+  router.post("/team/:id/password", async (req, res) => {
+    try {
+      const tenantKey = requireTenant(req, res);
+      if (!tenantKey) return;
+
+      const role = getAuthRole(req);
+      if (!canWriteUsers(role)) {
+        return forbidden(res, "You do not have permission to manage passwords");
+      }
+
+      const password = cleanString(req.body?.password || "");
+      if (!password) {
+        return bad(res, "password is required");
+      }
+
+      const tenant = await dbGetTenantByKey(db, tenantKey);
+      if (!tenant?.id) {
+        return res.status(404).json({ ok: false, error: "Tenant not found" });
+      }
+
+      const current = await dbGetTenantUserById(db, tenant.id, req.params.id);
+      if (!current?.id) {
+        return res.status(404).json({ ok: false, error: "User not found" });
+      }
+
+      const user = await dbUpdateTenantUser(db, tenant.id, req.params.id, {
+        ...current,
+        password_hash: hashUserPassword(password),
+        auth_provider: "local",
+        email_verified: true,
+      });
+
+      await auditSafe(db, req, tenant, "team.user.password.updated", "tenant_user", user?.id, {
+        user_email: user?.user_email,
+      });
+
+      return ok(res, {
+        user,
+        passwordUpdated: true,
+      });
+    } catch (err) {
+      return serverErr(res, err?.message || "Failed to update password");
     }
   });
 

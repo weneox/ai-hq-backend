@@ -1,5 +1,5 @@
 // src/db/helpers/tenantUsers.js
-// FINAL — tenant user helpers
+// FINAL — tenant user helpers (auth-ready)
 
 function rowOrNull(r) {
   return r?.rows?.[0] || null;
@@ -66,23 +66,59 @@ function normalizeStatus(status) {
   return "invited";
 }
 
+function normalizeAuthProvider(v) {
+  const x = cleanLower(v, "local");
+  if (
+    x === "local" ||
+    x === "google" ||
+    x === "microsoft" ||
+    x === "magic_link" ||
+    x === "system"
+  ) {
+    return x;
+  }
+  return "local";
+}
+
+function asBool(v, fallback = false) {
+  if (typeof v === "boolean") return v;
+  return fallback;
+}
+
+function asInt(v, fallback = 1) {
+  const x = Number(v);
+  return Number.isFinite(x) ? Math.max(1, Math.floor(x)) : fallback;
+}
+
+function pickUserColumns(alias = "") {
+  const p = alias ? `${alias}.` : "";
+  return `
+    ${p}id,
+    ${p}tenant_id,
+    ${p}user_email,
+    ${p}full_name,
+    ${p}role,
+    ${p}status,
+    ${p}password_hash,
+    ${p}auth_provider,
+    ${p}email_verified,
+    ${p}session_version,
+    ${p}permissions,
+    ${p}meta,
+    ${p}last_seen_at,
+    ${p}last_login_at,
+    ${p}created_at,
+    ${p}updated_at
+  `;
+}
+
 export async function dbGetTenantUserById(db, tenantId, userId) {
   if (!db || !tenantId || !userId) return null;
 
   const q = await db.query(
     `
       select
-        id,
-        tenant_id,
-        user_email,
-        full_name,
-        role,
-        status,
-        permissions,
-        meta,
-        last_seen_at,
-        created_at,
-        updated_at
+        ${pickUserColumns()}
       from tenant_users
       where tenant_id = $1
         and id = $2
@@ -100,17 +136,7 @@ export async function dbGetTenantUserByEmail(db, tenantId, email) {
   const q = await db.query(
     `
       select
-        id,
-        tenant_id,
-        user_email,
-        full_name,
-        role,
-        status,
-        permissions,
-        meta,
-        last_seen_at,
-        created_at,
-        updated_at
+        ${pickUserColumns()}
       from tenant_users
       where tenant_id = $1
         and lower(user_email) = $2
@@ -145,17 +171,7 @@ export async function dbListTenantUsers(db, tenantId, opts = {}) {
   const q = await db.query(
     `
       select
-        id,
-        tenant_id,
-        user_email,
-        full_name,
-        role,
-        status,
-        permissions,
-        meta,
-        last_seen_at,
-        created_at,
-        updated_at
+        ${pickUserColumns()}
       from tenant_users
       where ${clauses.join(" and ")}
       order by created_at asc
@@ -177,25 +193,20 @@ export async function dbCreateTenantUser(db, tenantId, input = {}) {
         full_name,
         role,
         status,
-        permissions,
-        meta,
-        last_seen_at
-      )
-      values (
-        $1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,$8
-      )
-      returning
-        id,
-        tenant_id,
-        user_email,
-        full_name,
-        role,
-        status,
+        password_hash,
+        auth_provider,
+        email_verified,
+        session_version,
         permissions,
         meta,
         last_seen_at,
-        created_at,
-        updated_at
+        last_login_at
+      )
+      values (
+        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11::jsonb,$12,$13
+      )
+      returning
+        ${pickUserColumns()}
     `,
     [
       tenantId,
@@ -203,9 +214,14 @@ export async function dbCreateTenantUser(db, tenantId, input = {}) {
       cleanString(input.full_name, ""),
       normalizeRole(input.role),
       normalizeStatus(input.status),
+      cleanNullableString(input.password_hash),
+      normalizeAuthProvider(input.auth_provider),
+      asBool(input.email_verified, false),
+      asInt(input.session_version, 1),
       json(asJsonObject(input.permissions, {}), {}),
       json(asJsonObject(input.meta, {}), {}),
       cleanNullableString(input.last_seen_at),
+      cleanNullableString(input.last_login_at),
     ]
   );
 
@@ -225,31 +241,37 @@ export async function dbUpsertTenantUserByEmail(db, tenantId, input = {}) {
           full_name = $2,
           role = $3,
           status = $4,
-          permissions = $5::jsonb,
-          meta = $6::jsonb,
-          last_seen_at = coalesce($7, last_seen_at)
+          password_hash = $5,
+          auth_provider = $6,
+          email_verified = $7,
+          session_version = $8,
+          permissions = $9::jsonb,
+          meta = $10::jsonb,
+          last_seen_at = coalesce($11, last_seen_at),
+          last_login_at = coalesce($12, last_login_at)
         where id = $1
         returning
-          id,
-          tenant_id,
-          user_email,
-          full_name,
-          role,
-          status,
-          permissions,
-          meta,
-          last_seen_at,
-          created_at,
-          updated_at
+          ${pickUserColumns()}
       `,
       [
         existing.id,
         cleanString(input.full_name, existing.full_name || ""),
         normalizeRole(input.role || existing.role),
         normalizeStatus(input.status || existing.status),
+        Object.prototype.hasOwnProperty.call(input, "password_hash")
+          ? cleanNullableString(input.password_hash)
+          : existing.password_hash,
+        normalizeAuthProvider(input.auth_provider || existing.auth_provider),
+        Object.prototype.hasOwnProperty.call(input, "email_verified")
+          ? asBool(input.email_verified, false)
+          : !!existing.email_verified,
+        Object.prototype.hasOwnProperty.call(input, "session_version")
+          ? asInt(input.session_version, existing.session_version || 1)
+          : asInt(existing.session_version, 1),
         json(asJsonObject(input.permissions, existing.permissions || {}), {}),
         json(asJsonObject(input.meta, existing.meta || {}), {}),
         cleanNullableString(input.last_seen_at),
+        cleanNullableString(input.last_login_at),
       ]
     );
 
@@ -273,23 +295,18 @@ export async function dbUpdateTenantUser(db, tenantId, userId, input = {}) {
         full_name = $3,
         role = $4,
         status = $5,
-        permissions = $6::jsonb,
-        meta = $7::jsonb,
-        last_seen_at = $8
+        password_hash = $6,
+        auth_provider = $7,
+        email_verified = $8,
+        session_version = $9,
+        permissions = $10::jsonb,
+        meta = $11::jsonb,
+        last_seen_at = $12,
+        last_login_at = $13
       where id = $1
-        and tenant_id = $9
+        and tenant_id = $14
       returning
-        id,
-        tenant_id,
-        user_email,
-        full_name,
-        role,
-        status,
-        permissions,
-        meta,
-        last_seen_at,
-        created_at,
-        updated_at
+        ${pickUserColumns()}
     `,
     [
       userId,
@@ -297,9 +314,20 @@ export async function dbUpdateTenantUser(db, tenantId, userId, input = {}) {
       cleanString(input.full_name, current.full_name || ""),
       normalizeRole(input.role || current.role),
       normalizeStatus(input.status || current.status),
+      Object.prototype.hasOwnProperty.call(input, "password_hash")
+        ? cleanNullableString(input.password_hash)
+        : current.password_hash,
+      normalizeAuthProvider(input.auth_provider || current.auth_provider),
+      Object.prototype.hasOwnProperty.call(input, "email_verified")
+        ? asBool(input.email_verified, false)
+        : !!current.email_verified,
+      Object.prototype.hasOwnProperty.call(input, "session_version")
+        ? asInt(input.session_version, current.session_version || 1)
+        : asInt(current.session_version, 1),
       json(asJsonObject(input.permissions, current.permissions || {}), {}),
       json(asJsonObject(input.meta, current.meta || {}), {}),
       cleanNullableString(input.last_seen_at) || current.last_seen_at,
+      cleanNullableString(input.last_login_at) || current.last_login_at,
       tenantId,
     ]
   );
@@ -317,17 +345,7 @@ export async function dbSetTenantUserStatus(db, tenantId, userId, status) {
       where id = $1
         and tenant_id = $2
       returning
-        id,
-        tenant_id,
-        user_email,
-        full_name,
-        role,
-        status,
-        permissions,
-        meta,
-        last_seen_at,
-        created_at,
-        updated_at
+        ${pickUserColumns()}
     `,
     [userId, tenantId, normalizeStatus(status)]
   );

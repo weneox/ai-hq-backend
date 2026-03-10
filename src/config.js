@@ -64,6 +64,22 @@ export const cfg = {
   ADMIN_RATE_LIMIT_MAX_ATTEMPTS: n(process.env.ADMIN_RATE_LIMIT_MAX_ATTEMPTS, 5),
 
   // --------------------------------------------------
+  // tenant user auth
+  // --------------------------------------------------
+  USER_SESSION_SECRET: s(
+    process.env.USER_SESSION_SECRET,
+    process.env.ADMIN_SESSION_SECRET || ""
+  ),
+  USER_SESSION_COOKIE_NAME: s(
+    process.env.USER_SESSION_COOKIE_NAME,
+    "aihq_user"
+  ),
+  USER_SESSION_TTL_HOURS: n(
+    process.env.USER_SESSION_TTL_HOURS,
+    24 * 7
+  ),
+
+  // --------------------------------------------------
   // tenant secret encryption
   // --------------------------------------------------
   TENANT_SECRET_MASTER_KEY: s(process.env.TENANT_SECRET_MASTER_KEY, ""),

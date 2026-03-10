@@ -27,17 +27,6 @@ function unbase64url(input) {
   return Buffer.from(x + pad, "base64");
 }
 
-function safeEqString(a, b) {
-  const aa = Buffer.from(String(a || ""), "utf8");
-  const bb = Buffer.from(String(b || ""), "utf8");
-  if (aa.length !== bb.length) return false;
-  try {
-    return crypto.timingSafeEqual(aa, bb);
-  } catch {
-    return false;
-  }
-}
-
 function safeEqBuffer(a, b) {
   const aa = Buffer.isBuffer(a) ? a : Buffer.from(a || "");
   const bb = Buffer.isBuffer(b) ? b : Buffer.from(b || "");
@@ -53,14 +42,33 @@ export function getAdminCookieName() {
   return s(cfg.ADMIN_SESSION_COOKIE_NAME, "aihq_admin");
 }
 
+export function getUserCookieName() {
+  return s(cfg.USER_SESSION_COOKIE_NAME, "aihq_user");
+}
+
 export function adminCookieOptions() {
   const isProd = s(cfg.APP_ENV).toLowerCase() === "production";
-  const maxAgeMs = Math.max(1, Number(cfg.ADMIN_SESSION_TTL_HOURS || 12)) * 60 * 60 * 1000;
+  const maxAgeMs =
+    Math.max(1, Number(cfg.ADMIN_SESSION_TTL_HOURS || 12)) * 60 * 60 * 1000;
 
   return {
     httpOnly: true,
     secure: isProd,
     sameSite: "strict",
+    path: "/",
+    maxAge: maxAgeMs,
+  };
+}
+
+export function userCookieOptions() {
+  const isProd = s(cfg.APP_ENV).toLowerCase() === "production";
+  const maxAgeMs =
+    Math.max(1, Number(cfg.USER_SESSION_TTL_HOURS || 24 * 7)) * 60 * 60 * 1000;
+
+  return {
+    httpOnly: true,
+    secure: isProd,
+    sameSite: "lax",
     path: "/",
     maxAge: maxAgeMs,
   };
@@ -75,6 +83,15 @@ export function clearAdminCookie(res) {
   });
 }
 
+export function clearUserCookie(res) {
+  res.clearCookie(getUserCookieName(), {
+    httpOnly: true,
+    secure: s(cfg.APP_ENV).toLowerCase() === "production",
+    sameSite: "lax",
+    path: "/",
+  });
+}
+
 export function parseCookies(req) {
   const raw = req?.headers?.cookie || "";
   const out = {};
@@ -82,17 +99,27 @@ export function parseCookies(req) {
   raw.split(";").forEach((part) => {
     const i = part.indexOf("=");
     if (i <= 0) return;
+
     const k = part.slice(0, i).trim();
     const v = part.slice(i + 1).trim();
     if (!k) return;
-    out[k] = decodeURIComponent(v);
+
+    try {
+      out[k] = decodeURIComponent(v);
+    } catch {
+      out[k] = v;
+    }
   });
 
   return out;
 }
 
-function getSessionSecret() {
+function getAdminSessionSecret() {
   return s(cfg.ADMIN_SESSION_SECRET);
+}
+
+function getUserSessionSecret() {
+  return s(cfg.USER_SESSION_SECRET || cfg.ADMIN_SESSION_SECRET);
 }
 
 export function isAdminAuthConfigured() {
@@ -103,14 +130,19 @@ export function isAdminAuthConfigured() {
   );
 }
 
+export function isUserAuthConfigured() {
+  return Boolean(s(getUserSessionSecret()));
+}
+
 export function createAdminSessionToken(meta = {}) {
-  const secret = getSessionSecret();
+  const secret = getAdminSessionSecret();
   if (!secret) {
     throw new Error("ADMIN_SESSION_SECRET is not configured");
   }
 
   const iat = nowSec();
-  const exp = iat + Math.max(1, Number(cfg.ADMIN_SESSION_TTL_HOURS || 12)) * 60 * 60;
+  const exp =
+    iat + Math.max(1, Number(cfg.ADMIN_SESSION_TTL_HOURS || 12)) * 60 * 60;
 
   const payload = {
     typ: "admin_session",
@@ -125,17 +157,14 @@ export function createAdminSessionToken(meta = {}) {
   };
 
   const payloadB64 = base64url(JSON.stringify(payload));
-  const sig = crypto
-    .createHmac("sha256", secret)
-    .update(payloadB64)
-    .digest();
+  const sig = crypto.createHmac("sha256", secret).update(payloadB64).digest();
 
   return `${payloadB64}.${base64url(sig)}`;
 }
 
 export function verifyAdminSessionToken(token) {
   try {
-    const secret = getSessionSecret();
+    const secret = getAdminSessionSecret();
     if (!secret) return { ok: false, error: "session secret missing" };
 
     const raw = s(token);
@@ -170,6 +199,103 @@ export function verifyAdminSessionToken(token) {
       return { ok: false, error: "token expired" };
     }
 
+    if (!Number.isFinite(payload?.iat)) {
+      return { ok: false, error: "invalid token iat" };
+    }
+
+    return { ok: true, payload };
+  } catch (e) {
+    return { ok: false, error: String(e?.message || e || "verify failed") };
+  }
+}
+
+export function createUserSessionToken(user = {}, meta = {}) {
+  const secret = getUserSessionSecret();
+  if (!secret) {
+    throw new Error("USER_SESSION_SECRET is not configured");
+  }
+
+  const iat = nowSec();
+  const exp =
+    iat + Math.max(1, Number(cfg.USER_SESSION_TTL_HOURS || 24 * 7)) * 60 * 60;
+
+  const payload = {
+    typ: "tenant_user_session",
+    v: 1,
+    iat,
+    exp,
+    nonce: crypto.randomBytes(16).toString("hex"),
+
+    userId: s(user.id),
+    tenantId: s(user.tenant_id || user.tenantId),
+    tenantKey: s(user.tenant_key || user.tenantKey),
+    email: s(user.user_email || user.email).toLowerCase(),
+    fullName: s(user.full_name || user.fullName),
+    role: s(user.role, "member"),
+    sessionVersion: Number(user.session_version ?? user.sessionVersion ?? 1),
+
+    meta: {
+      ip: s(meta.ip),
+      ua: s(meta.ua).slice(0, 300),
+    },
+  };
+
+  const payloadB64 = base64url(JSON.stringify(payload));
+  const sig = crypto.createHmac("sha256", secret).update(payloadB64).digest();
+
+  return `${payloadB64}.${base64url(sig)}`;
+}
+
+export function verifyUserSessionToken(token) {
+  try {
+    const secret = getUserSessionSecret();
+    if (!secret) return { ok: false, error: "session secret missing" };
+
+    const raw = s(token);
+    if (!raw || !raw.includes(".")) {
+      return { ok: false, error: "invalid token format" };
+    }
+
+    const [payloadB64, sigB64] = raw.split(".");
+    if (!payloadB64 || !sigB64) {
+      return { ok: false, error: "invalid token parts" };
+    }
+
+    const expectedSig = crypto
+      .createHmac("sha256", secret)
+      .update(payloadB64)
+      .digest();
+
+    const gotSig = unbase64url(sigB64);
+    if (!safeEqBuffer(expectedSig, gotSig)) {
+      return { ok: false, error: "bad signature" };
+    }
+
+    const payloadJson = unbase64url(payloadB64).toString("utf8");
+    const payload = JSON.parse(payloadJson || "{}");
+
+    if (payload?.typ !== "tenant_user_session") {
+      return { ok: false, error: "invalid token type" };
+    }
+
+    const now = nowSec();
+    if (!Number.isFinite(payload?.exp) || now >= Number(payload.exp)) {
+      return { ok: false, error: "token expired" };
+    }
+
+    if (!Number.isFinite(payload?.iat)) {
+      return { ok: false, error: "invalid token iat" };
+    }
+
+    if (
+      !payload?.userId ||
+      !payload?.tenantId ||
+      !payload?.tenantKey ||
+      !payload?.email
+    ) {
+      return { ok: false, error: "invalid session payload" };
+    }
+
     return { ok: true, payload };
   } catch (e) {
     return { ok: false, error: String(e?.message || e || "verify failed") };
@@ -177,10 +303,8 @@ export function verifyAdminSessionToken(token) {
 }
 
 /**
- * Supported passcode hash format:
+ * Admin passcode hash format:
  * s2:<saltHex>:<hashHex>
- *
- * hash = scryptSync(passcode, saltHex, 64)
  */
 export function verifyAdminPasscode(passcode) {
   try {
@@ -212,23 +336,52 @@ export function makeAdminPasscodeHash(passcode) {
   return `s2:${salt.toString("hex")}:${hash.toString("hex")}`;
 }
 
+/**
+ * Local user password hash format:
+ * s2u:<saltHex>:<hashHex>
+ */
+export function hashUserPassword(password) {
+  const salt = crypto.randomBytes(16);
+  const hash = crypto.scryptSync(String(password || ""), salt, 64);
+  return `s2u:${salt.toString("hex")}:${hash.toString("hex")}`;
+}
+
+export function verifyUserPassword(password, storedHash) {
+  try {
+    const input = s(password);
+    const stored = s(storedHash);
+
+    if (!input || !stored) return false;
+
+    const parts = stored.split(":");
+    if (parts.length !== 3 || parts[0] !== "s2u") {
+      return false;
+    }
+
+    const saltHex = parts[1];
+    const hashHex = parts[2];
+
+    const derived = crypto.scryptSync(input, Buffer.from(saltHex, "hex"), 64);
+    const expected = Buffer.from(hashHex, "hex");
+
+    return safeEqBuffer(derived, expected);
+  } catch {
+    return false;
+  }
+}
+
 function getClientIp(req) {
   const xfwd = s(req?.headers?.["x-forwarded-for"]);
   if (xfwd) return xfwd.split(",")[0].trim();
-
-  return (
-    s(req?.ip) ||
-    s(req?.socket?.remoteAddress) ||
-    "unknown"
-  );
+  return s(req?.ip) || s(req?.socket?.remoteAddress) || "unknown";
 }
 
-function attemptKey(req) {
-  return `admin:${getClientIp(req)}`;
+function attemptKey(req, type = "admin") {
+  return `${type}:${getClientIp(req)}`;
 }
 
 export function checkAdminRateLimit(req) {
-  const key = attemptKey(req);
+  const key = attemptKey(req, "admin");
   const now = Date.now();
   const windowMs = Number(cfg.ADMIN_RATE_LIMIT_WINDOW_MS || 15 * 60 * 1000);
   const max = Number(cfg.ADMIN_RATE_LIMIT_MAX_ATTEMPTS || 5);
@@ -264,7 +417,7 @@ export function checkAdminRateLimit(req) {
 }
 
 export function registerAdminFailedAttempt(req) {
-  const key = attemptKey(req);
+  const key = attemptKey(req, "admin");
   const now = Date.now();
   const windowMs = Number(cfg.ADMIN_RATE_LIMIT_WINDOW_MS || 15 * 60 * 1000);
 
@@ -283,13 +436,19 @@ export function registerAdminFailedAttempt(req) {
 }
 
 export function clearAdminFailedAttempts(req) {
-  memoryAttempts.delete(attemptKey(req));
+  memoryAttempts.delete(attemptKey(req, "admin"));
 }
 
 export function readAdminSessionFromRequest(req) {
   const cookies = parseCookies(req);
   const token = cookies[getAdminCookieName()] || "";
   return verifyAdminSessionToken(token);
+}
+
+export function readUserSessionFromRequest(req) {
+  const cookies = parseCookies(req);
+  const token = cookies[getUserCookieName()] || "";
+  return verifyUserSessionToken(token);
 }
 
 export function requireAdminSession(req, res, next) {
@@ -309,5 +468,28 @@ export function requireAdminSession(req, res, next) {
   }
 
   req.adminSession = session.payload;
+  return next();
+}
+
+export function requireUserSession(req, res, next) {
+  const session = readUserSessionFromRequest(req);
+  if (!session?.ok) {
+    return res.status(401).json({
+      ok: false,
+      error: "Unauthorized",
+    });
+  }
+
+  req.adminSession = null;
+  req.auth = {
+    userId: session.payload.userId,
+    tenantId: session.payload.tenantId,
+    tenantKey: session.payload.tenantKey,
+    email: session.payload.email,
+    fullName: session.payload.fullName || "",
+    role: session.payload.role || "member",
+    sessionVersion: Number(session.payload.sessionVersion || 1),
+  };
+
   return next();
 }

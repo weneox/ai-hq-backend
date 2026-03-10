@@ -1,6 +1,7 @@
-// src/routes/api.js
+// src/routes/api/index.js
 
 import express from "express";
+import { requireUserSession } from "../../utils/adminAuth.js";
 
 import { healthRoutes } from "./health.js";
 import { modeRoutes } from "./mode.js";
@@ -26,7 +27,15 @@ import { tenantsRoutes } from "./tenants.js";
 export function apiRouter({ db, wsHub }) {
   const r = express.Router();
 
+  // Public / infra
   r.use("/", healthRoutes({ db }));
+
+  // Special/internal tenant helper routes
+  r.use("/", tenantsRoutes({ db }));
+
+  // Authenticated app routes
+  r.use(requireUserSession);
+
   r.use("/", modeRoutes({ db, wsHub }));
   r.use("/", agentsRoutes());
   r.use("/", renderRoutes());
@@ -45,7 +54,6 @@ export function apiRouter({ db, wsHub }) {
   r.use("/", settingsRoutes({ db }));
   r.use("/", debugRoutes());
   r.use("/", teamRoutes({ db }));
-  r.use("/", tenantsRoutes({ db }));
 
   return r;
 }

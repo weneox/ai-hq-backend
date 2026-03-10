@@ -11,6 +11,7 @@ import { initDb, getDb, migrate } from "./src/db/index.js";
 import { createWsHub } from "./src/wsHub.js";
 import { apiRouter } from "./src/routes/api.js";
 import { adminAuthRoutes } from "./src/routes/api/adminAuth.js";
+
 import { startOutboundRetryWorker } from "./src/workers/outboundRetryWorker.js";
 import { createDraftScheduleWorker } from "./src/workers/draftScheduleWorker.js";
 
@@ -77,7 +78,10 @@ async function main() {
       adminPanelEnabled: !!cfg.ADMIN_PANEL_ENABLED,
       hasAdminPasscodeHash: Boolean(String(cfg.ADMIN_PANEL_PASSCODE_HASH || "").trim()),
       hasAdminSessionSecret: Boolean(String(cfg.ADMIN_SESSION_SECRET || "").trim()),
-      hasScheduleWebhook: Boolean(String(process.env.N8N_WEBHOOK_SCHEDULE_DRAFT_URL || "").trim()),
+      hasScheduleWebhook: Boolean(
+        String(process.env.N8N_WEBHOOK_SCHEDULE_DRAFT_URL || "").trim()
+      ),
+      hasWsAuthToken: Boolean(String(cfg.WS_AUTH_TOKEN || "").trim()),
       now: new Date().toISOString(),
     });
   });
@@ -96,7 +100,8 @@ async function main() {
       },
       workers: {
         outboundRetryEnabled: !!cfg.OUTBOUND_RETRY_ENABLED,
-        draftScheduleEnabled: String(process.env.DRAFT_SCHEDULE_WORKER_ENABLED || "1") !== "0",
+        draftScheduleEnabled:
+          String(process.env.DRAFT_SCHEDULE_WORKER_ENABLED || "1") !== "0",
       },
     };
 
@@ -127,43 +132,33 @@ async function main() {
     console.log("[ai-hq] migrate error:", String(e?.message || e));
   }
 
+  const db = getDb();
+
   const server = http.createServer(app);
   const wsHub = createWsHub({
     server,
     token: cfg.WS_AUTH_TOKEN,
   });
 
-  // Admin auth foundation
-  // IMPORTANT:
-  // This is mounted BEFORE temp auth.
-  app.use("/api", adminAuthRoutes());
+  // Admin/session auth routes
+  app.use("/api", adminAuthRoutes({ db, wsHub }));
 
-  // TEMP AUTH CONTEXT
-  // Real auth hazır olana qədər tenant-locked route-lar üçün.
-  app.use("/api", (req, _res, next) => {
-    req.auth = {
-      tenantKey: "neox",
-      role: "owner",
-      email: "owner@neox.az",
-    };
-    next();
-  });
-
+  // Main API
   app.use(
     "/api",
     apiRouter({
-      db: getDb(),
+      db,
       wsHub,
     })
   );
 
   const outboundRetryWorker = startOutboundRetryWorker({
-    db: getDb(),
+    db,
     wsHub,
   });
 
   const draftScheduleWorker = createDraftScheduleWorker({
-    db: getDb(),
+    db,
   });
 
   draftScheduleWorker.start();
@@ -187,7 +182,7 @@ async function main() {
   });
 
   server.listen(cfg.PORT, () => {
-    const hasDb = Boolean(getDb());
+    const hasDb = Boolean(db);
 
     console.log(`[ai-hq] listening on :${cfg.PORT} env=${cfg.APP_ENV}`);
     console.log(`[ai-hq] CORS_ORIGIN=${cfg.CORS_ORIGIN}`);
@@ -206,8 +201,12 @@ async function main() {
         String(process.env.DRAFT_SCHEDULE_WORKER_ENABLED || "1") !== "0"
           ? "ON"
           : "OFF"
-      } interval=${Number(process.env.DRAFT_SCHEDULE_WORKER_INTERVAL_MS || 60000)}ms webhook=${
-        String(process.env.N8N_WEBHOOK_SCHEDULE_DRAFT_URL || "").trim() ? "ON" : "OFF"
+      } interval=${Number(
+        process.env.DRAFT_SCHEDULE_WORKER_INTERVAL_MS || 60000
+      )}ms webhook=${
+        String(process.env.N8N_WEBHOOK_SCHEDULE_DRAFT_URL || "").trim()
+          ? "ON"
+          : "OFF"
       }`
     );
     console.log(
@@ -215,7 +214,6 @@ async function main() {
         cfg.ADMIN_PANEL_PASSCODE_HASH ? "ON" : "OFF"
       } sessionSecret=${cfg.ADMIN_SESSION_SECRET ? "ON" : "OFF"}`
     );
-    console.log("[ai-hq] TEMP_AUTH tenant=neox role=owner email=owner@neox.az");
   });
 
   async function shutdown(signal = "SIGTERM") {
@@ -230,7 +228,6 @@ async function main() {
     } catch {}
 
     try {
-      const db = getDb();
       if (db) {
         await db.end();
       }

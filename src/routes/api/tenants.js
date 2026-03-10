@@ -1,8 +1,13 @@
 // src/routes/api/tenants.js
-// FINAL v1.6 — platform tenant onboarding routes + channel resolver + JSON/CSV/ZIP export
 
 import express from "express";
 import archiver from "archiver";
+
+import {
+  requireAdminSession,
+  hashUserPassword,
+} from "../../utils/adminAuth.js";
+
 import {
   dbGetTenantByKey,
   dbGetWorkspaceSettings,
@@ -12,20 +17,22 @@ import {
   dbUpsertTenantChannel,
   dbUpsertTenantAgent,
 } from "../../db/helpers/settings.js";
+
 import {
   dbCreateTenantUser,
   dbGetTenantUserByEmail,
+  dbGetTenantUserById,
+  dbListTenantUsers,
+  dbUpdateTenantUser,
+  dbSetTenantUserStatus,
+  dbDeleteTenantUser,
 } from "../../db/helpers/tenantUsers.js";
+
 import { dbAudit } from "../../db/helpers/audit.js";
 import {
   dbExportTenantBundle,
   dbExportTenantCsvBundle,
 } from "../../db/helpers/tenantExport.js";
-import {
-  requireInternalToken,
-  getAuthRole,
-  getAuthActor,
-} from "../../utils/auth.js";
 
 function ok(res, data = {}) {
   return res.status(200).json({ ok: true, ...data });
@@ -33,10 +40,6 @@ function ok(res, data = {}) {
 
 function bad(res, error, extra = {}) {
   return res.status(400).json({ ok: false, error, ...extra });
-}
-
-function unauth(res, error = "Unauthorized", extra = {}) {
-  return res.status(401).json({ ok: false, error, ...extra });
 }
 
 function serverErr(res, error, extra = {}) {
@@ -119,27 +122,31 @@ function defaultEnabledLanguages(input) {
   return arr.length ? [...new Set(arr)] : ["az"];
 }
 
-function isOwnerOrAdmin(req) {
-  const role = cleanLower(getAuthRole(req), "member");
-  return role === "owner" || role === "admin";
+function normalizeUserRole(role) {
+  const r = cleanLower(role, "member");
+  if (
+    r === "owner" ||
+    r === "admin" ||
+    r === "operator" ||
+    r === "member" ||
+    r === "marketer" ||
+    r === "analyst"
+  ) {
+    return r;
+  }
+  return "member";
 }
 
-function canAccessTenantsApi(req) {
-  try {
-    if (requireInternalToken(req) === true) return true;
-  } catch {}
-  return isOwnerOrAdmin(req);
+function normalizeUserStatus(status) {
+  const s = cleanLower(status, "invited");
+  if (s === "invited" || s === "active" || s === "disabled" || s === "removed") {
+    return s;
+  }
+  return "invited";
 }
 
-function getActor(req) {
-  const authActor = cleanNullableString(getAuthActor(req));
-  if (authActor) return authActor;
-
-  return (
-    cleanString(req.headers["x-actor-email"]) ||
-    cleanString(req.headers["x-actor"]) ||
-    (isOwnerOrAdmin(req) ? "admin" : "platform")
-  );
+function getActor(_req) {
+  return "platform_admin";
 }
 
 function buildTenantCoreInput(body = {}) {
@@ -239,9 +246,39 @@ function buildOwnerInput(body = {}, core = {}) {
     ),
     role: "owner",
     status: "active",
+    password_hash: cleanString(owner.password || "")
+      ? hashUserPassword(cleanString(owner.password))
+      : null,
+    auth_provider: "local",
+    email_verified: true,
+    session_version: 1,
     permissions: asJsonObj(owner.permissions, {}),
     meta: asJsonObj(owner.meta, {}),
     last_seen_at: null,
+  };
+}
+
+function buildTenantUserInput(body = {}) {
+  const x = asJsonObj(body, {});
+  const password = cleanString(x.password || "");
+
+  return {
+    user_email: safeEmail(x.user_email || x.email || ""),
+    full_name: cleanString(x.full_name || x.fullName || ""),
+    role: normalizeUserRole(x.role || "member"),
+    status: normalizeUserStatus(x.status || "invited"),
+    password_hash: password ? hashUserPassword(password) : undefined,
+    auth_provider: cleanLower(x.auth_provider || "local"),
+    email_verified: Object.prototype.hasOwnProperty.call(x, "email_verified")
+      ? asBool(x.email_verified, false)
+      : true,
+    session_version: Number.isFinite(Number(x.session_version))
+      ? Number(x.session_version)
+      : 1,
+    permissions: asJsonObj(x.permissions, {}),
+    meta: asJsonObj(x.meta, {}),
+    last_seen_at: cleanNullableString(x.last_seen_at),
+    last_login_at: cleanNullableString(x.last_login_at),
   };
 }
 
@@ -303,7 +340,7 @@ function pickChannels(body = {}) {
 
 async function auditSafe(db, actor, action, objectType, objectId, meta = {}) {
   try {
-    await dbAudit(db, actor || "system", action, objectType, objectId, meta);
+    await dbAudit(db, actor || "platform_admin", action, objectType, objectId, meta);
   } catch {}
 }
 
@@ -508,13 +545,6 @@ async function dbResolveTenantChannel(
 export function tenantsRoutes({ db }) {
   const router = express.Router();
 
-  router.use((req, res, next) => {
-    if (!canAccessTenantsApi(req)) {
-      return unauth(res, "Unauthorized");
-    }
-    next();
-  });
-
   router.get("/tenants/resolve-channel", async (req, res) => {
     try {
       const channel = cleanLower(req.query.channel || "");
@@ -589,6 +619,8 @@ export function tenantsRoutes({ db }) {
     }
   });
 
+  router.use(requireAdminSession);
+
   router.get("/tenants", async (req, res) => {
     try {
       const status = cleanLower(req.query.status || "");
@@ -614,6 +646,233 @@ export function tenantsRoutes({ db }) {
       return ok(res, settings);
     } catch (err) {
       return serverErr(res, err?.message || "Failed to load tenant");
+    }
+  });
+
+  router.get("/tenants/:key/users", async (req, res) => {
+    try {
+      const tenantKey = slugTenantKey(req.params.key);
+      if (!tenantKey) return bad(res, "tenant key is required");
+
+      const tenant = await dbGetTenantByKey(db, tenantKey);
+      if (!tenant?.id) {
+        return res.status(404).json({ ok: false, error: "Tenant not found" });
+      }
+
+      const users = await dbListTenantUsers(db, tenant.id);
+      return ok(res, { tenant, users });
+    } catch (err) {
+      return serverErr(res, err?.message || "Failed to load tenant users");
+    }
+  });
+
+  router.get("/tenants/:key/users/:id", async (req, res) => {
+    try {
+      const tenantKey = slugTenantKey(req.params.key);
+      if (!tenantKey) return bad(res, "tenant key is required");
+
+      const tenant = await dbGetTenantByKey(db, tenantKey);
+      if (!tenant?.id) {
+        return res.status(404).json({ ok: false, error: "Tenant not found" });
+      }
+
+      const user = await dbGetTenantUserById(db, tenant.id, req.params.id);
+      if (!user?.id) {
+        return res.status(404).json({ ok: false, error: "User not found" });
+      }
+
+      return ok(res, { tenant, user });
+    } catch (err) {
+      return serverErr(res, err?.message || "Failed to load tenant user");
+    }
+  });
+
+  router.post("/tenants/:key/users", async (req, res) => {
+    try {
+      const actor = getActor(req);
+      const tenantKey = slugTenantKey(req.params.key);
+      if (!tenantKey) return bad(res, "tenant key is required");
+
+      const tenant = await dbGetTenantByKey(db, tenantKey);
+      if (!tenant?.id) {
+        return res.status(404).json({ ok: false, error: "Tenant not found" });
+      }
+
+      const input = buildTenantUserInput(req.body);
+      if (!input.user_email) {
+        return bad(res, "user_email is required");
+      }
+      if (!isLikelyEmail(input.user_email)) {
+        return bad(res, "user_email is invalid");
+      }
+
+      const existing = await dbGetTenantUserByEmail(db, tenant.id, input.user_email);
+      if (existing?.id) {
+        return bad(res, "User already exists for this tenant", {
+          userId: existing.id,
+        });
+      }
+
+      const user = await dbCreateTenantUser(db, tenant.id, input);
+
+      await auditSafe(db, actor, "tenant.user.created", "tenant_user", user?.id, {
+        tenantId: tenant.id,
+        tenantKey: tenant.tenant_key,
+        user_email: input.user_email,
+        role: input.role,
+        status: input.status,
+      });
+
+      return ok(res, { tenant, user });
+    } catch (err) {
+      return serverErr(res, err?.message || "Failed to create tenant user");
+    }
+  });
+
+  router.patch("/tenants/:key/users/:id", async (req, res) => {
+    try {
+      const actor = getActor(req);
+      const tenantKey = slugTenantKey(req.params.key);
+      if (!tenantKey) return bad(res, "tenant key is required");
+
+      const tenant = await dbGetTenantByKey(db, tenantKey);
+      if (!tenant?.id) {
+        return res.status(404).json({ ok: false, error: "Tenant not found" });
+      }
+
+      const current = await dbGetTenantUserById(db, tenant.id, req.params.id);
+      if (!current?.id) {
+        return res.status(404).json({ ok: false, error: "User not found" });
+      }
+
+      const patchInput = buildTenantUserInput({
+        ...current,
+        ...asJsonObj(req.body, {}),
+      });
+
+      const user = await dbUpdateTenantUser(db, tenant.id, req.params.id, patchInput);
+
+      await auditSafe(db, actor, "tenant.user.updated", "tenant_user", user?.id, {
+        tenantId: tenant.id,
+        tenantKey: tenant.tenant_key,
+        user_email: user?.user_email,
+        role: user?.role,
+        status: user?.status,
+      });
+
+      return ok(res, { tenant, user });
+    } catch (err) {
+      return serverErr(res, err?.message || "Failed to update tenant user");
+    }
+  });
+
+  router.post("/tenants/:key/users/:id/status", async (req, res) => {
+    try {
+      const actor = getActor(req);
+      const tenantKey = slugTenantKey(req.params.key);
+      if (!tenantKey) return bad(res, "tenant key is required");
+
+      const tenant = await dbGetTenantByKey(db, tenantKey);
+      if (!tenant?.id) {
+        return res.status(404).json({ ok: false, error: "Tenant not found" });
+      }
+
+      const status = cleanLower(req.body?.status || "");
+      if (!status) return bad(res, "status is required");
+
+      const user = await dbSetTenantUserStatus(db, tenant.id, req.params.id, status);
+      if (!user?.id) {
+        return res.status(404).json({ ok: false, error: "User not found" });
+      }
+
+      await auditSafe(db, actor, "tenant.user.status.updated", "tenant_user", user.id, {
+        tenantId: tenant.id,
+        tenantKey: tenant.tenant_key,
+        status: user.status,
+      });
+
+      return ok(res, { tenant, user });
+    } catch (err) {
+      return serverErr(res, err?.message || "Failed to update tenant user status");
+    }
+  });
+
+  router.post("/tenants/:key/users/:id/password", async (req, res) => {
+    try {
+      const actor = getActor(req);
+      const tenantKey = slugTenantKey(req.params.key);
+      if (!tenantKey) return bad(res, "tenant key is required");
+
+      const tenant = await dbGetTenantByKey(db, tenantKey);
+      if (!tenant?.id) {
+        return res.status(404).json({ ok: false, error: "Tenant not found" });
+      }
+
+      const current = await dbGetTenantUserById(db, tenant.id, req.params.id);
+      if (!current?.id) {
+        return res.status(404).json({ ok: false, error: "User not found" });
+      }
+
+      const password = cleanString(req.body?.password || "");
+      if (!password) return bad(res, "password is required");
+
+      const user = await dbUpdateTenantUser(db, tenant.id, req.params.id, {
+        ...current,
+        password_hash: hashUserPassword(password),
+        auth_provider: "local",
+        email_verified: true,
+      });
+
+      await auditSafe(db, actor, "tenant.user.password.updated", "tenant_user", user?.id, {
+        tenantId: tenant.id,
+        tenantKey: tenant.tenant_key,
+        user_email: user?.user_email,
+      });
+
+      return ok(res, {
+        tenant,
+        user,
+        passwordUpdated: true,
+      });
+    } catch (err) {
+      return serverErr(res, err?.message || "Failed to update tenant user password");
+    }
+  });
+
+  router.delete("/tenants/:key/users/:id", async (req, res) => {
+    try {
+      const actor = getActor(req);
+      const tenantKey = slugTenantKey(req.params.key);
+      if (!tenantKey) return bad(res, "tenant key is required");
+
+      const tenant = await dbGetTenantByKey(db, tenantKey);
+      if (!tenant?.id) {
+        return res.status(404).json({ ok: false, error: "Tenant not found" });
+      }
+
+      const current = await dbGetTenantUserById(db, tenant.id, req.params.id);
+      if (!current?.id) {
+        return res.status(404).json({ ok: false, error: "User not found" });
+      }
+
+      const deleted = await dbDeleteTenantUser(db, tenant.id, req.params.id);
+      if (!deleted) {
+        return bad(res, "Delete failed");
+      }
+
+      await auditSafe(db, actor, "tenant.user.deleted", "tenant_user", current.id, {
+        tenantId: tenant.id,
+        tenantKey: tenant.tenant_key,
+        user_email: current.user_email,
+      });
+
+      return ok(res, {
+        tenant,
+        deleted: true,
+        id: current.id,
+      });
+    } catch (err) {
+      return serverErr(res, err?.message || "Failed to delete tenant user");
     }
   });
 
