@@ -15,6 +15,21 @@ import { adminAuthRoutes } from "./src/routes/api/adminAuth.js";
 import { startOutboundRetryWorker } from "./src/workers/outboundRetryWorker.js";
 import { createDraftScheduleWorker } from "./src/workers/draftScheduleWorker.js";
 
+function s(v, d = "") {
+  return String(v ?? d).trim();
+}
+
+function buildAllowedOrigins() {
+  const raw = s(cfg.CORS_ORIGIN, "");
+  if (!raw) return [];
+  if (raw === "*") return ["*"];
+
+  return raw
+    .split(",")
+    .map((x) => x.trim())
+    .filter(Boolean);
+}
+
 async function main() {
   const app = express();
 
@@ -28,24 +43,31 @@ async function main() {
     })
   );
 
-  app.use(
-    cors({
-      origin: (origin, cb) => {
-        if (!origin) return cb(null, true);
+  const allowedOrigins = buildAllowedOrigins();
 
-        const allowedOrigins = String(cfg.CORS_ORIGIN || "")
-          .split(",")
-          .map((s) => s.trim())
-          .filter(Boolean);
+  const corsOptions = {
+    origin(origin, cb) {
+      if (!origin) return cb(null, true);
 
-        const allowed =
-          cfg.CORS_ORIGIN === "*" || allowedOrigins.includes(origin);
+      if (allowedOrigins.includes("*")) {
+        return cb(null, true);
+      }
 
-        return allowed ? cb(null, true) : cb(new Error("CORS blocked"));
-      },
-      credentials: true,
-    })
-  );
+      if (allowedOrigins.includes(origin)) {
+        return cb(null, true);
+      }
+
+      console.error(`[cors] blocked origin=${origin} allowed=${allowedOrigins.join(",")}`);
+      return cb(new Error(`CORS blocked for origin: ${origin}`));
+    },
+    credentials: true,
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+    optionsSuccessStatus: 204,
+  };
+
+  app.use(cors(corsOptions));
+  app.options(/.*/, cors(corsOptions));
 
   app.use(express.json({ limit: "1mb" }));
   app.use(express.urlencoded({ extended: false }));
@@ -77,22 +99,22 @@ async function main() {
       service: "ai-hq-backend",
       env: cfg.APP_ENV,
       port: cfg.PORT,
-      hasDatabaseUrl: Boolean(String(cfg.DATABASE_URL || "").trim()),
-      hasOpenAI: Boolean(String(cfg.OPENAI_API_KEY || "").trim()),
+      hasDatabaseUrl: Boolean(s(cfg.DATABASE_URL)),
+      hasOpenAI: Boolean(s(cfg.OPENAI_API_KEY)),
       adminPanelEnabled: !!cfg.ADMIN_PANEL_ENABLED,
-      hasAdminPasscodeHash: Boolean(String(cfg.ADMIN_PANEL_PASSCODE_HASH || "").trim()),
-      hasAdminSessionSecret: Boolean(String(cfg.ADMIN_SESSION_SECRET || "").trim()),
-      hasUserSessionSecret: Boolean(String(cfg.USER_SESSION_SECRET || "").trim()),
-      hasScheduleWebhook: Boolean(
-        String(process.env.N8N_WEBHOOK_SCHEDULE_DRAFT_URL || "").trim()
-      ),
-      hasWsAuthToken: Boolean(String(cfg.WS_AUTH_TOKEN || "").trim()),
+      hasAdminPasscodeHash: Boolean(s(cfg.ADMIN_PANEL_PASSCODE_HASH)),
+      hasAdminSessionSecret: Boolean(s(cfg.ADMIN_SESSION_SECRET)),
+      hasUserSessionSecret: Boolean(s(cfg.USER_SESSION_SECRET)),
+      hasScheduleWebhook: Boolean(s(process.env.N8N_WEBHOOK_SCHEDULE_DRAFT_URL)),
+      hasWsAuthToken: Boolean(s(cfg.WS_AUTH_TOKEN)),
       now: new Date().toISOString(),
+      corsOrigin: s(cfg.CORS_ORIGIN),
+      allowedOrigins,
     });
   });
 
   app.get("/health", async (_req, res) => {
-    const hasDbUrl = Boolean(String(cfg.DATABASE_URL || "").trim());
+    const hasDbUrl = Boolean(s(cfg.DATABASE_URL));
     const db = getDb();
 
     const out = {
@@ -105,8 +127,7 @@ async function main() {
       },
       workers: {
         outboundRetryEnabled: !!cfg.OUTBOUND_RETRY_ENABLED,
-        draftScheduleEnabled:
-          String(process.env.DRAFT_SCHEDULE_WORKER_ENABLED || "1") !== "0",
+        draftScheduleEnabled: s(process.env.DRAFT_SCHEDULE_WORKER_ENABLED, "1") !== "0",
       },
     };
 
@@ -175,8 +196,19 @@ async function main() {
     });
   });
 
-  app.use((err, _req, res, _next) => {
-    console.error("[api] error:", err?.message || err);
+  app.use((err, req, res, _next) => {
+    const msg = String(err?.message || err || "Server error");
+    console.error("[api] error:", msg);
+
+    if (msg.toLowerCase().includes("cors")) {
+      res.setHeader("Content-Type", "application/json; charset=utf-8");
+      return res.status(403).json({
+        ok: false,
+        error: msg,
+        origin: req.headers.origin || null,
+      });
+    }
+
     res.setHeader("Content-Type", "application/json; charset=utf-8");
     return res.status(500).json({
       ok: false,
@@ -189,10 +221,9 @@ async function main() {
 
     console.log(`[ai-hq] listening on :${cfg.PORT} env=${cfg.APP_ENV}`);
     console.log(`[ai-hq] CORS_ORIGIN=${cfg.CORS_ORIGIN}`);
+    console.log(`[ai-hq] allowedOrigins=${allowedOrigins.join(",") || "(empty)"}`);
     console.log(`[ai-hq] DB=${hasDb ? "ON" : "OFF"}`);
-    console.log(
-      `[ai-hq] OpenAI=${cfg.OPENAI_API_KEY ? "ON" : "OFF"} model=${cfg.OPENAI_MODEL}`
-    );
+    console.log(`[ai-hq] OpenAI=${cfg.OPENAI_API_KEY ? "ON" : "OFF"} model=${cfg.OPENAI_MODEL}`);
     console.log(`[ai-hq] WS_AUTH_TOKEN=${cfg.WS_AUTH_TOKEN ? "ON" : "OFF"}`);
     console.log(
       `[ai-hq] META_GATEWAY=${cfg.META_GATEWAY_BASE_URL ? "ON" : "OFF"} retryWorker=${
@@ -201,15 +232,9 @@ async function main() {
     );
     console.log(
       `[ai-hq] draftScheduleWorker=${
-        String(process.env.DRAFT_SCHEDULE_WORKER_ENABLED || "1") !== "0"
-          ? "ON"
-          : "OFF"
-      } interval=${Number(
-        process.env.DRAFT_SCHEDULE_WORKER_INTERVAL_MS || 60000
-      )}ms webhook=${
-        String(process.env.N8N_WEBHOOK_SCHEDULE_DRAFT_URL || "").trim()
-          ? "ON"
-          : "OFF"
+        s(process.env.DRAFT_SCHEDULE_WORKER_ENABLED, "1") !== "0" ? "ON" : "OFF"
+      } interval=${Number(process.env.DRAFT_SCHEDULE_WORKER_INTERVAL_MS || 60000)}ms webhook=${
+        s(process.env.N8N_WEBHOOK_SCHEDULE_DRAFT_URL) ? "ON" : "OFF"
       }`
     );
     console.log(
