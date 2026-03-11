@@ -1,8 +1,6 @@
 import express from "express";
 import crypto from "crypto";
 
-console.log("[voiceInternal] module loaded");
-
 function s(v, d = "") {
   return String(v ?? d).trim();
 }
@@ -36,12 +34,6 @@ function requireInternalToken(req, res, next) {
     s(process.env.AIHQ_INTERNAL_TOKEN) ||
     s(process.env.INTERNAL_API_TOKEN) ||
     s(process.env.N8N_WEBHOOK_TOKEN);
-
-  console.log("[voiceInternal] auth check", {
-    hasExpected: !!expected,
-    hasGot: !!readInternalToken(req),
-    path: req.path,
-  });
 
   if (!expected) {
     return res.status(500).json({
@@ -207,12 +199,6 @@ export function voiceInternalRoutes({ db }) {
       const tenantKey = s(req.body?.tenantKey);
       const toNumber = s(req.body?.toNumber);
 
-      console.log("[voiceInternal] tenant-config request", {
-        tenantKey,
-        toNumber,
-        hasToken: !!readInternalToken(req),
-      });
-
       const tenant = await findTenantByKeyOrPhone(db, { tenantKey, toNumber });
 
       if (!tenant) {
@@ -237,11 +223,6 @@ export function voiceInternalRoutes({ db }) {
 
   r.post("/internal/voice/report", requireInternalToken, async (req, res) => {
     try {
-      console.log("[voiceInternal] report request", {
-        tenantKey: s(req.body?.tenantKey),
-        hasToken: !!readInternalToken(req),
-      });
-
       return res.status(200).json({
         ok: true,
         accepted: true,
