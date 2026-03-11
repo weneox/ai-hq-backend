@@ -108,8 +108,14 @@ function normalizeVoiceSettings(row = {}) {
 }
 
 function normalizeVoiceCall(row = {}) {
+  const duration = n(row.duration_seconds, 0);
+  const fromNumber = s(row.from_number);
+  const toNumber = s(row.to_number);
+  const callerName = s(row.caller_name);
+
   return {
     id: s(row.id),
+    callId: s(row.id),
     tenantId: s(row.tenant_id),
     tenantKey: s(row.tenant_key),
 
@@ -120,16 +126,27 @@ function normalizeVoiceCall(row = {}) {
     direction: s(row.direction, "inbound"),
     status: s(row.status, "queued"),
 
-    fromNumber: s(row.from_number),
-    toNumber: s(row.to_number),
-    callerName: s(row.caller_name),
+    fromNumber,
+    from: fromNumber,
+    caller: fromNumber,
+    phone: fromNumber,
+
+    toNumber,
+    to: toNumber,
+
+    callerName,
+    name: callerName,
 
     startedAt: nowIso(row.started_at),
     answeredAt: nowIso(row.answered_at),
     endedAt: nowIso(row.ended_at),
-    durationSeconds: n(row.duration_seconds, 0),
+
+    durationSeconds: duration,
+    durationSec: duration,
+    duration: duration,
 
     language: s(row.language, "en"),
+    lang: s(row.language, "en"),
     agentMode: s(row.agent_mode, "assistant"),
 
     handoffRequested: b(row.handoff_requested, false),
@@ -161,15 +178,28 @@ function normalizeVoiceCall(row = {}) {
 }
 
 function normalizeVoiceCallEvent(row = {}) {
+  const eventType = s(row.event_type);
+
   return {
     id: s(row.id),
     callId: s(row.call_id),
     tenantId: s(row.tenant_id),
     tenantKey: s(row.tenant_key),
-    eventType: s(row.event_type),
+
+    eventType,
+    event: eventType,
+    type: eventType,
+    name: eventType,
+
     actor: s(row.actor, "system"),
     payload: j(row.payload, {}),
+    text: s(j(row.payload, {})?.text || j(row.payload, {})?.message || j(row.payload, {})?.content || ""),
+    message: s(j(row.payload, {})?.message || j(row.payload, {})?.text || ""),
+    content: s(j(row.payload, {})?.content || j(row.payload, {})?.text || ""),
+
     createdAt: nowIso(row.created_at),
+    timestamp: nowIso(row.created_at),
+    time: nowIso(row.created_at),
   };
 }
 
@@ -193,11 +223,22 @@ function normalizeVoiceUsageRow(row = {}) {
 }
 
 function normalizeVoiceCallSession(row = {}) {
+  const voiceCallId = s(row.voice_call_id);
+  const operatorName = s(row.operator_name);
+  const customerName = s(row.customer_name);
+  const status = s(row.status, "bot_active");
+  const startedAt = nowIso(row.started_at);
+  const endedAt = nowIso(row.ended_at);
+
   return {
     id: s(row.id),
+    sessionId: s(row.id),
+
     tenantId: s(row.tenant_id),
     tenantKey: s(row.tenant_key),
-    voiceCallId: s(row.voice_call_id),
+
+    voiceCallId,
+    callId: voiceCallId,
 
     provider: s(row.provider, "twilio"),
     providerCallSid: s(row.provider_call_sid),
@@ -205,16 +246,16 @@ function normalizeVoiceCallSession(row = {}) {
     conferenceName: s(row.conference_name),
 
     customerNumber: s(row.customer_number),
-    customerName: s(row.customer_name),
+    customerName,
 
     direction: s(row.direction, "outbound_callback"),
-    status: s(row.status, "bot_active"),
+    status,
 
     requestedDepartment: s(row.requested_department),
     resolvedDepartment: s(row.resolved_department),
 
     operatorUserId: s(row.operator_user_id),
-    operatorName: s(row.operator_name),
+    operatorName,
     operatorJoinMode: s(row.operator_join_mode, "live"),
 
     botActive: b(row.bot_active, true),
@@ -230,10 +271,18 @@ function normalizeVoiceCallSession(row = {}) {
     summary: s(row.summary),
     meta: j(row.meta, {}),
 
-    startedAt: nowIso(row.started_at),
+    role: operatorName ? "operator" : "session",
+    participantRole: operatorName ? "operator" : "session",
+    label: operatorName || customerName || status || "session",
+    participantName: operatorName || customerName || "",
+    identity: operatorName || customerName || "",
+
+    startedAt,
+    joinedAt: nowIso(row.operator_joined_at) || startedAt,
     operatorRequestedAt: nowIso(row.operator_requested_at),
     operatorJoinedAt: nowIso(row.operator_joined_at),
-    endedAt: nowIso(row.ended_at),
+    endedAt,
+    leftAt: endedAt,
 
     createdAt: nowIso(row.created_at),
     updatedAt: nowIso(row.updated_at),
@@ -556,8 +605,8 @@ export async function createVoiceCall(db, input = {}) {
       input.startedAt || null,
       input.answeredAt || null,
       input.endedAt || null,
-      n(input.durationSeconds, 0),
-      s(input.language, "en"),
+      n(input.durationSeconds ?? input.durationSec ?? input.duration, 0),
+      s(input.language || input.lang, "en"),
       s(input.agentMode, "assistant"),
       b(input.handoffRequested, false),
       b(input.handoffCompleted, false),
@@ -595,6 +644,11 @@ export async function updateVoiceCall(db, id, patch = {}) {
     extraction: isObj(patch.extraction) ? patch.extraction : current.extraction,
     meta: isObj(patch.meta) ? patch.meta : current.meta,
   };
+
+  const duration = n(
+    merged.durationSeconds ?? merged.durationSec ?? merged.duration,
+    0
+  );
 
   const row = await one(
     db,
@@ -647,14 +701,14 @@ export async function updateVoiceCall(db, id, patch = {}) {
       s(merged.providerStreamSid) || null,
       s(merged.direction, "inbound"),
       s(merged.status, "queued"),
-      s(merged.fromNumber) || null,
-      s(merged.toNumber) || null,
-      s(merged.callerName) || null,
+      s(merged.fromNumber || merged.from || merged.caller || merged.phone) || null,
+      s(merged.toNumber || merged.to) || null,
+      s(merged.callerName || merged.name) || null,
       merged.startedAt || null,
       merged.answeredAt || null,
       merged.endedAt || null,
-      n(merged.durationSeconds, 0),
-      s(merged.language, "en"),
+      duration,
+      s(merged.language || merged.lang, "en"),
       s(merged.agentMode, "assistant"),
       b(merged.handoffRequested, false),
       b(merged.handoffCompleted, false),
@@ -702,7 +756,7 @@ export async function appendVoiceCallEvent(db, input = {}) {
       s(input.callId),
       s(input.tenantId) || null,
       s(input.tenantKey),
-      s(input.eventType),
+      s(input.eventType || input.event || input.type || input.name),
       s(input.actor, "system"),
       JSON.stringify(j(input.payload, {})),
     ]
@@ -853,7 +907,7 @@ export async function createVoiceCallSession(db, input = {}) {
       safeUuid(input.id),
       s(input.tenantId) || null,
       s(input.tenantKey),
-      s(input.voiceCallId) || null,
+      s(input.voiceCallId || input.callId) || null,
       s(input.provider, "twilio"),
       s(input.providerCallSid) || null,
       s(input.providerConferenceSid) || null,
@@ -942,7 +996,7 @@ export async function updateVoiceCallSession(db, id, patch = {}) {
       id,
       s(merged.tenantId) || null,
       s(merged.tenantKey),
-      s(merged.voiceCallId) || null,
+      s(merged.voiceCallId || merged.callId) || null,
       s(merged.provider, "twilio"),
       s(merged.providerCallSid) || null,
       s(merged.providerConferenceSid) || null,
