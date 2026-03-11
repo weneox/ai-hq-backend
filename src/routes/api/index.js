@@ -1,5 +1,3 @@
-// src/routes/api/index.js
-
 import express from "express";
 import { requireUserSession } from "../../utils/adminAuth.js";
 
@@ -23,17 +21,19 @@ import { commentsRoutes } from "./comments.js";
 import { settingsRoutes } from "./settings.js";
 import { teamRoutes } from "./team.js";
 import { tenantsRoutes } from "./tenants.js";
+import { voiceInternalRoutes } from "./voiceInternal.js";
 
 export function apiRouter({ db, wsHub }) {
   const r = express.Router();
 
-  // Public / infra
+  // public / infra
   r.use("/", healthRoutes({ db }));
 
-  // Special/internal tenant helper routes
+  // internal / helper routes
   r.use("/", tenantsRoutes({ db }));
+  r.use("/", voiceInternalRoutes({ db }));
 
-  // Authenticated app routes
+  // authenticated app routes
   r.use(requireUserSession);
 
   r.use("/", modeRoutes({ db, wsHub }));
