@@ -1,5 +1,5 @@
 // src/services/inboxBrain.js
-// FINAL v5.0 — tenant-safe inbox reliability layer + AI/fallback decisioning
+// FINAL v6.1 — fully multi-tenant + schema-aware + niche-aware + product-grade inbox decisioning
 
 import OpenAI from "openai";
 import { cfg } from "../config.js";
@@ -31,22 +31,42 @@ function pickStringDeep(x) {
   return "";
 }
 
-function toNum(v, fallback = 0) {
-  const n = Number(v);
-  return Number.isFinite(n) ? n : fallback;
-}
-
 function nowMs() {
   return Date.now();
 }
 
 function toMs(v) {
   if (!v) return 0;
+
   const n = Number(v);
   if (Number.isFinite(n) && n > 0) return n;
 
   const t = Date.parse(String(v));
   return Number.isFinite(t) ? t : 0;
+}
+
+function uniqStrings(list = []) {
+  const out = [];
+  const seen = new Set();
+
+  for (const item of Array.isArray(list) ? list : []) {
+    const x = s(item);
+    if (!x) continue;
+    const k = lower(x);
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(x);
+  }
+
+  return out;
+}
+
+function safeObj(v, fallback = {}) {
+  return v && typeof v === "object" && !Array.isArray(v) ? v : fallback;
+}
+
+function safeArr(v, fallback = []) {
+  return Array.isArray(v) ? v : fallback;
 }
 
 function fixMojibake(input) {
@@ -114,7 +134,10 @@ function parseJsonLoose(text) {
     return JSON.parse(raw);
   } catch {}
 
-  const fenced = raw.match(/```json\s*([\s\S]*?)```/i) || raw.match(/```\s*([\s\S]*?)```/i);
+  const fenced =
+    raw.match(/```json\s*([\s\S]*?)```/i) ||
+    raw.match(/```\s*([\s\S]*?)```/i);
+
   if (fenced?.[1]) {
     try {
       return JSON.parse(fenced[1].trim());
@@ -136,16 +159,6 @@ function getResolvedTenantKey(tenantKey) {
   return resolveTenantKey(tenantKey, getDefaultTenantKey());
 }
 
-function getTenantBrandName(tenant, tenantKey) {
-  const brandName =
-    tenant?.brand?.displayName ||
-    tenant?.brand?.name ||
-    tenant?.name ||
-    getResolvedTenantKey(tenantKey);
-
-  return s(brandName || "Brand");
-}
-
 function getThreadHandoffState(thread) {
   const metaHandoff =
     thread?.meta && typeof thread.meta === "object" && thread.meta.handoff
@@ -163,6 +176,7 @@ function getThreadHandoffState(thread) {
 
 function normalizeRecentMessages(input) {
   if (!Array.isArray(input)) return [];
+
   return input
     .map((m) => ({
       id: s(m?.id),
@@ -171,7 +185,7 @@ function normalizeRecentMessages(input) {
       text: fixMojibake(s(m?.text)),
       sent_at: m?.sent_at || null,
       created_at: m?.created_at || null,
-      meta: m?.meta && typeof m.meta === "object" ? m.meta : {},
+      meta: safeObj(m?.meta),
     }))
     .filter((m) => m.id || m.text)
     .sort((a, b) => toMs(a.sent_at || a.created_at) - toMs(b.sent_at || b.created_at));
@@ -218,19 +232,27 @@ function isAckOnlyText(text) {
       "👌",
       "ok",
       "oks",
+      "okay",
       "thanks",
       "thank you",
       "təşəkkür",
       "tesekkur",
       "sağ ol",
       "sag ol",
+      "super",
+      "əla",
+      "ela",
+      "got it",
+      "anladım",
+      "anladim",
     ]) &&
-    incoming.length <= 20
+    incoming.length <= 24
   );
 }
 
 function buildHistorySnippet(messages = [], limit = 6) {
   const list = normalizeRecentMessages(messages).slice(-limit);
+
   return list
     .map((m) => {
       const who =
@@ -239,7 +261,7 @@ function buildHistorySnippet(messages = [], limit = 6) {
           : m.sender_type === "agent" || m.sender_type === "operator"
             ? "operator"
             : "ai";
-      return `${who}: ${s(m.text).slice(0, 300)}`;
+      return `${who}: ${s(m.text).slice(0, 320)}`;
     })
     .join("\n");
 }
@@ -336,9 +358,11 @@ let openaiSingleton = null;
 function ensureOpenAI() {
   const key = s(cfg.OPENAI_API_KEY || "");
   if (!key) return null;
+
   if (!openaiSingleton) {
     openaiSingleton = new OpenAI({ apiKey: key });
   }
+
   return openaiSingleton;
 }
 
@@ -384,6 +408,400 @@ function getReliabilityFlags({ text, thread, recentMessages = [], quietHoursAppl
   };
 }
 
+/* ============================================================
+ * tenant business profile
+ * ============================================================ */
+
+function normalizeIndustry(v) {
+  const x = lower(v);
+  if (!x) return "generic_business";
+
+  const aliases = {
+    clinic: "clinic",
+    dental: "clinic",
+    dentist: "clinic",
+    hospital: "clinic",
+    health: "clinic",
+    healthcare: "clinic",
+
+    hotel: "hospitality",
+    hospitality: "hospitality",
+    travel: "hospitality",
+
+    restaurant: "restaurant",
+    cafe: "restaurant",
+    coffee: "restaurant",
+    food: "restaurant",
+
+    retail: "retail",
+    store: "retail",
+    shop: "retail",
+
+    ecommerce: "ecommerce",
+    "e-commerce": "ecommerce",
+
+    legal: "legal",
+    law: "legal",
+
+    finance: "finance",
+    fintech: "finance",
+    insurance: "finance",
+
+    education: "education",
+    school: "education",
+    academy: "education",
+    course: "education",
+
+    technology: "technology",
+    tech: "technology",
+    saas: "technology",
+    software: "technology",
+    ai: "technology",
+
+    automotive: "automotive",
+    auto: "automotive",
+    car: "automotive",
+
+    logistics: "logistics",
+    transport: "logistics",
+    cargo: "logistics",
+
+    real_estate: "real_estate",
+    realestate: "real_estate",
+    property: "real_estate",
+
+    beauty: "beauty",
+    salon: "beauty",
+    spa: "beauty",
+    cosmetics: "beauty",
+
+    creative_agency: "creative_agency",
+    agency: "creative_agency",
+    marketing: "creative_agency",
+    branding: "creative_agency",
+
+    generic: "generic_business",
+    generic_business: "generic_business",
+  };
+
+  return aliases[x] || x || "generic_business";
+}
+
+function getTenantBrandName(tenant, tenantKey) {
+  const profile = safeObj(tenant?.profile);
+  const brand = safeObj(tenant?.brand);
+
+  return (
+    s(profile?.brand_name) ||
+    s(profile?.brandName) ||
+    s(brand?.displayName) ||
+    s(brand?.name) ||
+    s(tenant?.company_name) ||
+    s(tenant?.name) ||
+    getResolvedTenantKey(tenantKey)
+  );
+}
+
+function getTenantBusinessProfile(tenant, tenantKey) {
+  const resolvedTenantKey = getResolvedTenantKey(tenantKey);
+
+  const profile = safeObj(tenant?.profile);
+  const brand = safeObj(tenant?.brand);
+  const meta = safeObj(tenant?.meta);
+  const aiPolicy = safeObj(tenant?.ai_policy);
+  const inboxPolicy = safeObj(tenant?.inbox_policy);
+  const features = safeObj(tenant?.features);
+
+  const displayName =
+    s(profile?.brand_name) ||
+    s(profile?.brandName) ||
+    s(brand?.displayName) ||
+    s(brand?.name) ||
+    s(tenant?.company_name) ||
+    s(tenant?.name) ||
+    resolvedTenantKey;
+
+  const industry =
+    normalizeIndustry(
+      profile?.industry_key ||
+        tenant?.industry_key ||
+        meta?.industry ||
+        brand?.industry ||
+        features?.industry ||
+        "generic_business"
+    );
+
+  const businessSummary =
+    s(profile?.brand_summary) ||
+    s(profile?.services_summary) ||
+    s(profile?.value_proposition) ||
+    s(meta?.businessSummary) ||
+    s(meta?.business_description) ||
+    s(meta?.about) ||
+    s(brand?.tagline) ||
+    "";
+
+  const services = uniqStrings(
+    safeArr(profile?.services).length
+      ? profile.services
+      : safeArr(meta?.services).length
+        ? meta.services
+        : safeArr(meta?.products).length
+          ? meta.products
+          : safeArr(meta?.categories).length
+            ? meta.categories
+            : []
+  );
+
+  const languages = uniqStrings(
+    safeArr(tenant?.supported_languages).length
+      ? tenant.supported_languages
+      : safeArr(tenant?.enabled_languages).length
+        ? tenant.enabled_languages
+        : safeArr(profile?.languages).length
+          ? profile.languages
+          : safeArr(meta?.languages).length
+            ? meta.languages
+            : safeArr(brand?.languages).length
+              ? brand.languages
+              : [s(tenant?.default_language || "en"), "en"]
+  );
+
+  const communicationRules = safeObj(profile?.communication_rules);
+  const tone =
+    s(profile?.tone_of_voice) ||
+    s(communicationRules?.tone) ||
+    s(meta?.tone) ||
+    s(brand?.tone) ||
+    "professional, warm, concise";
+
+  const maxSentences = Math.max(
+    1,
+    Math.min(
+      3,
+      Number(
+        communicationRules?.maxSentences ||
+          meta?.replyMaxSentences ||
+          2
+      )
+    )
+  );
+
+  const leadPrompts = uniqStrings(
+    safeArr(meta?.leadPrompts).length
+      ? meta.leadPrompts
+      : [
+          "Qısa olaraq sizə hansı xidmət və ya məhsul lazım olduğunu yazın.",
+          "Uyğun yönləndirmə üçün ehtiyacınızı qısa qeyd edin.",
+        ]
+  );
+
+  const forbiddenClaims = uniqStrings(
+    safeArr(profile?.banned_phrases).length
+      ? profile.banned_phrases
+      : safeArr(meta?.forbiddenClaims).length
+        ? meta.forbiddenClaims
+        : [
+            "Do not invent prices.",
+            "Do not promise unavailable features.",
+            "Do not guarantee timelines unless known.",
+          ]
+  );
+
+  const urgentKeywords = uniqStrings(
+    safeArr(inboxPolicy?.urgentKeywords).length
+      ? inboxPolicy.urgentKeywords
+      : safeArr(meta?.urgentKeywords).length
+        ? meta.urgentKeywords
+        : ["urgent", "təcili", "tecili", "asap", "today", "indi", "hemen"]
+  );
+
+  const pricingKeywords = uniqStrings(
+    safeArr(inboxPolicy?.pricingKeywords).length
+      ? inboxPolicy.pricingKeywords
+      : safeArr(meta?.pricingKeywords).length
+        ? meta.pricingKeywords
+        : ["qiymət", "qiymet", "price", "cost", "tarif", "paket", "neçəyə", "neceye"]
+  );
+
+  const humanKeywords = uniqStrings(
+    safeArr(inboxPolicy?.humanKeywords).length
+      ? inboxPolicy.humanKeywords
+      : safeArr(meta?.humanKeywords).length
+        ? meta.humanKeywords
+        : []
+  );
+
+  const supportKeywords = uniqStrings(
+    safeArr(inboxPolicy?.supportKeywords).length
+      ? inboxPolicy.supportKeywords
+      : safeArr(meta?.supportKeywords).length
+        ? meta.supportKeywords
+        : ["problem", "issue", "dəstək", "destek", "support", "help", "kömək", "komek"]
+  );
+
+  return {
+    tenantKey: resolvedTenantKey,
+    displayName,
+    industry,
+    businessSummary,
+    services,
+    languages,
+    tone,
+    maxSentences,
+    leadPrompts,
+    forbiddenClaims,
+    urgentKeywords,
+    pricingKeywords,
+    humanKeywords,
+    supportKeywords,
+    aiPolicy,
+    profile,
+  };
+}
+
+function buildServiceLine(profile) {
+  const services = uniqStrings(profile?.services || []);
+  if (!services.length) return "";
+  return services.slice(0, 12).join(", ");
+}
+
+function pickLeadPrompt(profile) {
+  const list = safeArr(profile?.leadPrompts);
+  return s(list[0] || "Qısa olaraq ehtiyacınızı yazın.");
+}
+
+function getIndustryHints(industry) {
+  const x = normalizeIndustry(industry);
+
+  const map = {
+    clinic: {
+      keywords: ["müayinə", "muayine", "implant", "ortodont", "dental", "clinic", "appointment", "randevu"],
+      pricingHint: "Qiymət xidmət növü və vəziyyətə görə dəyişə bilər.",
+    },
+    hospitality: {
+      keywords: ["reservation", "booking", "otaq", "room", "hotel", "stay"],
+      pricingHint: "Qiymət tarix və xidmət paketinə görə dəyişə bilər.",
+    },
+    restaurant: {
+      keywords: ["menu", "booking", "masa", "rezerv", "delivery", "restaurant"],
+      pricingHint: "Qiymət məhsul və sifariş tərkibinə görə dəyişə bilər.",
+    },
+    legal: {
+      keywords: ["məsləhət", "meslehet", "consultation", "law", "legal", "müqavilə", "muqavile", "court"],
+      pricingHint: "Qiymət işin növü və mürəkkəbliyinə görə dəyişə bilər.",
+    },
+    finance: {
+      keywords: ["loan", "credit", "investment", "insurance", "finance"],
+      pricingHint: "Qiymət və komissiya xidmət növündən asılıdır.",
+    },
+    education: {
+      keywords: ["course", "dərs", "ders", "training", "education", "program"],
+      pricingHint: "Qiymət proqram və formatdan asılıdır.",
+    },
+    ecommerce: {
+      keywords: ["product", "məhsul", "mehsul", "shipping", "çatdırılma", "catdirilma", "order"],
+      pricingHint: "Qiymət məhsul və çatdırılma şərtlərinə görə dəyişə bilər.",
+    },
+    technology: {
+      keywords: ["software", "saas", "app", "integration", "automation", "website"],
+      pricingHint: "Qiymət scope və funksionallığa görə dəyişə bilər.",
+    },
+    creative_agency: {
+      keywords: ["branding", "design", "creative", "smm", "content", "campaign"],
+      pricingHint: "Qiymət görüləcək işin həcminə görə dəyişə bilər.",
+    },
+    generic_business: {
+      keywords: [],
+      pricingHint: "Qiymət xidmət və ya məhsulun növünə görə dəyişə bilər.",
+    },
+  };
+
+  return map[x] || map.generic_business;
+}
+
+function classifyTenantAwareIntent(text, profile, policy) {
+  const incoming = lower(text);
+  const servicesLine = lower(buildServiceLine(profile));
+  const industryHints = getIndustryHints(profile?.industry);
+
+  if (includesAny(incoming, policy?.humanKeywords || [])) {
+    return { intent: "handoff_request", score: 92 };
+  }
+
+  if (includesAny(incoming, profile?.humanKeywords || [])) {
+    return { intent: "handoff_request", score: 92 };
+  }
+
+  if (includesAny(incoming, profile?.urgentKeywords || [])) {
+    return { intent: "urgent_interest", score: 94 };
+  }
+
+  if (includesAny(incoming, profile?.pricingKeywords || [])) {
+    return { intent: "pricing", score: 84 };
+  }
+
+  if (
+    includesAny(incoming, [
+      "salam",
+      "sabahınız",
+      "sabahiniz",
+      "hello",
+      "hi",
+      "good morning",
+      "good evening",
+      "selam",
+      "salamlar",
+    ])
+  ) {
+    return { intent: "greeting", score: 18 };
+  }
+
+  if (includesAny(incoming, profile?.supportKeywords || [])) {
+    return { intent: "support", score: 58 };
+  }
+
+  if (
+    servicesLine &&
+    includesAny(
+      incoming,
+      servicesLine
+        .split(",")
+        .map((x) => x.trim())
+        .filter(Boolean)
+    )
+  ) {
+    return { intent: "service_interest", score: 74 };
+  }
+
+  if (includesAny(incoming, industryHints.keywords || [])) {
+    return { intent: "service_interest", score: 70 };
+  }
+
+  if (
+    includesAny(incoming, [
+      "istəyirəm",
+      "isteyirem",
+      "lazımdır",
+      "lazimdir",
+      "lazımdı",
+      "proposal",
+      "brief",
+      "təklif",
+      "teklif",
+      "maraqlanıram",
+      "maraqlaniram",
+      "need",
+      "want",
+      "interested",
+    ])
+  ) {
+    return { intent: "service_interest", score: 66 };
+  }
+
+  return { intent: "general", score: 28 };
+}
+
 async function aiDecideInbox({
   text,
   channel,
@@ -403,34 +821,46 @@ async function aiDecideInbox({
   const model = s(cfg.OPENAI_MODEL || "gpt-5") || "gpt-5";
   const max_output_tokens = Number(cfg.OPENAI_MAX_OUTPUT_TOKENS || 800);
   const historySnippet = buildHistorySnippet(recentMessages, 6);
-  const brandName = getTenantBrandName(tenant, tenantKey);
+
+  const profile = getTenantBusinessProfile(tenant, tenantKey);
+  const servicesLine = buildServiceLine(profile);
   const resolvedTenantKey = getResolvedTenantKey(tenantKey);
 
   const prompt = `
-You are an AI inbox copilot for ${brandName}.
+You are an AI inbox copilot for a business.
 
-Your task:
-Analyze the incoming customer message and return ONLY valid JSON.
+Return ONLY valid JSON.
 
-Business context:
-- This brand provides digital services such as website development, AI automation, chatbot systems, Instagram/WhatsApp/Messenger automation, and related business automation solutions.
-- The goal is to be helpful, short, sales-aware, and professional.
-- Keep replies concise, natural, and human-like.
-- Default language should match the user's message.
-- Do not invent prices.
-- If user asks pricing, encourage them to briefly describe the needed service.
-- If user wants a human/operator, set handoff=true.
-- If message looks like clear service interest, createLead should usually be true.
-- If message is only short acknowledgement like "ok", "thanks", "👍", then noReply=true.
-- If operator recently replied, prefer noReply=true unless the user is clearly asking something new and urgent.
+Business profile:
+- brandName: ${JSON.stringify(profile.displayName)}
+- tenantKey: ${JSON.stringify(resolvedTenantKey)}
+- industry: ${JSON.stringify(profile.industry)}
+- businessSummary: ${JSON.stringify(profile.businessSummary || "")}
+- services: ${JSON.stringify(profile.services)}
+- languages: ${JSON.stringify(profile.languages)}
+- tone: ${JSON.stringify(profile.tone)}
+- maxSentences: ${profile.maxSentences}
+- leadPrompts: ${JSON.stringify(profile.leadPrompts)}
+- forbiddenClaims: ${JSON.stringify(profile.forbiddenClaims)}
+
+Operational rules:
+- Match the customer's language when possible.
+- Be concise, natural, and human-like.
+- Never invent prices, availability, timelines, medical/legal/financial guarantees, or unsupported claims.
+- If user asks pricing, ask for the needed service/product details briefly.
+- If user explicitly wants a human/operator, set handoff=true.
+- If user clearly shows business intent, createLead should usually be true.
+- If message is only acknowledgment like "ok", "thanks", "👍", then noReply=true.
+- If operator recently replied, prefer noReply=true unless customer is clearly asking something new and urgent.
 - Avoid repeating the same reply again.
-- If quiet hours are active, still analyze normally but noReply can be true if needed.
-- Never output anything except JSON.
+- If quiet hours are active, noReply may be true.
+- replyText must stay short, max ${profile.maxSentences} sentences.
+- Return only JSON.
 
 Allowed intents:
-["general","greeting","pricing","website","automation","handoff_request","service_interest","ack","support","other"]
+["general","greeting","pricing","service_interest","handoff_request","support","ack","urgent_interest","other"]
 
-Return JSON exactly with this shape:
+Return JSON exactly:
 {
   "intent": "general",
   "replyText": "",
@@ -445,13 +875,10 @@ Return JSON exactly with this shape:
 Rules:
 - leadScore must be integer 0-100
 - handoffPriority must be one of: "low", "normal", "high", "urgent"
-- replyText must be short, max 2 sentences
 - if noReply=true then replyText should be ""
-- if handoff=true then handoffReason should be filled
+- if handoff=true then handoffReason must be filled
 
 Context:
-brandName=${JSON.stringify(brandName)}
-tenantKey=${JSON.stringify(resolvedTenantKey)}
 channel=${JSON.stringify(s(channel || "instagram"))}
 externalUserId=${JSON.stringify(s(externalUserId || ""))}
 threadId=${JSON.stringify(s(thread?.id || ""))}
@@ -464,6 +891,7 @@ policy.handoffEnabled=${Boolean(policy?.handoffEnabled)}
 recentOutboundCooldownActive=${Boolean(reliability?.recentOutboundCooldownActive)}
 operatorRecentlyReplied=${Boolean(reliability?.operatorRecentlyReplied)}
 duplicateOfLastAiReply=${Boolean(reliability?.duplicateOfLastAiReply)}
+servicesLine=${JSON.stringify(servicesLine)}
 
 Recent thread history:
 ${historySnippet || "(empty)"}
@@ -481,7 +909,7 @@ ${JSON.stringify(String(text || ""))}
         {
           role: "system",
           content:
-            "You are a strict JSON generator for inbox decisioning. Return only JSON.",
+            "You are a strict JSON generator for business inbox decisioning. Return only valid JSON.",
         },
         {
           role: "user",
@@ -514,10 +942,50 @@ ${JSON.stringify(String(text || ""))}
       handoffPriority,
       noReply,
       raw,
+      profile,
     };
   } catch {
     return null;
   }
+}
+
+function buildFallbackReply({ intent, profile }) {
+  const brandName = s(profile?.displayName || "Brand");
+  const leadPrompt = pickLeadPrompt(profile);
+  const serviceLine = buildServiceLine(profile);
+  const industryHints = getIndustryHints(profile?.industry);
+
+  if (intent === "greeting") {
+    if (serviceLine) {
+      return `${brandName}-a xoş gəlmisiniz. ${serviceLine} üzrə kömək edə bilərik. ${leadPrompt}`;
+    }
+    return `${brandName}-a xoş gəlmisiniz. Sizə məmnuniyyətlə kömək edəcəyik. ${leadPrompt}`;
+  }
+
+  if (intent === "pricing") {
+    return `${industryHints.pricingHint} ${leadPrompt}`;
+  }
+
+  if (intent === "service_interest") {
+    if (serviceLine) {
+      return `${brandName} bu istiqamətdə kömək edə bilər. ${leadPrompt}`;
+    }
+    return `${brandName} bu mövzuda kömək edə bilər. ${leadPrompt}`;
+  }
+
+  if (intent === "support") {
+    return "Məmnuniyyətlə kömək edək. Problemi və ya ehtiyacınızı qısa şəkildə yazın.";
+  }
+
+  if (intent === "handoff_request") {
+    return "Qeyd etdik. Komandamızın daha uyğun yönləndirməsi üçün ehtiyacınızı qısa yazın.";
+  }
+
+  if (intent === "urgent_interest") {
+    return "Qeyd etdik. Müraciətinizi daha düzgün yönləndirmək üçün ehtiyacınızı qısa yazın.";
+  }
+
+  return `${brandName} sizə kömək etməyə hazırdır. ${leadPrompt}`;
 }
 
 function buildInboxActionsFallback({
@@ -533,21 +1001,33 @@ function buildInboxActionsFallback({
   recentMessages = [],
   reliability = {},
 }) {
-  const incoming = lower(text);
   const actions = [];
-  const brandName = getTenantBrandName(tenant, tenantKey);
+  const profile = getTenantBusinessProfile(tenant, tenantKey);
+  const classified = classifyTenantAwareIntent(text, profile, policy);
 
-  let intent = "general";
-  let replyText =
-    `Salam. ${brandName}-a yazdığınız üçün təşəkkür edirik. Sizə məmnuniyyətlə kömək edəcəyik. Xidmət, qiymət və ya layihə detalları yazın.`;
-  let leadScore = 10;
-  let shouldCreateLead = false;
-  let shouldHandoff = false;
+  let intent = classified.intent;
+  let leadScore = classified.score;
+  let replyText = buildFallbackReply({ intent, profile });
+
+  let shouldCreateLead = ["pricing", "service_interest", "handoff_request", "urgent_interest"].includes(intent);
+  let shouldHandoff = intent === "handoff_request" || intent === "urgent_interest";
   let shouldReply = Boolean(policy.autoReplyEnabled);
   let shouldMarkSeen = Boolean(policy.markSeenEnabled);
   let shouldTyping = Boolean(policy.typingIndicatorEnabled);
+
   let handoffReason = "";
   let handoffPriority = "normal";
+
+  if (intent === "handoff_request") {
+    handoffReason = "user_requested_human";
+    handoffPriority = "high";
+  }
+
+  if (intent === "urgent_interest") {
+    handoffReason = "urgent_request";
+    handoffPriority = "high";
+    leadScore = Math.max(leadScore, 92);
+  }
 
   if (quietHoursApplied) {
     shouldReply = false;
@@ -562,142 +1042,6 @@ function buildInboxActionsFallback({
   if (reliability?.operatorRecentlyReplied) {
     shouldReply = false;
     shouldTyping = false;
-  }
-
-  if (
-    includesAny(incoming, [
-      "qiymət",
-      "qiymet",
-      "price",
-      "cost",
-      "paket",
-      "tarif",
-      "neçəyə",
-      "neceye",
-    ])
-  ) {
-    intent = "pricing";
-    leadScore = 85;
-    shouldCreateLead = true;
-    replyText =
-      "Qiymət görüləcək işin həcminə görə dəyişir. İstədiyiniz xidməti qısa yazın, sizə uyğun həll və yönləndirmə edək.";
-  } else if (
-    includesAny(incoming, [
-      "salam",
-      "hello",
-      "hi",
-      "sabahınız",
-      "sabahiniz",
-      "axşamınız",
-      "axsaminiz",
-    ])
-  ) {
-    intent = "greeting";
-    leadScore = 20;
-    replyText =
-      `${brandName}-a xoş gəlmisiniz. Website, AI avtomatlaşdırma, SMM və chatbot həlləri üzrə kömək edə bilərik. Hansı xidmətlə maraqlanırsınız?`;
-  } else if (
-    includesAny(incoming, [
-      "sayt",
-      "website",
-      "web",
-      "landing",
-      "e-commerce",
-      "shop",
-      "mağaza",
-      "magaza",
-    ])
-  ) {
-    intent = "website";
-    leadScore = 75;
-    shouldCreateLead = true;
-    replyText =
-      "Website xidməti üçün kömək edə bilərik. İstədiyiniz sayt növünü yazın: şirkət saytı, satış saytı, landing page və ya fərqli bir şey.";
-  } else if (
-    includesAny(incoming, [
-      "chatbot",
-      "bot",
-      "instagram",
-      "whatsapp",
-      "messenger",
-      "dm",
-      "avtomatlaşdırma",
-      "avtomatlasdirma",
-      "automation",
-    ])
-  ) {
-    intent = "automation";
-    leadScore = 80;
-    shouldCreateLead = true;
-    replyText =
-      "Chatbot və DM avtomatlaşdırması üzrə həllərimiz var. Hansı platforma ilə başlamaq istəyirsiniz: Instagram, WhatsApp, Messenger, yoxsa website?";
-  } else if (includesAny(incoming, policy.humanKeywords || [])) {
-    intent = "handoff_request";
-    leadScore = 90;
-    shouldCreateLead = true;
-    shouldHandoff = Boolean(policy.handoffEnabled);
-    handoffReason = "user_requested_human";
-    handoffPriority = "high";
-    replyText =
-      "Qeyd etdik. Komandamız sizinlə əlaqə üçün müraciətinizi nəzərə alacaq. Zəhmət olmasa qısa olaraq ehtiyacınızı yazın.";
-  } else if (
-    includesAny(incoming, [
-      "təklif",
-      "teklif",
-      "proposal",
-      "brief",
-      "lazımdır",
-      "lazimdir",
-      "lazımdı",
-      "kömək",
-      "komek",
-      "hazırlayın",
-      "hazirlayin",
-      "edə bilərsiniz",
-      "ede bilersiniz",
-    ])
-  ) {
-    intent = "service_interest";
-    leadScore = 65;
-    shouldCreateLead = true;
-    replyText =
-      "Əlbəttə. Sizə uyğun həlli yönləndirə bilməyimiz üçün istədiyiniz xidməti və qısa tələbinizi yazın.";
-  }
-
-  if (
-    includesAny(incoming, [
-      "təcili",
-      "tecili",
-      "urgent",
-      "asap",
-      "indi",
-      "today",
-      "bu gün",
-      "bu gun",
-    ])
-  ) {
-    leadScore = Math.max(leadScore, 92);
-    shouldCreateLead = true;
-    shouldHandoff = Boolean(policy.handoffEnabled);
-    if (!handoffReason) handoffReason = "urgent_request";
-    if (!handoffPriority || handoffPriority === "normal") handoffPriority = "high";
-  }
-
-  if (
-    includesAny(incoming, [
-      "nömrə",
-      "nomre",
-      "telefon",
-      "phone",
-      "whatsapp number",
-      "əlaqə nömrəsi",
-      "elaqe nomresi",
-    ])
-  ) {
-    leadScore = Math.max(leadScore, 88);
-    shouldCreateLead = true;
-    replyText =
-      "Maraq göstərdiyiniz üçün təşəkkür edirik. İstədiyiniz xidməti yazın, komandamız sizə uyğun şəkildə yönləndirsin.";
   }
 
   if (reliability?.duplicateOfLastAiReply) {
@@ -725,7 +1069,9 @@ function buildInboxActionsFallback({
       policySuppressAiDuringHandoff: Boolean(policy.suppressAiDuringHandoff),
       timezone: s(policy.timezone || "Asia/Baku"),
       engine: "fallback",
-      brandName,
+      brandName: profile.displayName,
+      industry: profile.industry,
+      services: profile.services,
       recentOutboundCooldownActive: Boolean(reliability?.recentOutboundCooldownActive),
       operatorRecentlyReplied: Boolean(reliability?.operatorRecentlyReplied),
       duplicateOfLastAiReply: Boolean(reliability?.duplicateOfLastAiReply),
@@ -834,7 +1180,7 @@ export async function buildInboxActions({
     policy,
   });
 
-  const brandName = getTenantBrandName(tenant, resolvedTenantKey);
+  const profile = getTenantBusinessProfile(tenant, resolvedTenantKey);
 
   const metaBase = {
     tenantKey: resolvedTenantKey,
@@ -847,7 +1193,9 @@ export async function buildInboxActions({
     operatorRecentlyReplied: Boolean(reliability.operatorRecentlyReplied),
     duplicateOfLastAiReply: Boolean(reliability.duplicateOfLastAiReply),
     recentMessageCount: normalizeRecentMessages(recentMessages).length,
-    brandName,
+    brandName: profile.displayName,
+    industry: profile.industry,
+    services: profile.services,
   };
 
   if (!policy.channelAllowed) {
@@ -1038,6 +1386,8 @@ export async function buildInboxActions({
   });
 
   if (ai) {
+    const aiProfile = ai.profile || profile;
+
     let intent = s(ai.intent || "general") || "general";
     let replyText = s(ai.replyText || "");
     let leadScore = Math.max(0, Math.min(100, Number(ai.leadScore || 0)));
@@ -1088,7 +1438,9 @@ export async function buildInboxActions({
         policySuppressAiDuringHandoff: Boolean(policy.suppressAiDuringHandoff),
         timezone: s(policy.timezone || "Asia/Baku"),
         engine: "ai",
-        brandName,
+        brandName: aiProfile.displayName,
+        industry: aiProfile.industry,
+        services: aiProfile.services,
         recentOutboundCooldownActive: Boolean(reliability.recentOutboundCooldownActive),
         operatorRecentlyReplied: Boolean(reliability.operatorRecentlyReplied),
         duplicateOfLastAiReply: Boolean(reliability.duplicateOfLastAiReply),

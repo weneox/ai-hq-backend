@@ -1,3 +1,6 @@
+// src/routes/api/inbox.db.js
+// FINAL — schema-aware tenant lookup + inbox DB helpers
+
 import { isDbReady, isUuid } from "../../utils/http.js";
 import { getDefaultTenantKey, resolveTenantKey } from "../../tenancy/index.js";
 import {
@@ -8,11 +11,17 @@ import {
 
 function toAttempt(row) {
   if (!row) return null;
+
   return {
     ...row,
-    payload: row?.payload && typeof row.payload === "object" ? row.payload : {},
+    payload:
+      row?.payload && typeof row.payload === "object" && !Array.isArray(row.payload)
+        ? row.payload
+        : {},
     provider_response:
-      row?.provider_response && typeof row.provider_response === "object"
+      row?.provider_response &&
+      typeof row.provider_response === "object" &&
+      !Array.isArray(row.provider_response)
         ? row.provider_response
         : {},
   };
@@ -27,21 +36,62 @@ export async function getTenantByKey(db, tenantKey) {
     const result = await db.query(
       `
       select
-        id,
-        tenant_key,
-        name,
-        active,
-        brand,
-        meta,
-        schedule,
-        inbox_policy,
-        providers,
-        features,
-        timezone,
-        created_at,
-        updated_at
-      from tenants
-      where tenant_key = $1::text
+        t.id,
+        t.tenant_key,
+        t.company_name,
+        t.legal_name,
+        t.industry_key,
+        t.country_code,
+        t.timezone,
+        t.default_language,
+        t.supported_languages,
+        t.enabled_languages,
+        t.market_region,
+        t.plan_key,
+        t.status,
+        t.active,
+        t.onboarding_completed_at,
+        t.created_at,
+        t.updated_at,
+
+        tp.brand_name,
+        tp.website_url,
+        tp.public_email,
+        tp.public_phone,
+        tp.audience_summary,
+        tp.services_summary,
+        tp.value_proposition,
+        tp.brand_summary,
+        tp.tone_of_voice,
+        tp.preferred_cta,
+        tp.banned_phrases,
+        tp.communication_rules,
+        tp.visual_style,
+        tp.extra_context,
+
+        ap.auto_reply_enabled,
+        ap.suppress_ai_during_handoff,
+        ap.mark_seen_enabled,
+        ap.typing_indicator_enabled,
+        ap.create_lead_enabled,
+        ap.approval_required_content,
+        ap.approval_required_publish,
+        ap.quiet_hours_enabled,
+        ap.quiet_hours,
+        ap.inbox_policy,
+        ap.comment_policy,
+        ap.content_policy,
+        ap.escalation_rules,
+        ap.risk_rules,
+        ap.lead_scoring_rules,
+        ap.publish_policy
+
+      from tenants t
+      left join tenant_profiles tp
+        on tp.tenant_id = t.id
+      left join tenant_ai_policies ap
+        on ap.tenant_id = t.id
+      where t.tenant_key = $1::text
       limit 1
       `,
       [resolvedTenantKey]

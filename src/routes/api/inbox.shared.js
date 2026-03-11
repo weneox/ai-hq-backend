@@ -29,6 +29,19 @@ function asObject(x) {
   return x && typeof x === "object" && !Array.isArray(x) ? deepFix(x) : {};
 }
 
+function asStringArray(x) {
+  return Array.isArray(x)
+    ? x.map((v) => fixText(String(v))).filter(Boolean)
+    : [];
+}
+
+function splitSummaryToList(text) {
+  return fixText(text || "")
+    .split(/[,;\n]/g)
+    .map((x) => fixText(x))
+    .filter(Boolean);
+}
+
 export function sortMessagesChronologically(list = []) {
   return [...(Array.isArray(list) ? list : [])].sort(
     (a, b) => toMs(a?.sent_at || a?.created_at) - toMs(b?.sent_at || b?.created_at)
@@ -51,23 +64,18 @@ export function normalizeThread(row) {
     customer_name: fixText(row.customer_name || ""),
     status: fixText(row.status || ""),
     assigned_to: fixText(row.assigned_to || ""),
-    labels: Array.isArray(row.labels) ? row.labels.map((x) => fixText(String(x))).filter(Boolean) : [],
+    labels: Array.isArray(row.labels)
+      ? row.labels.map((x) => fixText(String(x))).filter(Boolean)
+      : [],
     meta,
 
-    // prefer real DB columns, fallback to meta.handoff only if needed
     handoff_active:
       typeof row.handoff_active === "boolean"
         ? row.handoff_active
         : Boolean(handoffMeta.active),
 
-    handoff_reason: fixText(
-      row.handoff_reason || handoffMeta.reason || ""
-    ),
-
-    handoff_priority: fixText(
-      row.handoff_priority || handoffMeta.priority || ""
-    ),
-
+    handoff_reason: fixText(row.handoff_reason || handoffMeta.reason || ""),
+    handoff_priority: fixText(row.handoff_priority || handoffMeta.priority || "normal"),
     handoff_at: row.handoff_at || handoffMeta.at || null,
     handoff_by: fixText(row.handoff_by || handoffMeta.by || ""),
   };
@@ -75,6 +83,7 @@ export function normalizeThread(row) {
 
 export function normalizeMessage(row) {
   if (!row) return row;
+
   return {
     ...row,
     tenant_key: fixText(row.tenant_key || ""),
@@ -90,6 +99,7 @@ export function normalizeMessage(row) {
 
 export function normalizeLead(row) {
   if (!row) return row;
+
   return {
     ...row,
     tenant_key: fixText(row.tenant_key || ""),
@@ -116,67 +126,138 @@ export function normalizeLead(row) {
 export function normalizeTenant(row) {
   if (!row) return null;
 
-  const brand = asObject(row.brand);
-  const meta = asObject(row.meta);
-  const schedule = asObject(row.schedule);
-  const inbox_policy = asObject(row.inbox_policy);
-  const providers = asObject(row.providers);
-  const features = asObject(row.features);
+  const communicationRules = asObject(row.communication_rules);
+  const visualStyle = asObject(row.visual_style);
+  const extraContext = asObject(row.extra_context);
+
+  const quietHours = asObject(row.quiet_hours);
+  const inboxPolicy = asObject(row.inbox_policy);
+  const commentPolicy = asObject(row.comment_policy);
+  const contentPolicy = asObject(row.content_policy);
+  const escalationRules = asObject(row.escalation_rules);
+  const riskRules = asObject(row.risk_rules);
+  const leadScoringRules = asObject(row.lead_scoring_rules);
+  const publishPolicy = asObject(row.publish_policy);
+
+  const supportedLanguages = asStringArray(row.supported_languages);
+  const bannedPhrases = asStringArray(row.banned_phrases);
+
+  const brandName = fixText(row.brand_name || row.company_name || "");
+  const servicesList = splitSummaryToList(row.services_summary);
+  const audienceSummary = fixText(row.audience_summary || "");
+  const servicesSummary = fixText(row.services_summary || "");
+  const valueProposition = fixText(row.value_proposition || "");
+  const brandSummary = fixText(row.brand_summary || "");
+  const toneOfVoice = fixText(row.tone_of_voice || "professional");
+  const preferredCta = fixText(row.preferred_cta || "");
+  const timezone = fixText(row.timezone || "Asia/Baku");
+  const defaultLanguage = fixText(row.default_language || "en");
+  const industryKey = fixText(row.industry_key || "generic_business");
 
   return {
-    ...row,
+    id: row.id || null,
+    tenant_id: row.id || null,
     tenant_key: fixText(row.tenant_key || ""),
-    name: fixText(row.name || ""),
+
+    company_name: fixText(row.company_name || ""),
+    legal_name: fixText(row.legal_name || ""),
+    industry_key: industryKey,
+    country_code: fixText(row.country_code || ""),
+    timezone,
+    default_language: defaultLanguage,
+    supported_languages: supportedLanguages,
+    market_region: fixText(row.market_region || ""),
+    plan_key: fixText(row.plan_key || ""),
+    status: fixText(row.status || ""),
     active: row.active !== false,
-    timezone: fixText(row.timezone || ""),
+    onboarding_completed_at: row.onboarding_completed_at || null,
+    created_at: row.created_at || null,
+    updated_at: row.updated_at || null,
+
+    profile: {
+      brand_name: brandName,
+      website_url: fixText(row.website_url || ""),
+      public_email: fixText(row.public_email || ""),
+      public_phone: fixText(row.public_phone || ""),
+      audience_summary: audienceSummary,
+      services_summary: servicesSummary,
+      value_proposition: valueProposition,
+      brand_summary: brandSummary,
+      tone_of_voice: toneOfVoice,
+      preferred_cta: preferredCta,
+      banned_phrases: bannedPhrases,
+      communication_rules: communicationRules,
+      visual_style: visualStyle,
+      extra_context: extraContext,
+    },
+
+    ai_policy: {
+      auto_reply_enabled:
+        typeof row.auto_reply_enabled === "boolean" ? row.auto_reply_enabled : true,
+      suppress_ai_during_handoff:
+        typeof row.suppress_ai_during_handoff === "boolean"
+          ? row.suppress_ai_during_handoff
+          : true,
+      mark_seen_enabled:
+        typeof row.mark_seen_enabled === "boolean" ? row.mark_seen_enabled : true,
+      typing_indicator_enabled:
+        typeof row.typing_indicator_enabled === "boolean"
+          ? row.typing_indicator_enabled
+          : true,
+      create_lead_enabled:
+        typeof row.create_lead_enabled === "boolean" ? row.create_lead_enabled : true,
+      approval_required_content:
+        typeof row.approval_required_content === "boolean"
+          ? row.approval_required_content
+          : true,
+      approval_required_publish:
+        typeof row.approval_required_publish === "boolean"
+          ? row.approval_required_publish
+          : true,
+      quiet_hours_enabled:
+        typeof row.quiet_hours_enabled === "boolean" ? row.quiet_hours_enabled : false,
+      quiet_hours: quietHours,
+      inbox_policy: inboxPolicy,
+      comment_policy: commentPolicy,
+      content_policy: contentPolicy,
+      escalation_rules: escalationRules,
+      risk_rules: riskRules,
+      lead_scoring_rules: leadScoringRules,
+      publish_policy: publishPolicy,
+    },
 
     brand: {
-      ...brand,
-      displayName: fixText(brand.displayName || brand.name || row.name || ""),
-      email: fixText(brand.email || ""),
-      phone: fixText(brand.phone || ""),
-      website: fixText(brand.website || ""),
-      logoUrl: fixText(brand.logoUrl || brand.logo_url || ""),
+      displayName: brandName,
+      name: brandName,
+      email: fixText(row.public_email || ""),
+      phone: fixText(row.public_phone || ""),
+      website: fixText(row.website_url || ""),
+      tone: toneOfVoice,
     },
 
     meta: {
-      ...meta,
-      pageId: fixText(meta.pageId || meta.page_id || ""),
-      igUserId: fixText(meta.igUserId || meta.ig_user_id || ""),
+      industry: industryKey,
+      businessSummary: brandSummary || valueProposition,
+      audienceSummary,
+      servicesSummary,
+      services: servicesList,
+      valueProposition,
+      tone: toneOfVoice,
+      preferredCta,
+      bannedPhrases,
+      communicationRules,
+      visualStyle,
+      extraContext,
+      languages: supportedLanguages.length ? supportedLanguages : [defaultLanguage],
     },
 
-    schedule: {
-      ...schedule,
-      tz: fixText(schedule.tz || row.timezone || ""),
-      publishHourLocal:
-        Number.isFinite(Number(schedule.publishHourLocal))
-          ? Number(schedule.publishHourLocal)
-          : null,
-      publishMinuteLocal:
-        Number.isFinite(Number(schedule.publishMinuteLocal))
-          ? Number(schedule.publishMinuteLocal)
-          : null,
-    },
-
-    inbox_policy,
-
-    providers: {
-      llm: fixText(providers.llm || ""),
-      image: fixText(providers.image || ""),
-      video: fixText(providers.video || ""),
-      storage: fixText(providers.storage || ""),
-      publish: fixText(providers.publish || ""),
-      tts: fixText(providers.tts || ""),
-      ...providers,
-    },
-
-    features: {
-      comments: Boolean(features.comments),
-      inbox: Boolean(features.inbox),
-      leads: Boolean(features.leads),
-      content: Boolean(features.content),
-      publishing: Boolean(features.publishing),
-      ...features,
-    },
+    inbox_policy: inboxPolicy,
+    comment_policy: commentPolicy,
+    content_policy: contentPolicy,
+    quiet_hours: quietHours,
+    escalation_rules: escalationRules,
+    risk_rules: riskRules,
+    lead_scoring_rules: leadScoringRules,
+    publish_policy: publishPolicy,
   };
 }

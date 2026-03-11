@@ -1,5 +1,5 @@
 // src/services/inboxPolicy.js
-// FINAL v3.0 — tenant-safe + timezone aware + channel aliases + stricter normalization
+// FINAL v4.1 — tenant-safe + new tenant schema aware + strict policy normalization
 
 import { getDefaultTenantKey, resolveTenantKey } from "../tenancy/index.js";
 
@@ -30,6 +30,10 @@ function toHour(v, d = 0) {
 
 function getDefaultTimezone() {
   return "Asia/Baku";
+}
+
+function isObj(v) {
+  return !!v && typeof v === "object" && !Array.isArray(v);
 }
 
 export function normalizeInboxChannel(v) {
@@ -88,40 +92,139 @@ function uniqueLowerList(list) {
   return out;
 }
 
-export function normalizePolicy(raw = {}) {
+function normalizeKeywordList(list, fallback = []) {
+  if (!Array.isArray(list)) {
+    return fallback.map((x) => lower(x)).filter(Boolean);
+  }
+
+  return list.map((x) => lower(x)).filter(Boolean);
+}
+
+function pickPolicyRoot(tenant = null) {
+  if (!isObj(tenant)) return {};
+  if (isObj(tenant.ai_policy)) return tenant.ai_policy;
+  return {};
+}
+
+function pickInboxPolicyBlock(tenant = null) {
+  if (!isObj(tenant)) return {};
+
+  if (isObj(tenant.inbox_policy)) {
+    return tenant.inbox_policy;
+  }
+
+  if (isObj(tenant.ai_policy) && isObj(tenant.ai_policy.inbox_policy)) {
+    return tenant.ai_policy.inbox_policy;
+  }
+
+  return {};
+}
+
+function pickQuietHoursBlock(tenant = null) {
+  if (!isObj(tenant)) return {};
+
+  if (isObj(tenant.quiet_hours)) {
+    return tenant.quiet_hours;
+  }
+
+  if (isObj(tenant.ai_policy) && isObj(tenant.ai_policy.quiet_hours)) {
+    return tenant.ai_policy.quiet_hours;
+  }
+
+  return {};
+}
+
+export function normalizePolicy(raw = {}, root = {}) {
+  const safeRaw = isObj(raw) ? raw : {};
+  const safeRoot = isObj(root) ? root : {};
+
   const allowedChannels = uniqueLowerList(
-    Array.isArray(raw.allowedChannels)
-      ? raw.allowedChannels
-      : DEFAULT_POLICY.allowedChannels
+    Array.isArray(safeRaw.allowedChannels)
+      ? safeRaw.allowedChannels
+      : Array.isArray(safeRaw.allowed_channels)
+        ? safeRaw.allowed_channels
+        : DEFAULT_POLICY.allowedChannels
   );
 
-  const humanKeywords = Array.isArray(raw.humanKeywords)
-    ? raw.humanKeywords.map((x) => lower(x)).filter(Boolean)
-    : DEFAULT_POLICY.humanKeywords.map((x) => lower(x));
+  const humanKeywords = normalizeKeywordList(
+    Array.isArray(safeRaw.humanKeywords)
+      ? safeRaw.humanKeywords
+      : Array.isArray(safeRaw.human_keywords)
+        ? safeRaw.human_keywords
+        : DEFAULT_POLICY.humanKeywords,
+    DEFAULT_POLICY.humanKeywords
+  );
 
   return {
-    autoReplyEnabled: b(raw.autoReplyEnabled, DEFAULT_POLICY.autoReplyEnabled),
-    createLeadEnabled: b(raw.createLeadEnabled, DEFAULT_POLICY.createLeadEnabled),
-    handoffEnabled: b(raw.handoffEnabled, DEFAULT_POLICY.handoffEnabled),
-    markSeenEnabled: b(raw.markSeenEnabled, DEFAULT_POLICY.markSeenEnabled),
+    autoReplyEnabled: b(
+      safeRaw.autoReplyEnabled ?? safeRaw.auto_reply_enabled ?? safeRoot.auto_reply_enabled,
+      DEFAULT_POLICY.autoReplyEnabled
+    ),
+
+    createLeadEnabled: b(
+      safeRaw.createLeadEnabled ?? safeRaw.create_lead_enabled ?? safeRoot.create_lead_enabled,
+      DEFAULT_POLICY.createLeadEnabled
+    ),
+
+    handoffEnabled: b(
+      safeRaw.handoffEnabled ??
+        safeRaw.handoff_enabled ??
+        safeRaw.escalationEnabled ??
+        safeRaw.escalation_enabled,
+      DEFAULT_POLICY.handoffEnabled
+    ),
+
+    markSeenEnabled: b(
+      safeRaw.markSeenEnabled ?? safeRaw.mark_seen_enabled ?? safeRoot.mark_seen_enabled,
+      DEFAULT_POLICY.markSeenEnabled
+    ),
+
     typingIndicatorEnabled: b(
-      raw.typingIndicatorEnabled,
+      safeRaw.typingIndicatorEnabled ??
+        safeRaw.typing_indicator_enabled ??
+        safeRoot.typing_indicator_enabled,
       DEFAULT_POLICY.typingIndicatorEnabled
     ),
+
     suppressAiDuringHandoff: b(
-      raw.suppressAiDuringHandoff,
+      safeRaw.suppressAiDuringHandoff ??
+        safeRaw.suppress_ai_during_handoff ??
+        safeRoot.suppress_ai_during_handoff,
       DEFAULT_POLICY.suppressAiDuringHandoff
     ),
+
     autoReleaseOnOperatorReply: b(
-      raw.autoReleaseOnOperatorReply,
+      safeRaw.autoReleaseOnOperatorReply ?? safeRaw.auto_release_on_operator_reply,
       DEFAULT_POLICY.autoReleaseOnOperatorReply
     ),
+
     allowedChannels: allowedChannels.length
       ? allowedChannels
       : DEFAULT_POLICY.allowedChannels.slice(),
-    quietHoursEnabled: b(raw.quietHoursEnabled, DEFAULT_POLICY.quietHoursEnabled),
-    quietHoursStart: toHour(raw.quietHoursStart, DEFAULT_POLICY.quietHoursStart),
-    quietHoursEnd: toHour(raw.quietHoursEnd, DEFAULT_POLICY.quietHoursEnd),
+
+    quietHoursEnabled: b(
+      safeRaw.quietHoursEnabled ??
+        safeRaw.quiet_hours_enabled ??
+        safeRoot.quiet_hours_enabled,
+      DEFAULT_POLICY.quietHoursEnabled
+    ),
+
+    quietHoursStart: toHour(
+      safeRaw.quietHoursStart ??
+        safeRaw.quiet_hours_start ??
+        safeRaw.startHour ??
+        safeRaw.start_hour,
+      DEFAULT_POLICY.quietHoursStart
+    ),
+
+    quietHoursEnd: toHour(
+      safeRaw.quietHoursEnd ??
+        safeRaw.quiet_hours_end ??
+        safeRaw.endHour ??
+        safeRaw.end_hour,
+      DEFAULT_POLICY.quietHoursEnd
+    ),
+
     humanKeywords,
   };
 }
@@ -161,12 +264,43 @@ export function isPolicyQuietHours(policy) {
 }
 
 export function getInboxPolicy({ tenantKey, channel, tenant = null } = {}) {
-  const policyFromTenant =
-    tenant?.inbox_policy && typeof tenant.inbox_policy === "object"
-      ? tenant.inbox_policy
-      : {};
+  const rootPolicy = pickPolicyRoot(tenant);
+  const inboxPolicy = pickInboxPolicyBlock(tenant);
+  const quietHours = pickQuietHoursBlock(tenant);
 
-  const policy = normalizePolicy(policyFromTenant);
+  const mergedRaw = {
+    ...inboxPolicy,
+
+    quietHoursEnabled:
+      inboxPolicy.quietHoursEnabled ??
+      inboxPolicy.quiet_hours_enabled ??
+      rootPolicy.quiet_hours_enabled ??
+      DEFAULT_POLICY.quietHoursEnabled,
+
+    quietHoursStart:
+      inboxPolicy.quietHoursStart ??
+      inboxPolicy.quiet_hours_start ??
+      inboxPolicy.startHour ??
+      inboxPolicy.start_hour ??
+      quietHours.startHour ??
+      quietHours.start_hour ??
+      quietHours.quietHoursStart ??
+      quietHours.quiet_hours_start ??
+      DEFAULT_POLICY.quietHoursStart,
+
+    quietHoursEnd:
+      inboxPolicy.quietHoursEnd ??
+      inboxPolicy.quiet_hours_end ??
+      inboxPolicy.endHour ??
+      inboxPolicy.end_hour ??
+      quietHours.endHour ??
+      quietHours.end_hour ??
+      quietHours.quietHoursEnd ??
+      quietHours.quiet_hours_end ??
+      DEFAULT_POLICY.quietHoursEnd,
+  };
+
+  const policy = normalizePolicy(mergedRaw, rootPolicy);
   const ch = normalizeInboxChannel(channel);
   const timezone = s(tenant?.timezone || getDefaultTimezone()) || getDefaultTimezone();
   const resolvedTenantKey = resolveTenantKey(
