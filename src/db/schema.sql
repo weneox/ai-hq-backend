@@ -3391,6 +3391,268 @@ exception when others then null;
 end$$;
 
 -- ------------------------------------------------------------
+-- voice_call_sessions
+-- live orchestration session for bot/operator handoff
+-- ------------------------------------------------------------
+create table if not exists voice_call_sessions (
+  id uuid primary key default gen_random_uuid(),
+
+  tenant_id uuid,
+  tenant_key text not null,
+
+  voice_call_id uuid,
+  provider text not null default 'twilio',
+  provider_call_sid text not null,
+  provider_conference_sid text,
+  conference_name text,
+
+  customer_number text,
+  customer_name text,
+
+  direction text not null default 'outbound_callback',
+  status text not null default 'bot_active',
+
+  requested_department text,
+  resolved_department text,
+
+  operator_user_id text,
+  operator_name text,
+  operator_join_mode text not null default 'live',
+
+  bot_active boolean not null default true,
+  operator_join_requested boolean not null default false,
+  operator_joined boolean not null default false,
+  whisper_active boolean not null default false,
+  takeover_active boolean not null default false,
+
+  lead_payload jsonb not null default '{}'::jsonb,
+  transcript_live jsonb not null default '[]'::jsonb,
+  summary text not null default '',
+  meta jsonb not null default '{}'::jsonb,
+
+  started_at timestamptz not null default now(),
+  operator_requested_at timestamptz,
+  operator_joined_at timestamptz,
+  ended_at timestamptz,
+
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+alter table voice_call_sessions add column if not exists tenant_id uuid;
+alter table voice_call_sessions add column if not exists tenant_key text;
+alter table voice_call_sessions add column if not exists voice_call_id uuid;
+alter table voice_call_sessions add column if not exists provider text default 'twilio';
+alter table voice_call_sessions add column if not exists provider_call_sid text;
+alter table voice_call_sessions add column if not exists provider_conference_sid text;
+alter table voice_call_sessions add column if not exists conference_name text;
+alter table voice_call_sessions add column if not exists customer_number text;
+alter table voice_call_sessions add column if not exists customer_name text;
+alter table voice_call_sessions add column if not exists direction text default 'outbound_callback';
+alter table voice_call_sessions add column if not exists status text default 'bot_active';
+alter table voice_call_sessions add column if not exists requested_department text;
+alter table voice_call_sessions add column if not exists resolved_department text;
+alter table voice_call_sessions add column if not exists operator_user_id text;
+alter table voice_call_sessions add column if not exists operator_name text;
+alter table voice_call_sessions add column if not exists operator_join_mode text default 'live';
+alter table voice_call_sessions add column if not exists bot_active boolean default true;
+alter table voice_call_sessions add column if not exists operator_join_requested boolean default false;
+alter table voice_call_sessions add column if not exists operator_joined boolean default false;
+alter table voice_call_sessions add column if not exists whisper_active boolean default false;
+alter table voice_call_sessions add column if not exists takeover_active boolean default false;
+alter table voice_call_sessions add column if not exists lead_payload jsonb default '{}'::jsonb;
+alter table voice_call_sessions add column if not exists transcript_live jsonb default '[]'::jsonb;
+alter table voice_call_sessions add column if not exists summary text default '';
+alter table voice_call_sessions add column if not exists meta jsonb default '{}'::jsonb;
+alter table voice_call_sessions add column if not exists started_at timestamptz default now();
+alter table voice_call_sessions add column if not exists operator_requested_at timestamptz;
+alter table voice_call_sessions add column if not exists operator_joined_at timestamptz;
+alter table voice_call_sessions add column if not exists ended_at timestamptz;
+alter table voice_call_sessions add column if not exists created_at timestamptz default now();
+alter table voice_call_sessions add column if not exists updated_at timestamptz default now();
+
+do $$
+begin
+  begin
+    alter table voice_call_sessions alter column id set default gen_random_uuid();
+  exception when others then null;
+  end;
+  begin
+    alter table voice_call_sessions alter column provider set default 'twilio';
+  exception when others then null;
+  end;
+  begin
+    alter table voice_call_sessions alter column direction set default 'outbound_callback';
+  exception when others then null;
+  end;
+  begin
+    alter table voice_call_sessions alter column status set default 'bot_active';
+  exception when others then null;
+  end;
+  begin
+    alter table voice_call_sessions alter column operator_join_mode set default 'live';
+  exception when others then null;
+  end;
+  begin
+    alter table voice_call_sessions alter column bot_active set default true;
+  exception when others then null;
+  end;
+  begin
+    alter table voice_call_sessions alter column operator_join_requested set default false;
+  exception when others then null;
+  end;
+  begin
+    alter table voice_call_sessions alter column operator_joined set default false;
+  exception when others then null;
+  end;
+  begin
+    alter table voice_call_sessions alter column whisper_active set default false;
+  exception when others then null;
+  end;
+  begin
+    alter table voice_call_sessions alter column takeover_active set default false;
+  exception when others then null;
+  end;
+  begin
+    alter table voice_call_sessions alter column lead_payload set default '{}'::jsonb;
+  exception when others then null;
+  end;
+  begin
+    alter table voice_call_sessions alter column transcript_live set default '[]'::jsonb;
+  exception when others then null;
+  end;
+  begin
+    alter table voice_call_sessions alter column summary set default '';
+  exception when others then null;
+  end;
+  begin
+    alter table voice_call_sessions alter column meta set default '{}'::jsonb;
+  exception when others then null;
+  end;
+  begin
+    alter table voice_call_sessions alter column started_at set default now();
+  exception when others then null;
+  end;
+  begin
+    alter table voice_call_sessions alter column created_at set default now();
+  exception when others then null;
+  end;
+  begin
+    alter table voice_call_sessions alter column updated_at set default now();
+  exception when others then null;
+  end;
+
+  if not exists (select 1 from pg_constraint where conname = 'voice_call_sessions_tenant_id_fkey') then
+    begin
+      alter table voice_call_sessions
+        add constraint voice_call_sessions_tenant_id_fkey
+        foreign key (tenant_id) references tenants(id) on delete set null;
+    exception when others then null;
+    end;
+  end if;
+
+  if not exists (select 1 from pg_constraint where conname = 'voice_call_sessions_voice_call_id_fkey') then
+    begin
+      alter table voice_call_sessions
+        add constraint voice_call_sessions_voice_call_id_fkey
+        foreign key (voice_call_id) references voice_calls(id) on delete set null;
+    exception when others then null;
+    end;
+  end if;
+
+  begin
+    execute 'alter table voice_call_sessions drop constraint if exists voice_call_sessions_provider_check';
+  exception when others then null;
+  end;
+
+  begin
+    alter table voice_call_sessions
+      add constraint voice_call_sessions_provider_check
+      check (provider in ('twilio','sip','byoc','other'));
+  exception when others then null;
+  end;
+
+  begin
+    execute 'alter table voice_call_sessions drop constraint if exists voice_call_sessions_direction_check';
+  exception when others then null;
+  end;
+
+  begin
+    alter table voice_call_sessions
+      add constraint voice_call_sessions_direction_check
+      check (direction in ('inbound','outbound','outbound_callback','manual','other'));
+  exception when others then null;
+  end;
+
+  begin
+    execute 'alter table voice_call_sessions drop constraint if exists voice_call_sessions_status_check';
+  exception when others then null;
+  end;
+
+  begin
+    alter table voice_call_sessions
+      add constraint voice_call_sessions_status_check
+      check (
+        status in (
+          'bot_active',
+          'bot_silent',
+          'agent_ringing',
+          'agent_whisper',
+          'agent_live',
+          'completed',
+          'failed'
+        )
+      );
+  exception when others then null;
+  end;
+
+  begin
+    execute 'alter table voice_call_sessions drop constraint if exists voice_call_sessions_operator_join_mode_check';
+  exception when others then null;
+  end;
+
+  begin
+    alter table voice_call_sessions
+      add constraint voice_call_sessions_operator_join_mode_check
+      check (operator_join_mode in ('live','whisper','monitor','barge'));
+  exception when others then null;
+  end;
+end$$;
+
+create unique index if not exists uq_voice_call_sessions_provider_call_sid
+  on voice_call_sessions(provider, provider_call_sid);
+
+create index if not exists idx_voice_call_sessions_tenant_created
+  on voice_call_sessions(tenant_id, created_at desc);
+
+create index if not exists idx_voice_call_sessions_tenant_key_created
+  on voice_call_sessions(tenant_key, created_at desc);
+
+create index if not exists idx_voice_call_sessions_status_updated
+  on voice_call_sessions(status, updated_at desc);
+
+create index if not exists idx_voice_call_sessions_voice_call
+  on voice_call_sessions(voice_call_id, created_at desc);
+
+create index if not exists idx_voice_call_sessions_operator_requested
+  on voice_call_sessions(operator_join_requested, operator_joined, updated_at desc);
+
+create index if not exists idx_voice_call_sessions_conference
+  on voice_call_sessions(conference_name, created_at desc);
+
+do $$
+begin
+  if not exists (select 1 from pg_trigger where tgname = 'trg_voice_call_sessions_updated_at') then
+    execute '
+      create trigger trg_voice_call_sessions_updated_at
+      before update on voice_call_sessions
+      for each row execute function set_updated_at();
+    ';
+  end if;
+exception when others then null;
+end$$;
+
+-- ------------------------------------------------------------
 -- voice_call_events
 -- timeline / audit for each call
 -- ------------------------------------------------------------
