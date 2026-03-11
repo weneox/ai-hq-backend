@@ -2807,3 +2807,956 @@ create index if not exists idx_tenant_channels_resolve_account
 
 create index if not exists idx_tenant_secrets_provider_key_active
   on tenant_secrets(tenant_id, provider, secret_key, is_active, updated_at desc);
+
+-- ============================================================
+-- VOICE MODULE
+-- tenant-first voice settings / calls / call events / usage
+-- ============================================================
+
+-- ------------------------------------------------------------
+-- tenant_voice_settings
+-- one row per tenant
+-- ------------------------------------------------------------
+create table if not exists tenant_voice_settings (
+  tenant_id uuid primary key,
+
+  enabled boolean not null default false,
+  provider text not null default 'twilio',
+  mode text not null default 'assistant',
+
+  display_name text not null default '',
+  default_language text not null default 'az',
+  supported_languages jsonb not null default '["az"]'::jsonb,
+
+  greeting jsonb not null default '{}'::jsonb,
+  fallback_greeting jsonb not null default '{}'::jsonb,
+  business_context text not null default '',
+  instructions text not null default '',
+
+  business_hours_enabled boolean not null default false,
+  business_hours jsonb not null default '{}'::jsonb,
+
+  operator_enabled boolean not null default true,
+  operator_phone text,
+  operator_label text not null default '',
+  transfer_strategy text not null default 'handoff',
+
+  callback_enabled boolean not null default true,
+  callback_mode text not null default 'lead_only',
+
+  max_call_seconds int not null default 180,
+  silence_hangup_seconds int not null default 12,
+
+  capture_rules jsonb not null default '{}'::jsonb,
+  lead_rules jsonb not null default '{}'::jsonb,
+  escalation_rules jsonb not null default '{}'::jsonb,
+  reporting_rules jsonb not null default '{}'::jsonb,
+
+  twilio_phone_number text,
+  twilio_phone_sid text,
+  twilio_config jsonb not null default '{}'::jsonb,
+
+  cost_control jsonb not null default '{}'::jsonb,
+  meta jsonb not null default '{}'::jsonb,
+
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+alter table tenant_voice_settings add column if not exists tenant_id uuid;
+alter table tenant_voice_settings add column if not exists enabled boolean default false;
+alter table tenant_voice_settings add column if not exists provider text default 'twilio';
+alter table tenant_voice_settings add column if not exists mode text default 'assistant';
+alter table tenant_voice_settings add column if not exists display_name text default '';
+alter table tenant_voice_settings add column if not exists default_language text default 'az';
+alter table tenant_voice_settings add column if not exists supported_languages jsonb default '["az"]'::jsonb;
+alter table tenant_voice_settings add column if not exists greeting jsonb default '{}'::jsonb;
+alter table tenant_voice_settings add column if not exists fallback_greeting jsonb default '{}'::jsonb;
+alter table tenant_voice_settings add column if not exists business_context text default '';
+alter table tenant_voice_settings add column if not exists instructions text default '';
+alter table tenant_voice_settings add column if not exists business_hours_enabled boolean default false;
+alter table tenant_voice_settings add column if not exists business_hours jsonb default '{}'::jsonb;
+alter table tenant_voice_settings add column if not exists operator_enabled boolean default true;
+alter table tenant_voice_settings add column if not exists operator_phone text;
+alter table tenant_voice_settings add column if not exists operator_label text default '';
+alter table tenant_voice_settings add column if not exists transfer_strategy text default 'handoff';
+alter table tenant_voice_settings add column if not exists callback_enabled boolean default true;
+alter table tenant_voice_settings add column if not exists callback_mode text default 'lead_only';
+alter table tenant_voice_settings add column if not exists max_call_seconds int default 180;
+alter table tenant_voice_settings add column if not exists silence_hangup_seconds int default 12;
+alter table tenant_voice_settings add column if not exists capture_rules jsonb default '{}'::jsonb;
+alter table tenant_voice_settings add column if not exists lead_rules jsonb default '{}'::jsonb;
+alter table tenant_voice_settings add column if not exists escalation_rules jsonb default '{}'::jsonb;
+alter table tenant_voice_settings add column if not exists reporting_rules jsonb default '{}'::jsonb;
+alter table tenant_voice_settings add column if not exists twilio_phone_number text;
+alter table tenant_voice_settings add column if not exists twilio_phone_sid text;
+alter table tenant_voice_settings add column if not exists twilio_config jsonb default '{}'::jsonb;
+alter table tenant_voice_settings add column if not exists cost_control jsonb default '{}'::jsonb;
+alter table tenant_voice_settings add column if not exists meta jsonb default '{}'::jsonb;
+alter table tenant_voice_settings add column if not exists created_at timestamptz default now();
+alter table tenant_voice_settings add column if not exists updated_at timestamptz default now();
+
+do $$
+begin
+  begin
+    alter table tenant_voice_settings alter column enabled set default false;
+  exception when others then null;
+  end;
+  begin
+    alter table tenant_voice_settings alter column provider set default 'twilio';
+  exception when others then null;
+  end;
+  begin
+    alter table tenant_voice_settings alter column mode set default 'assistant';
+  exception when others then null;
+  end;
+  begin
+    alter table tenant_voice_settings alter column display_name set default '';
+  exception when others then null;
+  end;
+  begin
+    alter table tenant_voice_settings alter column default_language set default 'az';
+  exception when others then null;
+  end;
+  begin
+    alter table tenant_voice_settings alter column supported_languages set default '["az"]'::jsonb;
+  exception when others then null;
+  end;
+  begin
+    alter table tenant_voice_settings alter column greeting set default '{}'::jsonb;
+  exception when others then null;
+  end;
+  begin
+    alter table tenant_voice_settings alter column fallback_greeting set default '{}'::jsonb;
+  exception when others then null;
+  end;
+  begin
+    alter table tenant_voice_settings alter column business_context set default '';
+  exception when others then null;
+  end;
+  begin
+    alter table tenant_voice_settings alter column instructions set default '';
+  exception when others then null;
+  end;
+  begin
+    alter table tenant_voice_settings alter column business_hours_enabled set default false;
+  exception when others then null;
+  end;
+  begin
+    alter table tenant_voice_settings alter column business_hours set default '{}'::jsonb;
+  exception when others then null;
+  end;
+  begin
+    alter table tenant_voice_settings alter column operator_enabled set default true;
+  exception when others then null;
+  end;
+  begin
+    alter table tenant_voice_settings alter column operator_label set default '';
+  exception when others then null;
+  end;
+  begin
+    alter table tenant_voice_settings alter column transfer_strategy set default 'handoff';
+  exception when others then null;
+  end;
+  begin
+    alter table tenant_voice_settings alter column callback_enabled set default true;
+  exception when others then null;
+  end;
+  begin
+    alter table tenant_voice_settings alter column callback_mode set default 'lead_only';
+  exception when others then null;
+  end;
+  begin
+    alter table tenant_voice_settings alter column max_call_seconds set default 180;
+  exception when others then null;
+  end;
+  begin
+    alter table tenant_voice_settings alter column silence_hangup_seconds set default 12;
+  exception when others then null;
+  end;
+  begin
+    alter table tenant_voice_settings alter column capture_rules set default '{}'::jsonb;
+  exception when others then null;
+  end;
+  begin
+    alter table tenant_voice_settings alter column lead_rules set default '{}'::jsonb;
+  exception when others then null;
+  end;
+  begin
+    alter table tenant_voice_settings alter column escalation_rules set default '{}'::jsonb;
+  exception when others then null;
+  end;
+  begin
+    alter table tenant_voice_settings alter column reporting_rules set default '{}'::jsonb;
+  exception when others then null;
+  end;
+  begin
+    alter table tenant_voice_settings alter column twilio_config set default '{}'::jsonb;
+  exception when others then null;
+  end;
+  begin
+    alter table tenant_voice_settings alter column cost_control set default '{}'::jsonb;
+  exception when others then null;
+  end;
+  begin
+    alter table tenant_voice_settings alter column meta set default '{}'::jsonb;
+  exception when others then null;
+  end;
+  begin
+    alter table tenant_voice_settings alter column created_at set default now();
+  exception when others then null;
+  end;
+  begin
+    alter table tenant_voice_settings alter column updated_at set default now();
+  exception when others then null;
+  end;
+
+  if not exists (select 1 from pg_constraint where conname = 'tenant_voice_settings_tenant_id_fkey') then
+    begin
+      alter table tenant_voice_settings
+        add constraint tenant_voice_settings_tenant_id_fkey
+        foreign key (tenant_id) references tenants(id) on delete cascade;
+    exception when others then null;
+    end;
+  end if;
+
+  begin
+    execute 'alter table tenant_voice_settings drop constraint if exists tenant_voice_settings_provider_check';
+  exception when others then null;
+  end;
+
+  begin
+    alter table tenant_voice_settings
+      add constraint tenant_voice_settings_provider_check
+      check (provider in ('twilio','sip','byoc','other'));
+  exception when others then null;
+  end;
+
+  begin
+    execute 'alter table tenant_voice_settings drop constraint if exists tenant_voice_settings_mode_check';
+  exception when others then null;
+  end;
+
+  begin
+    alter table tenant_voice_settings
+      add constraint tenant_voice_settings_mode_check
+      check (mode in ('assistant','ivr','hybrid','disabled'));
+  exception when others then null;
+  end;
+
+  begin
+    execute 'alter table tenant_voice_settings drop constraint if exists tenant_voice_settings_transfer_strategy_check';
+  exception when others then null;
+  end;
+
+  begin
+    alter table tenant_voice_settings
+      add constraint tenant_voice_settings_transfer_strategy_check
+      check (transfer_strategy in ('handoff','callback','schedule_callback','never'));
+  exception when others then null;
+  end;
+
+  begin
+    execute 'alter table tenant_voice_settings drop constraint if exists tenant_voice_settings_callback_mode_check';
+  exception when others then null;
+  end;
+
+  begin
+    alter table tenant_voice_settings
+      add constraint tenant_voice_settings_callback_mode_check
+      check (callback_mode in ('disabled','lead_only','always','after_hours'));
+  exception when others then null;
+  end;
+end$$;
+
+create index if not exists idx_tenant_voice_settings_enabled
+  on tenant_voice_settings(enabled, updated_at desc);
+
+do $$
+begin
+  if not exists (select 1 from pg_trigger where tgname = 'trg_tenant_voice_settings_updated_at') then
+    execute '
+      create trigger trg_tenant_voice_settings_updated_at
+      before update on tenant_voice_settings
+      for each row execute function set_updated_at();
+    ';
+  end if;
+exception when others then null;
+end$$;
+
+-- ------------------------------------------------------------
+-- voice_calls
+-- one row per completed or active call
+-- ------------------------------------------------------------
+create table if not exists voice_calls (
+  id uuid primary key default gen_random_uuid(),
+
+  tenant_id uuid,
+  tenant_key text not null,
+
+  provider text not null default 'twilio',
+  provider_call_sid text,
+  provider_stream_sid text,
+
+  direction text not null default 'inbound',
+  status text not null default 'queued',
+
+  from_number text,
+  to_number text,
+  caller_name text,
+
+  started_at timestamptz,
+  answered_at timestamptz,
+  ended_at timestamptz,
+  duration_seconds int not null default 0,
+
+  language text not null default 'az',
+  agent_mode text not null default 'assistant',
+
+  handoff_requested boolean not null default false,
+  handoff_completed boolean not null default false,
+  handoff_target text,
+
+  callback_requested boolean not null default false,
+  callback_phone text,
+
+  lead_id uuid,
+  inbox_thread_id uuid,
+
+  transcript text not null default '',
+  summary text not null default '',
+  outcome text not null default 'unknown',
+  intent text,
+  sentiment text,
+
+  cost_amount numeric(12,6) not null default 0,
+  cost_currency text not null default 'USD',
+
+  metrics jsonb not null default '{}'::jsonb,
+  extraction jsonb not null default '{}'::jsonb,
+  meta jsonb not null default '{}'::jsonb,
+
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+alter table voice_calls add column if not exists tenant_id uuid;
+alter table voice_calls add column if not exists tenant_key text;
+alter table voice_calls add column if not exists provider text default 'twilio';
+alter table voice_calls add column if not exists provider_call_sid text;
+alter table voice_calls add column if not exists provider_stream_sid text;
+alter table voice_calls add column if not exists direction text default 'inbound';
+alter table voice_calls add column if not exists status text default 'queued';
+alter table voice_calls add column if not exists from_number text;
+alter table voice_calls add column if not exists to_number text;
+alter table voice_calls add column if not exists caller_name text;
+alter table voice_calls add column if not exists started_at timestamptz;
+alter table voice_calls add column if not exists answered_at timestamptz;
+alter table voice_calls add column if not exists ended_at timestamptz;
+alter table voice_calls add column if not exists duration_seconds int default 0;
+alter table voice_calls add column if not exists language text default 'az';
+alter table voice_calls add column if not exists agent_mode text default 'assistant';
+alter table voice_calls add column if not exists handoff_requested boolean default false;
+alter table voice_calls add column if not exists handoff_completed boolean default false;
+alter table voice_calls add column if not exists handoff_target text;
+alter table voice_calls add column if not exists callback_requested boolean default false;
+alter table voice_calls add column if not exists callback_phone text;
+alter table voice_calls add column if not exists lead_id uuid;
+alter table voice_calls add column if not exists inbox_thread_id uuid;
+alter table voice_calls add column if not exists transcript text default '';
+alter table voice_calls add column if not exists summary text default '';
+alter table voice_calls add column if not exists outcome text default 'unknown';
+alter table voice_calls add column if not exists intent text;
+alter table voice_calls add column if not exists sentiment text;
+alter table voice_calls add column if not exists cost_amount numeric(12,6) default 0;
+alter table voice_calls add column if not exists cost_currency text default 'USD';
+alter table voice_calls add column if not exists metrics jsonb default '{}'::jsonb;
+alter table voice_calls add column if not exists extraction jsonb default '{}'::jsonb;
+alter table voice_calls add column if not exists meta jsonb default '{}'::jsonb;
+alter table voice_calls add column if not exists created_at timestamptz default now();
+alter table voice_calls add column if not exists updated_at timestamptz default now();
+
+do $$
+begin
+  begin
+    alter table voice_calls alter column id set default gen_random_uuid();
+  exception when others then null;
+  end;
+  begin
+    alter table voice_calls alter column provider set default 'twilio';
+  exception when others then null;
+  end;
+  begin
+    alter table voice_calls alter column direction set default 'inbound';
+  exception when others then null;
+  end;
+  begin
+    alter table voice_calls alter column status set default 'queued';
+  exception when others then null;
+  end;
+  begin
+    alter table voice_calls alter column duration_seconds set default 0;
+  exception when others then null;
+  end;
+  begin
+    alter table voice_calls alter column language set default 'az';
+  exception when others then null;
+  end;
+  begin
+    alter table voice_calls alter column agent_mode set default 'assistant';
+  exception when others then null;
+  end;
+  begin
+    alter table voice_calls alter column handoff_requested set default false;
+  exception when others then null;
+  end;
+  begin
+    alter table voice_calls alter column handoff_completed set default false;
+  exception when others then null;
+  end;
+  begin
+    alter table voice_calls alter column callback_requested set default false;
+  exception when others then null;
+  end;
+  begin
+    alter table voice_calls alter column transcript set default '';
+  exception when others then null;
+  end;
+  begin
+    alter table voice_calls alter column summary set default '';
+  exception when others then null;
+  end;
+  begin
+    alter table voice_calls alter column outcome set default 'unknown';
+  exception when others then null;
+  end;
+  begin
+    alter table voice_calls alter column cost_amount set default 0;
+  exception when others then null;
+  end;
+  begin
+    alter table voice_calls alter column cost_currency set default 'USD';
+  exception when others then null;
+  end;
+  begin
+    alter table voice_calls alter column metrics set default '{}'::jsonb;
+  exception when others then null;
+  end;
+  begin
+    alter table voice_calls alter column extraction set default '{}'::jsonb;
+  exception when others then null;
+  end;
+  begin
+    alter table voice_calls alter column meta set default '{}'::jsonb;
+  exception when others then null;
+  end;
+  begin
+    alter table voice_calls alter column created_at set default now();
+  exception when others then null;
+  end;
+  begin
+    alter table voice_calls alter column updated_at set default now();
+  exception when others then null;
+  end;
+
+  if not exists (select 1 from pg_constraint where conname = 'voice_calls_tenant_id_fkey') then
+    begin
+      alter table voice_calls
+        add constraint voice_calls_tenant_id_fkey
+        foreign key (tenant_id) references tenants(id) on delete set null;
+    exception when others then null;
+    end;
+  end if;
+
+  if not exists (select 1 from pg_constraint where conname = 'voice_calls_lead_id_fkey') then
+    begin
+      alter table voice_calls
+        add constraint voice_calls_lead_id_fkey
+        foreign key (lead_id) references leads(id) on delete set null;
+    exception when others then null;
+    end;
+  end if;
+
+  if not exists (select 1 from pg_constraint where conname = 'voice_calls_inbox_thread_id_fkey') then
+    begin
+      alter table voice_calls
+        add constraint voice_calls_inbox_thread_id_fkey
+        foreign key (inbox_thread_id) references inbox_threads(id) on delete set null;
+    exception when others then null;
+    end;
+  end if;
+
+  begin
+    execute 'alter table voice_calls drop constraint if exists voice_calls_provider_check';
+  exception when others then null;
+  end;
+
+  begin
+    alter table voice_calls
+      add constraint voice_calls_provider_check
+      check (provider in ('twilio','sip','byoc','other'));
+  exception when others then null;
+  end;
+
+  begin
+    execute 'alter table voice_calls drop constraint if exists voice_calls_direction_check';
+  exception when others then null;
+  end;
+
+  begin
+    alter table voice_calls
+      add constraint voice_calls_direction_check
+      check (direction in ('inbound','outbound','callback','internal_test'));
+  exception when others then null;
+  end;
+
+  begin
+    execute 'alter table voice_calls drop constraint if exists voice_calls_status_check';
+  exception when others then null;
+  end;
+
+  begin
+    alter table voice_calls
+      add constraint voice_calls_status_check
+      check (status in ('queued','ringing','in_progress','completed','failed','busy','no_answer','canceled'));
+  exception when others then null;
+  end;
+
+  begin
+    execute 'alter table voice_calls drop constraint if exists voice_calls_agent_mode_check';
+  exception when others then null;
+  end;
+
+  begin
+    alter table voice_calls
+      add constraint voice_calls_agent_mode_check
+      check (agent_mode in ('assistant','ivr','human','hybrid'));
+  exception when others then null;
+  end;
+
+  begin
+    execute 'alter table voice_calls drop constraint if exists voice_calls_outcome_check';
+  exception when others then null;
+  end;
+
+  begin
+    alter table voice_calls
+      add constraint voice_calls_outcome_check
+      check (outcome in (
+        'unknown',
+        'lead_captured',
+        'handoff_completed',
+        'callback_requested',
+        'faq_resolved',
+        'missed',
+        'spam',
+        'failed'
+      ));
+  exception when others then null;
+  end;
+end$$;
+
+create unique index if not exists uq_voice_calls_provider_call_sid
+  on voice_calls(provider, provider_call_sid)
+  where provider_call_sid is not null;
+
+create index if not exists idx_voice_calls_tenant_created
+  on voice_calls(tenant_id, created_at desc);
+
+create index if not exists idx_voice_calls_tenant_key_created
+  on voice_calls(tenant_key, created_at desc);
+
+create index if not exists idx_voice_calls_status_started
+  on voice_calls(status, started_at desc);
+
+create index if not exists idx_voice_calls_lead
+  on voice_calls(lead_id, created_at desc);
+
+create index if not exists idx_voice_calls_thread
+  on voice_calls(inbox_thread_id, created_at desc);
+
+create index if not exists idx_voice_calls_from_number
+  on voice_calls(from_number, created_at desc);
+
+do $$
+begin
+  if not exists (select 1 from pg_trigger where tgname = 'trg_voice_calls_updated_at') then
+    execute '
+      create trigger trg_voice_calls_updated_at
+      before update on voice_calls
+      for each row execute function set_updated_at();
+    ';
+  end if;
+exception when others then null;
+end$$;
+
+-- ------------------------------------------------------------
+-- voice_call_events
+-- timeline / audit for each call
+-- ------------------------------------------------------------
+create table if not exists voice_call_events (
+  id uuid primary key default gen_random_uuid(),
+  call_id uuid not null,
+  tenant_id uuid,
+  tenant_key text not null,
+  event_type text not null,
+  actor text not null default 'system',
+  payload jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now()
+);
+
+alter table voice_call_events add column if not exists tenant_id uuid;
+alter table voice_call_events add column if not exists tenant_key text;
+alter table voice_call_events add column if not exists event_type text;
+alter table voice_call_events add column if not exists actor text default 'system';
+alter table voice_call_events add column if not exists payload jsonb default '{}'::jsonb;
+alter table voice_call_events add column if not exists created_at timestamptz default now();
+
+do $$
+begin
+  begin
+    alter table voice_call_events alter column id set default gen_random_uuid();
+  exception when others then null;
+  end;
+  begin
+    alter table voice_call_events alter column actor set default 'system';
+  exception when others then null;
+  end;
+  begin
+    alter table voice_call_events alter column payload set default '{}'::jsonb;
+  exception when others then null;
+  end;
+  begin
+    alter table voice_call_events alter column created_at set default now();
+  exception when others then null;
+  end;
+
+  if not exists (select 1 from pg_constraint where conname = 'voice_call_events_call_id_fkey') then
+    begin
+      alter table voice_call_events
+        add constraint voice_call_events_call_id_fkey
+        foreign key (call_id) references voice_calls(id) on delete cascade;
+    exception when others then null;
+    end;
+  end if;
+
+  if not exists (select 1 from pg_constraint where conname = 'voice_call_events_tenant_id_fkey') then
+    begin
+      alter table voice_call_events
+        add constraint voice_call_events_tenant_id_fkey
+        foreign key (tenant_id) references tenants(id) on delete set null;
+    exception when others then null;
+    end;
+  end if;
+end$$;
+
+create index if not exists idx_voice_call_events_call_created
+  on voice_call_events(call_id, created_at asc);
+
+create index if not exists idx_voice_call_events_tenant_created
+  on voice_call_events(tenant_id, created_at desc);
+
+create index if not exists idx_voice_call_events_type_created
+  on voice_call_events(event_type, created_at desc);
+
+-- ------------------------------------------------------------
+-- voice_daily_usage
+-- daily usage & cost aggregation
+-- ------------------------------------------------------------
+create table if not exists voice_daily_usage (
+  id uuid primary key default gen_random_uuid(),
+
+  tenant_id uuid,
+  tenant_key text not null,
+  usage_date date not null,
+
+  provider text not null default 'twilio',
+
+  call_count int not null default 0,
+  inbound_count int not null default 0,
+  outbound_count int not null default 0,
+
+  total_duration_seconds int not null default 0,
+  total_cost_amount numeric(12,6) not null default 0,
+  cost_currency text not null default 'USD',
+
+  metrics jsonb not null default '{}'::jsonb,
+
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+alter table voice_daily_usage add column if not exists tenant_id uuid;
+alter table voice_daily_usage add column if not exists tenant_key text;
+alter table voice_daily_usage add column if not exists usage_date date;
+alter table voice_daily_usage add column if not exists provider text default 'twilio';
+alter table voice_daily_usage add column if not exists call_count int default 0;
+alter table voice_daily_usage add column if not exists inbound_count int default 0;
+alter table voice_daily_usage add column if not exists outbound_count int default 0;
+alter table voice_daily_usage add column if not exists total_duration_seconds int default 0;
+alter table voice_daily_usage add column if not exists total_cost_amount numeric(12,6) default 0;
+alter table voice_daily_usage add column if not exists cost_currency text default 'USD';
+alter table voice_daily_usage add column if not exists metrics jsonb default '{}'::jsonb;
+alter table voice_daily_usage add column if not exists created_at timestamptz default now();
+alter table voice_daily_usage add column if not exists updated_at timestamptz default now();
+
+do $$
+begin
+  begin
+    alter table voice_daily_usage alter column id set default gen_random_uuid();
+  exception when others then null;
+  end;
+  begin
+    alter table voice_daily_usage alter column provider set default 'twilio';
+  exception when others then null;
+  end;
+  begin
+    alter table voice_daily_usage alter column call_count set default 0;
+  exception when others then null;
+  end;
+  begin
+    alter table voice_daily_usage alter column inbound_count set default 0;
+  exception when others then null;
+  end;
+  begin
+    alter table voice_daily_usage alter column outbound_count set default 0;
+  exception when others then null;
+  end;
+  begin
+    alter table voice_daily_usage alter column total_duration_seconds set default 0;
+  exception when others then null;
+  end;
+  begin
+    alter table voice_daily_usage alter column total_cost_amount set default 0;
+  exception when others then null;
+  end;
+  begin
+    alter table voice_daily_usage alter column cost_currency set default 'USD';
+  exception when others then null;
+  end;
+  begin
+    alter table voice_daily_usage alter column metrics set default '{}'::jsonb;
+  exception when others then null;
+  end;
+  begin
+    alter table voice_daily_usage alter column created_at set default now();
+  exception when others then null;
+  end;
+  begin
+    alter table voice_daily_usage alter column updated_at set default now();
+  exception when others then null;
+  end;
+
+  if not exists (select 1 from pg_constraint where conname = 'voice_daily_usage_tenant_id_fkey') then
+    begin
+      alter table voice_daily_usage
+        add constraint voice_daily_usage_tenant_id_fkey
+        foreign key (tenant_id) references tenants(id) on delete set null;
+    exception when others then null;
+    end;
+  end if;
+
+  begin
+    execute 'alter table voice_daily_usage drop constraint if exists voice_daily_usage_provider_check';
+  exception when others then null;
+  end;
+
+  begin
+    alter table voice_daily_usage
+      add constraint voice_daily_usage_provider_check
+      check (provider in ('twilio','sip','byoc','other'));
+  exception when others then null;
+  end;
+end$$;
+
+create unique index if not exists uq_voice_daily_usage_tenant_provider_date
+  on voice_daily_usage(tenant_id, provider, usage_date);
+
+create index if not exists idx_voice_daily_usage_tenant_date
+  on voice_daily_usage(tenant_id, usage_date desc);
+
+do $$
+begin
+  if not exists (select 1 from pg_trigger where tgname = 'trg_voice_daily_usage_updated_at') then
+    execute '
+      create trigger trg_voice_daily_usage_updated_at
+      before update on voice_daily_usage
+      for each row execute function set_updated_at();
+    ';
+  end if;
+exception when others then null;
+end$$;
+
+-- ============================================================
+-- tenant_id backfill for voice tables
+-- ============================================================
+do $$
+begin
+  begin
+    update voice_calls x
+    set tenant_id = t.id
+    from tenants t
+    where x.tenant_id is null
+      and x.tenant_key is not null
+      and t.tenant_key = x.tenant_key;
+  exception when others then null;
+  end;
+
+  begin
+    update voice_call_events x
+    set tenant_id = t.id
+    from tenants t
+    where x.tenant_id is null
+      and x.tenant_key is not null
+      and t.tenant_key = x.tenant_key;
+  exception when others then null;
+  end;
+
+  begin
+    update voice_daily_usage x
+    set tenant_id = t.id
+    from tenants t
+    where x.tenant_id is null
+      and x.tenant_key is not null
+      and t.tenant_key = x.tenant_key;
+  exception when others then null;
+  end;
+exception when others then null;
+end$$;
+
+-- ============================================================
+-- seed voice settings for NEOX
+-- ============================================================
+do $$
+declare
+  v_tenant_id uuid;
+begin
+  select id into v_tenant_id
+  from tenants
+  where tenant_key = 'neox'
+  limit 1;
+
+  if v_tenant_id is not null then
+    insert into tenant_voice_settings (
+      tenant_id,
+      enabled,
+      provider,
+      mode,
+      display_name,
+      default_language,
+      supported_languages,
+      greeting,
+      fallback_greeting,
+      business_context,
+      instructions,
+      business_hours_enabled,
+      business_hours,
+      operator_enabled,
+      operator_phone,
+      operator_label,
+      transfer_strategy,
+      callback_enabled,
+      callback_mode,
+      max_call_seconds,
+      silence_hangup_seconds,
+      capture_rules,
+      lead_rules,
+      escalation_rules,
+      reporting_rules,
+      twilio_phone_number,
+      twilio_config,
+      cost_control,
+      meta
+    )
+    values (
+      v_tenant_id,
+      true,
+      'twilio',
+      'assistant',
+      'NEOX Voice Agent',
+      'az',
+      '["az","en","tr","ru"]'::jsonb,
+      jsonb_build_object(
+        'az', 'Salam, mən NEOX şirkətinin virtual asistentiyəm. Sizə necə kömək edə bilərəm?',
+        'en', 'Hello, I am the virtual assistant of NEOX. How can I help you?',
+        'tr', 'Salam, ben NEOX şirketinin sanal asistanıyım. Size nasıl yardımcı olabilirim?',
+        'ru', 'Здравствуйте, я виртуальный ассистент компании NEOX. Чем могу помочь?'
+      ),
+      jsonb_build_object(
+        'az', 'Hazırda səsli xidmət əlçatan deyil. Zəhmət olmasa əlaqə nömrənizi qeyd edin.',
+        'en', 'Voice service is currently unavailable. Please leave your contact number.',
+        'tr', 'Sesli hizmet şu anda kullanılamıyor. Lütfen iletişim numaranızı bırakın.',
+        'ru', 'Голосовой сервис сейчас недоступен. Пожалуйста, оставьте свой номер.'
+      ),
+      'NEOX provides AI automation, websites, AI assistants, and digital growth systems for businesses.',
+      '',
+      false,
+      '{}'::jsonb,
+      true,
+      '+994518005577',
+      'Sales Operator',
+      'handoff',
+      true,
+      'lead_only',
+      180,
+      12,
+      jsonb_build_object(
+        'collectName', true,
+        'collectPhone', true,
+        'collectServiceInterest', true,
+        'collectPreferredCallbackTime', true
+      ),
+      jsonb_build_object(
+        'autoCreateLead', true,
+        'minIntentScore', 40
+      ),
+      jsonb_build_object(
+        'humanKeywords', jsonb_build_array(
+          'operator','menecer','manager','human',
+          'adamla danışım','adamla danisim',
+          'real adam','zəng edin','zeng edin',
+          'call me','əlaqə','elaqe'
+        )
+      ),
+      jsonb_build_object(
+        'storeTranscript', true,
+        'storeSummary', true,
+        'notifyOnLead', true,
+        'notifyOnMissed', true
+      ),
+      null,
+      '{}'::jsonb,
+      jsonb_build_object(
+        'dailySoftLimitUsd', 10,
+        'monthlySoftLimitUsd', 150,
+        'warnAtPercent', 80
+      ),
+      '{}'::jsonb
+    )
+    on conflict (tenant_id) do update
+      set enabled = excluded.enabled,
+          provider = excluded.provider,
+          mode = excluded.mode,
+          display_name = excluded.display_name,
+          default_language = excluded.default_language,
+          supported_languages = excluded.supported_languages,
+          greeting = excluded.greeting,
+          fallback_greeting = excluded.fallback_greeting,
+          business_context = excluded.business_context,
+          operator_enabled = excluded.operator_enabled,
+          operator_phone = excluded.operator_phone,
+          operator_label = excluded.operator_label,
+          transfer_strategy = excluded.transfer_strategy,
+          callback_enabled = excluded.callback_enabled,
+          callback_mode = excluded.callback_mode,
+          max_call_seconds = excluded.max_call_seconds,
+          silence_hangup_seconds = excluded.silence_hangup_seconds,
+          capture_rules = excluded.capture_rules,
+          lead_rules = excluded.lead_rules,
+          escalation_rules = excluded.escalation_rules,
+          reporting_rules = excluded.reporting_rules,
+          cost_control = excluded.cost_control,
+          updated_at = now();
+  end if;
+exception when others then null;
+end$$;

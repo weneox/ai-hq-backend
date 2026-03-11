@@ -30,6 +30,50 @@ function buildAllowedOrigins() {
     .filter(Boolean);
 }
 
+function createAuditLogger(db) {
+  return {
+    async log({
+      tenantId = null,
+      tenantKey = "",
+      actor = "system",
+      action = "",
+      objectType = "unknown",
+      objectId = null,
+      meta = {},
+    } = {}) {
+      if (!db || !action) return null;
+
+      try {
+        await db.query(
+          `
+            insert into audit_log (
+              tenant_id,
+              tenant_key,
+              actor,
+              action,
+              object_type,
+              object_id,
+              meta
+            )
+            values ($1,$2,$3,$4,$5,$6,$7::jsonb)
+          `,
+          [
+            s(tenantId) || null,
+            s(tenantKey) || null,
+            s(actor, "system"),
+            s(action),
+            s(objectType, "unknown"),
+            s(objectId) || null,
+            JSON.stringify(meta && typeof meta === "object" ? meta : {}),
+          ]
+        );
+      } catch (e) {
+        console.error("[audit] log failed:", String(e?.message || e));
+      }
+    },
+  };
+}
+
 async function main() {
   const app = express();
 
@@ -160,6 +204,8 @@ async function main() {
   }
 
   const db = getDb();
+  const dbDisabled = !db;
+  const audit = createAuditLogger(db);
 
   const server = http.createServer(app);
   const wsHub = createWsHub({
@@ -190,6 +236,8 @@ async function main() {
     apiRouter({
       db,
       wsHub,
+      audit,
+      dbDisabled,
     })
   );
 

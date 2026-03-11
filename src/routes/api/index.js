@@ -22,8 +22,9 @@ import { settingsRoutes } from "./settings.js";
 import { teamRoutes } from "./team.js";
 import { tenantsRoutes } from "./tenants.js";
 import { voiceInternalRoutes } from "./voiceInternal.js";
+import { voiceRoutes } from "./voice.js";
 
-export function apiRouter({ db, wsHub }) {
+export function apiRouter({ db, wsHub, audit, dbDisabled = false }) {
   const r = express.Router();
 
   // public / infra
@@ -54,6 +55,16 @@ export function apiRouter({ db, wsHub }) {
   r.use("/", settingsRoutes({ db }));
   r.use("/", debugRoutes());
   r.use("/", teamRoutes({ db }));
+
+  // voice module
+  r.use(
+    "/",
+    voiceRoutes({
+      db,
+      dbDisabled,
+      audit,
+    })
+  );
 
   return r;
 }
