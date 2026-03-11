@@ -13,6 +13,7 @@ function safeEq(a, b) {
   const aa = Buffer.from(String(a || ""));
   const bb = Buffer.from(String(b || ""));
   if (aa.length !== bb.length) return false;
+
   try {
     return crypto.timingSafeEqual(aa, bb);
   } catch {
@@ -107,17 +108,86 @@ async function findTenantByKeyOrPhone(db, { tenantKey, toNumber }) {
   return null;
 }
 
+function toArray(v) {
+  return Array.isArray(v) ? v : [];
+}
+
+function isObj(v) {
+  return !!v && typeof v === "object" && !Array.isArray(v);
+}
+
+function normalizeDepartmentMap(input) {
+  const src = isObj(input) ? input : {};
+  const out = {};
+
+  for (const [rawKey, rawValue] of Object.entries(src)) {
+    const key = s(rawKey).toLowerCase();
+    if (!key) continue;
+
+    const item = isObj(rawValue) ? rawValue : {};
+    out[key] = {
+      enabled: String(item.enabled ?? "true").trim() !== "false",
+      label: s(item.label || key),
+      phone: s(item.phone),
+      callerId: s(item.callerId),
+      fallbackDepartment: s(item.fallbackDepartment).toLowerCase(),
+      keywords: toArray(item.keywords).map((x) => s(x)).filter(Boolean),
+      businessHours: isObj(item.businessHours) ? item.businessHours : {},
+      meta: isObj(item.meta) ? item.meta : {},
+    };
+  }
+
+  return out;
+}
+
+function buildOperatorRouting(meta = {}, operator = {}, voiceProfile = {}) {
+  const routing =
+    isObj(operator.routing) ? operator.routing :
+    isObj(meta.operatorRouting) ? meta.operatorRouting :
+    isObj(meta.operator_routing) ? meta.operator_routing :
+    {};
+
+  const departments = normalizeDepartmentMap(
+    routing.departments ||
+      operator.departments ||
+      operator.department ||
+      meta.operatorDepartments ||
+      meta.operator_departments ||
+      {}
+  );
+
+  const defaultDepartment = s(
+    routing.defaultDepartment ||
+      operator.defaultDepartment ||
+      meta.defaultOperatorDepartment ||
+      meta.default_operator_department
+  ).toLowerCase();
+
+  const mode = s(
+    routing.mode ||
+      operator.mode ||
+      voiceProfile.transferMode ||
+      "manual"
+  ).toLowerCase();
+
+  return {
+    mode: mode || "manual",
+    defaultDepartment: defaultDepartment || "",
+    departments,
+  };
+}
+
 function buildVoiceConfigFromTenantRow(row, { tenantKey, toNumber }) {
-  const meta = row?.meta && typeof row.meta === "object" ? row.meta : {};
-  const voice = meta.voice && typeof meta.voice === "object" ? meta.voice : {};
-  const contact = meta.contact && typeof meta.contact === "object" ? meta.contact : {};
-  const operator = meta.operator && typeof meta.operator === "object" ? meta.operator : {};
-  const realtime = meta.realtime && typeof meta.realtime === "object" ? meta.realtime : {};
+  const meta = isObj(row?.meta) ? row.meta : {};
+  const voice = isObj(meta.voice) ? meta.voice : {};
+  const contact = isObj(meta.contact) ? meta.contact : {};
+  const operator = isObj(meta.operator) ? meta.operator : {};
+  const realtime = isObj(meta.realtime) ? meta.realtime : {};
 
   const voiceProfile =
-    voice.voiceProfile && typeof voice.voiceProfile === "object"
+    isObj(voice.voiceProfile)
       ? voice.voiceProfile
-      : meta.voiceProfile && typeof meta.voiceProfile === "object"
+      : isObj(meta.voiceProfile)
       ? meta.voiceProfile
       : {};
 
@@ -126,8 +196,10 @@ function buildVoiceConfigFromTenantRow(row, { tenantKey, toNumber }) {
     row?.company_name || voiceProfile.companyName || resolvedTenantKey || "Company"
   );
   const defaultLanguage = s(
-    row?.default_language || voiceProfile.defaultLanguage || "az"
+    row?.default_language || voiceProfile.defaultLanguage || "en"
   ).toLowerCase();
+
+  const operatorRouting = buildOperatorRouting(meta, operator, voiceProfile);
 
   return {
     ok: true,
@@ -143,11 +215,14 @@ function buildVoiceConfigFromTenantRow(row, { tenantKey, toNumber }) {
       phoneIntl: s(contact.phoneIntl || meta.phone_intl || meta.phone || ""),
       emailLocal: s(contact.emailLocal || meta.email_local || ""),
       emailIntl: s(contact.emailIntl || meta.email_intl || meta.email || ""),
+      website: s(contact.website || meta.website || ""),
     },
     operator: {
       phone: s(operator.phone || meta.operator_phone || ""),
       callerId: s(operator.callerId || meta.twilio_caller_id || ""),
+      mode: s(operator.mode || "manual").toLowerCase(),
     },
+    operatorRouting,
     realtime: {
       model: s(realtime.model || voice.realtimeModel || "gpt-4o-realtime-preview"),
       voice: s(realtime.voice || voice.realtimeVoice || "alloy"),
@@ -159,34 +234,27 @@ function buildVoiceConfigFromTenantRow(row, { tenantKey, toNumber }) {
       roleLabel: s(voiceProfile.roleLabel || "virtual assistant"),
       defaultLanguage,
       purpose: s(voiceProfile.purpose || "general"),
-      tone: s(voiceProfile.tone || "warm_professional"),
+      tone: s(voiceProfile.tone || "professional"),
       answerStyle: s(voiceProfile.answerStyle || "short_clear"),
       askStyle: s(voiceProfile.askStyle || "single_question"),
       businessSummary: s(
         voiceProfile.businessSummary ||
           meta.business_summary ||
-          `${companyName} üçün gələn zənglərdə istifadəçiyə qısa və düzgün kömək et.`
+          "Help callers clearly and accurately using only the configured company information."
       ),
-      allowedTopics: Array.isArray(voiceProfile.allowedTopics)
-        ? voiceProfile.allowedTopics
-        : [],
-      forbiddenTopics: Array.isArray(voiceProfile.forbiddenTopics)
-        ? voiceProfile.forbiddenTopics
-        : [],
-      leadCaptureMode: s(voiceProfile.leadCaptureMode || "name_phone"),
-      transferMode: s(voiceProfile.transferMode || "operator"),
+      allowedTopics: toArray(voiceProfile.allowedTopics),
+      forbiddenTopics: toArray(voiceProfile.forbiddenTopics),
+      leadCaptureMode: s(voiceProfile.leadCaptureMode || "none"),
+      transferMode: s(voiceProfile.transferMode || operatorRouting.mode || "manual"),
       contactPolicy:
-        voiceProfile.contactPolicy && typeof voiceProfile.contactPolicy === "object"
+        isObj(voiceProfile.contactPolicy)
           ? voiceProfile.contactPolicy
           : {
-              sharePhone: true,
-              shareEmail: true,
+              sharePhone: false,
+              shareEmail: false,
               shareWebsite: false,
             },
-      texts:
-        voiceProfile.texts && typeof voiceProfile.texts === "object"
-          ? voiceProfile.texts
-          : {},
+      texts: isObj(voiceProfile.texts) ? voiceProfile.texts : {},
     },
   };
 }
@@ -221,7 +289,7 @@ export function voiceInternalRoutes({ db }) {
     }
   });
 
-  r.post("/internal/voice/report", requireInternalToken, async (req, res) => {
+  r.post("/internal/voice/report", requireInternalToken, async (_req, res) => {
     try {
       return res.status(200).json({
         ok: true,
