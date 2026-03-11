@@ -62,7 +62,7 @@ async function main() {
     },
     credentials: true,
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization"],
+    allowedHeaders: ["Content-Type", "Authorization", "x-internal-token", "x-webhook-token"],
     optionsSuccessStatus: 204,
   };
 
@@ -84,6 +84,7 @@ async function main() {
       endpoints: [
         "GET /health",
         "GET /__whoami",
+        "POST /api/__voice-test",
         "GET /api/admin-auth/me",
         "POST /api/admin-auth/login",
         "POST /api/admin-auth/logout",
@@ -164,6 +165,22 @@ async function main() {
   const wsHub = createWsHub({
     server,
     token: cfg.WS_AUTH_TOKEN,
+  });
+
+  app.post("/api/__voice-test", (req, res) => {
+    console.log("[server] __voice-test HIT", {
+      body: req.body,
+      hasInternalToken: !!req.headers["x-internal-token"],
+      hasWebhookToken: !!req.headers["x-webhook-token"],
+    });
+
+    return res.status(200).json({
+      ok: true,
+      route: "__voice-test",
+      body: req.body || null,
+      hasInternalToken: !!req.headers["x-internal-token"],
+      hasWebhookToken: !!req.headers["x-webhook-token"],
+    });
   });
 
   app.use("/api", adminAuthRoutes({ db, wsHub }));
