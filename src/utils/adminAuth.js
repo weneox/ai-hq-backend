@@ -54,7 +54,7 @@ export function adminCookieOptions() {
   return {
     httpOnly: true,
     secure: isProd,
-    sameSite: "strict",
+    sameSite: isProd ? "none" : "lax",
     path: "/",
     maxAge: maxAgeMs,
   };
@@ -68,26 +68,28 @@ export function userCookieOptions() {
   return {
     httpOnly: true,
     secure: isProd,
-    sameSite: "lax",
+    sameSite: isProd ? "none" : "lax",
     path: "/",
     maxAge: maxAgeMs,
   };
 }
 
 export function clearAdminCookie(res) {
+  const isProd = s(cfg.APP_ENV).toLowerCase() === "production";
   res.clearCookie(getAdminCookieName(), {
     httpOnly: true,
-    secure: s(cfg.APP_ENV).toLowerCase() === "production",
-    sameSite: "strict",
+    secure: isProd,
+    sameSite: isProd ? "none" : "lax",
     path: "/",
   });
 }
 
 export function clearUserCookie(res) {
+  const isProd = s(cfg.APP_ENV).toLowerCase() === "production";
   res.clearCookie(getUserCookieName(), {
     httpOnly: true,
-    secure: s(cfg.APP_ENV).toLowerCase() === "production",
-    sameSite: "lax",
+    secure: isProd,
+    sameSite: isProd ? "none" : "lax",
     path: "/",
   });
 }
@@ -302,10 +304,6 @@ export function verifyUserSessionToken(token) {
   }
 }
 
-/**
- * Admin passcode hash format:
- * s2:<saltHex>:<hashHex>
- */
 export function verifyAdminPasscode(passcode) {
   try {
     const stored = s(cfg.ADMIN_PANEL_PASSCODE_HASH);
@@ -336,10 +334,6 @@ export function makeAdminPasscodeHash(passcode) {
   return `s2:${salt.toString("hex")}:${hash.toString("hex")}`;
 }
 
-/**
- * Local user password hash format:
- * s2u:<saltHex>:<hashHex>
- */
 export function hashUserPassword(password) {
   const salt = crypto.randomBytes(16);
   const hash = crypto.scryptSync(String(password || ""), salt, 64);

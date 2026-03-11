@@ -22,7 +22,11 @@ async function main() {
     app.set("trust proxy", 1);
   }
 
-  app.use(helmet());
+  app.use(
+    helmet({
+      crossOriginResourcePolicy: { policy: "cross-origin" },
+    })
+  );
 
   app.use(
     cors({
@@ -78,6 +82,7 @@ async function main() {
       adminPanelEnabled: !!cfg.ADMIN_PANEL_ENABLED,
       hasAdminPasscodeHash: Boolean(String(cfg.ADMIN_PANEL_PASSCODE_HASH || "").trim()),
       hasAdminSessionSecret: Boolean(String(cfg.ADMIN_SESSION_SECRET || "").trim()),
+      hasUserSessionSecret: Boolean(String(cfg.USER_SESSION_SECRET || "").trim()),
       hasScheduleWebhook: Boolean(
         String(process.env.N8N_WEBHOOK_SCHEDULE_DRAFT_URL || "").trim()
       ),
@@ -140,10 +145,8 @@ async function main() {
     token: cfg.WS_AUTH_TOKEN,
   });
 
-  // Admin/session auth routes
   app.use("/api", adminAuthRoutes({ db, wsHub }));
 
-  // Main API
   app.use(
     "/api",
     apiRouter({
