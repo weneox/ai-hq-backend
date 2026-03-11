@@ -60,7 +60,6 @@ export const cfg = {
   ),
 
   TENANT_SECRET_MASTER_KEY: s(process.env.TENANT_SECRET_MASTER_KEY, ""),
-
   AIHQ_SECRETS_PATH: s(process.env.AIHQ_SECRETS_PATH, "/api/settings/secrets"),
 
   DEFAULT_TENANT_KEY: s(process.env.DEFAULT_TENANT_KEY, "default"),
@@ -88,6 +87,12 @@ export const cfg = {
 
   META_PAGE_ACCESS_TOKEN: s(process.env.META_PAGE_ACCESS_TOKEN, ""),
   META_API_VERSION: s(process.env.META_API_VERSION, "v23.0"),
+
+  // Meta OAuth connect flow
+  META_APP_ID: s(process.env.META_APP_ID, ""),
+  META_APP_SECRET: s(process.env.META_APP_SECRET, ""),
+  META_REDIRECT_URI: s(process.env.META_REDIRECT_URI, ""),
+  CHANNELS_RETURN_URL: s(process.env.CHANNELS_RETURN_URL, ""),
 
   N8N_WEBHOOK_BASE: s(process.env.N8N_WEBHOOK_BASE, ""),
   N8N_WEBHOOK_URL: s(process.env.N8N_WEBHOOK_URL, ""),

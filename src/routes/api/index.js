@@ -23,6 +23,7 @@ import { teamRoutes } from "./team.js";
 import { tenantsRoutes } from "./tenants.js";
 import { voiceInternalRoutes } from "./voiceInternal.js";
 import { voiceRoutes } from "./voice.js";
+import { channelConnectRoutes } from "./channelConnect.js";
 
 export function apiRouter({ db, wsHub, audit, dbDisabled = false }) {
   const r = express.Router();
@@ -36,6 +37,9 @@ export function apiRouter({ db, wsHub, audit, dbDisabled = false }) {
 
   // authenticated app routes
   r.use(requireUserSession);
+
+  // channel connect flow
+  r.use("/", channelConnectRoutes({ db }));
 
   r.use("/", modeRoutes({ db, wsHub }));
   r.use("/", agentsRoutes());
