@@ -29,6 +29,21 @@ export function apiRouter({ db, wsHub }) {
   // public / infra
   r.use("/", healthRoutes({ db }));
 
+  // TEMP direct route test
+  r.post("/internal/voice/tenant-config", (req, res) => {
+    console.log("[apiRouter] direct tenant-config HIT", {
+      body: req.body,
+      hasInternalToken: !!req.headers["x-internal-token"],
+    });
+
+    return res.status(200).json({
+      ok: true,
+      route: "apiRouter-direct-tenant-config",
+      body: req.body || null,
+      hasInternalToken: !!req.headers["x-internal-token"],
+    });
+  });
+
   // internal / helper routes
   r.use("/", tenantsRoutes({ db }));
   r.use("/", voiceInternalRoutes({ db }));
