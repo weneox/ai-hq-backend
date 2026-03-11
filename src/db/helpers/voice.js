@@ -48,6 +48,16 @@ function safeUuid(v) {
   return x || randomUUID();
 }
 
+async function one(db, sql, params = []) {
+  const q = await db.query(sql, params);
+  return q?.rows?.[0] || null;
+}
+
+async function many(db, sql, params = []) {
+  const q = await db.query(sql, params);
+  return Array.isArray(q?.rows) ? q.rows : [];
+}
+
 function normalizeVoiceSettings(row = {}) {
   return {
     tenantId: s(row.tenant_id),
@@ -56,10 +66,10 @@ function normalizeVoiceSettings(row = {}) {
     mode: s(row.mode, "assistant"),
 
     displayName: s(row.display_name),
-    defaultLanguage: s(row.default_language, "az"),
+    defaultLanguage: s(row.default_language, "en"),
     supportedLanguages: Array.isArray(row.supported_languages)
       ? row.supported_languages
-      : j(row.supported_languages, ["az"]),
+      : j(row.supported_languages, ["en"]),
 
     greeting: j(row.greeting, {}),
     fallbackGreeting: j(row.fallback_greeting, {}),
@@ -119,7 +129,7 @@ function normalizeVoiceCall(row = {}) {
     endedAt: nowIso(row.ended_at),
     durationSeconds: n(row.duration_seconds, 0),
 
-    language: s(row.language, "az"),
+    language: s(row.language, "en"),
     agentMode: s(row.agent_mode, "assistant"),
 
     handoffRequested: b(row.handoff_requested, false),
@@ -182,15 +192,57 @@ function normalizeVoiceUsageRow(row = {}) {
   };
 }
 
-async function one(db, sql, params = []) {
-  const q = await db.query(sql, params);
-  return q?.rows?.[0] || null;
+function normalizeVoiceCallSession(row = {}) {
+  return {
+    id: s(row.id),
+    tenantId: s(row.tenant_id),
+    tenantKey: s(row.tenant_key),
+    voiceCallId: s(row.voice_call_id),
+
+    provider: s(row.provider, "twilio"),
+    providerCallSid: s(row.provider_call_sid),
+    providerConferenceSid: s(row.provider_conference_sid),
+    conferenceName: s(row.conference_name),
+
+    customerNumber: s(row.customer_number),
+    customerName: s(row.customer_name),
+
+    direction: s(row.direction, "outbound_callback"),
+    status: s(row.status, "bot_active"),
+
+    requestedDepartment: s(row.requested_department),
+    resolvedDepartment: s(row.resolved_department),
+
+    operatorUserId: s(row.operator_user_id),
+    operatorName: s(row.operator_name),
+    operatorJoinMode: s(row.operator_join_mode, "live"),
+
+    botActive: b(row.bot_active, true),
+    operatorJoinRequested: b(row.operator_join_requested, false),
+    operatorJoined: b(row.operator_joined, false),
+    whisperActive: b(row.whisper_active, false),
+    takeoverActive: b(row.takeover_active, false),
+
+    leadPayload: j(row.lead_payload, {}),
+    transcriptLive: Array.isArray(row.transcript_live)
+      ? row.transcript_live
+      : j(row.transcript_live, []),
+    summary: s(row.summary),
+    meta: j(row.meta, {}),
+
+    startedAt: nowIso(row.started_at),
+    operatorRequestedAt: nowIso(row.operator_requested_at),
+    operatorJoinedAt: nowIso(row.operator_joined_at),
+    endedAt: nowIso(row.ended_at),
+
+    createdAt: nowIso(row.created_at),
+    updatedAt: nowIso(row.updated_at),
+  };
 }
 
-async function many(db, sql, params = []) {
-  const q = await db.query(sql, params);
-  return Array.isArray(q?.rows) ? q.rows : [];
-}
+/* ============================================================
+ * tenant voice settings
+ * ============================================================ */
 
 export async function getTenantVoiceSettings(db, tenantId) {
   if (!db || !tenantId) return null;
@@ -218,11 +270,11 @@ export async function upsertTenantVoiceSettings(db, tenantId, input = {}) {
     mode: s(input.mode, "assistant"),
 
     display_name: s(input.displayName),
-    default_language: s(input.defaultLanguage, "az"),
+    default_language: s(input.defaultLanguage, "en"),
     supported_languages: JSON.stringify(
       Array.isArray(input.supportedLanguages) && input.supportedLanguages.length
         ? input.supportedLanguages
-        : ["az"]
+        : ["en"]
     ),
 
     greeting: JSON.stringify(j(input.greeting, {})),
@@ -366,6 +418,10 @@ export async function upsertTenantVoiceSettings(db, tenantId, input = {}) {
   return row ? normalizeVoiceSettings(row) : null;
 }
 
+/* ============================================================
+ * voice calls
+ * ============================================================ */
+
 export async function listVoiceCalls(db, opts = {}) {
   if (!db) return [];
 
@@ -501,7 +557,7 @@ export async function createVoiceCall(db, input = {}) {
       input.answeredAt || null,
       input.endedAt || null,
       n(input.durationSeconds, 0),
-      s(input.language, "az"),
+      s(input.language, "en"),
       s(input.agentMode, "assistant"),
       b(input.handoffRequested, false),
       b(input.handoffCompleted, false),
@@ -598,7 +654,7 @@ export async function updateVoiceCall(db, id, patch = {}) {
       merged.answeredAt || null,
       merged.endedAt || null,
       n(merged.durationSeconds, 0),
-      s(merged.language, "az"),
+      s(merged.language, "en"),
       s(merged.agentMode, "assistant"),
       b(merged.handoffRequested, false),
       b(merged.handoffCompleted, false),
@@ -671,6 +727,257 @@ export async function listVoiceCallEvents(db, callId) {
 
   return rows.map(normalizeVoiceCallEvent);
 }
+
+/* ============================================================
+ * voice call sessions (live orchestration)
+ * ============================================================ */
+
+export async function listVoiceCallSessions(db, opts = {}) {
+  if (!db) return [];
+
+  const tenantId = s(opts.tenantId);
+  const status = s(opts.status);
+  const limit = Math.max(1, Math.min(200, n(opts.limit, 50)));
+
+  const params = [];
+  const where = [];
+
+  if (tenantId) {
+    params.push(tenantId);
+    where.push(`tenant_id = $${params.length}`);
+  }
+
+  if (status) {
+    params.push(status);
+    where.push(`status = $${params.length}`);
+  }
+
+  params.push(limit);
+
+  const rows = await many(
+    db,
+    `
+      select *
+      from voice_call_sessions
+      ${where.length ? `where ${where.join(" and ")}` : ""}
+      order by started_at desc, created_at desc
+      limit $${params.length}
+    `,
+    params
+  );
+
+  return rows.map(normalizeVoiceCallSession);
+}
+
+export async function getVoiceCallSessionById(db, id) {
+  if (!db || !id) return null;
+
+  const row = await one(
+    db,
+    `
+      select *
+      from voice_call_sessions
+      where id = $1
+      limit 1
+    `,
+    [id]
+  );
+
+  return row ? normalizeVoiceCallSession(row) : null;
+}
+
+export async function getVoiceCallSessionByProviderCallSid(db, providerCallSid) {
+  if (!db || !providerCallSid) return null;
+
+  const row = await one(
+    db,
+    `
+      select *
+      from voice_call_sessions
+      where provider_call_sid = $1
+      order by created_at desc
+      limit 1
+    `,
+    [providerCallSid]
+  );
+
+  return row ? normalizeVoiceCallSession(row) : null;
+}
+
+export async function createVoiceCallSession(db, input = {}) {
+  if (!db) return null;
+
+  const row = await one(
+    db,
+    `
+      insert into voice_call_sessions (
+        id,
+        tenant_id,
+        tenant_key,
+        voice_call_id,
+        provider,
+        provider_call_sid,
+        provider_conference_sid,
+        conference_name,
+        customer_number,
+        customer_name,
+        direction,
+        status,
+        requested_department,
+        resolved_department,
+        operator_user_id,
+        operator_name,
+        operator_join_mode,
+        bot_active,
+        operator_join_requested,
+        operator_joined,
+        whisper_active,
+        takeover_active,
+        lead_payload,
+        transcript_live,
+        summary,
+        meta,
+        started_at,
+        operator_requested_at,
+        operator_joined_at,
+        ended_at
+      )
+      values (
+        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,
+        $11,$12,$13,$14,$15,$16,$17,$18,$19,$20,
+        $21,$22,$23::jsonb,$24::jsonb,$25,$26::jsonb,$27,$28,$29,$30
+      )
+      returning *
+    `,
+    [
+      safeUuid(input.id),
+      s(input.tenantId) || null,
+      s(input.tenantKey),
+      s(input.voiceCallId) || null,
+      s(input.provider, "twilio"),
+      s(input.providerCallSid) || null,
+      s(input.providerConferenceSid) || null,
+      s(input.conferenceName) || null,
+      s(input.customerNumber) || null,
+      s(input.customerName) || null,
+      s(input.direction, "outbound_callback"),
+      s(input.status, "bot_active"),
+      s(input.requestedDepartment) || null,
+      s(input.resolvedDepartment) || null,
+      s(input.operatorUserId) || null,
+      s(input.operatorName) || null,
+      s(input.operatorJoinMode, "live"),
+      b(input.botActive, true),
+      b(input.operatorJoinRequested, false),
+      b(input.operatorJoined, false),
+      b(input.whisperActive, false),
+      b(input.takeoverActive, false),
+      JSON.stringify(j(input.leadPayload, {})),
+      JSON.stringify(Array.isArray(input.transcriptLive) ? input.transcriptLive : []),
+      s(input.summary),
+      JSON.stringify(j(input.meta, {})),
+      input.startedAt || new Date().toISOString(),
+      input.operatorRequestedAt || null,
+      input.operatorJoinedAt || null,
+      input.endedAt || null,
+    ]
+  );
+
+  return row ? normalizeVoiceCallSession(row) : null;
+}
+
+export async function updateVoiceCallSession(db, id, patch = {}) {
+  if (!db || !id) return null;
+
+  const current = await getVoiceCallSessionById(db, id);
+  if (!current) return null;
+
+  const merged = {
+    ...current,
+    ...patch,
+    leadPayload: isObj(patch.leadPayload) ? patch.leadPayload : current.leadPayload,
+    transcriptLive: Array.isArray(patch.transcriptLive) ? patch.transcriptLive : current.transcriptLive,
+    meta: isObj(patch.meta) ? patch.meta : current.meta,
+  };
+
+  const row = await one(
+    db,
+    `
+      update voice_call_sessions
+      set
+        tenant_id = $2,
+        tenant_key = $3,
+        voice_call_id = $4,
+        provider = $5,
+        provider_call_sid = $6,
+        provider_conference_sid = $7,
+        conference_name = $8,
+        customer_number = $9,
+        customer_name = $10,
+        direction = $11,
+        status = $12,
+        requested_department = $13,
+        resolved_department = $14,
+        operator_user_id = $15,
+        operator_name = $16,
+        operator_join_mode = $17,
+        bot_active = $18,
+        operator_join_requested = $19,
+        operator_joined = $20,
+        whisper_active = $21,
+        takeover_active = $22,
+        lead_payload = $23::jsonb,
+        transcript_live = $24::jsonb,
+        summary = $25,
+        meta = $26::jsonb,
+        started_at = $27,
+        operator_requested_at = $28,
+        operator_joined_at = $29,
+        ended_at = $30,
+        updated_at = now()
+      where id = $1
+      returning *
+    `,
+    [
+      id,
+      s(merged.tenantId) || null,
+      s(merged.tenantKey),
+      s(merged.voiceCallId) || null,
+      s(merged.provider, "twilio"),
+      s(merged.providerCallSid) || null,
+      s(merged.providerConferenceSid) || null,
+      s(merged.conferenceName) || null,
+      s(merged.customerNumber) || null,
+      s(merged.customerName) || null,
+      s(merged.direction, "outbound_callback"),
+      s(merged.status, "bot_active"),
+      s(merged.requestedDepartment) || null,
+      s(merged.resolvedDepartment) || null,
+      s(merged.operatorUserId) || null,
+      s(merged.operatorName) || null,
+      s(merged.operatorJoinMode, "live"),
+      b(merged.botActive, true),
+      b(merged.operatorJoinRequested, false),
+      b(merged.operatorJoined, false),
+      b(merged.whisperActive, false),
+      b(merged.takeoverActive, false),
+      JSON.stringify(j(merged.leadPayload, {})),
+      JSON.stringify(Array.isArray(merged.transcriptLive) ? merged.transcriptLive : []),
+      s(merged.summary),
+      JSON.stringify(j(merged.meta, {})),
+      merged.startedAt || null,
+      merged.operatorRequestedAt || null,
+      merged.operatorJoinedAt || null,
+      merged.endedAt || null,
+    ]
+  );
+
+  return row ? normalizeVoiceCallSession(row) : null;
+}
+
+/* ============================================================
+ * daily usage
+ * ============================================================ */
 
 export async function upsertVoiceDailyUsage(db, input = {}) {
   if (!db || !input.tenantId || !input.usageDate) return null;

@@ -6,6 +6,9 @@ import {
   getVoiceCallById,
   listVoiceCallEvents,
   getVoiceDailyUsage,
+  listVoiceCallSessions,
+  getVoiceCallSessionById,
+  updateVoiceCallSession,
 } from "../../db/helpers/voice.js";
 
 function s(v, d = "") {
@@ -78,10 +81,10 @@ function normalizeSettingsInput(body = {}) {
     mode: s(body.mode, "assistant"),
 
     displayName: s(body.displayName),
-    defaultLanguage: s(body.defaultLanguage, "az"),
+    defaultLanguage: s(body.defaultLanguage, "en"),
     supportedLanguages: Array.isArray(body.supportedLanguages)
       ? body.supportedLanguages.map((x) => s(x)).filter(Boolean)
-      : ["az"],
+      : ["en"],
 
     greeting: isObj(body.greeting) ? body.greeting : {},
     fallbackGreeting: isObj(body.fallbackGreeting) ? body.fallbackGreeting : {},
@@ -306,6 +309,242 @@ export function voiceRoutes({ db, dbDisabled = false, audit } = {}) {
     } catch (err) {
       console.error("[voice/usage] error", err);
       return fail(res, 500, "voice_usage_read_failed");
+    }
+  });
+
+  r.get("/voice/live", async (req, res) => {
+    try {
+      if (dbDisabled || !db) {
+        return ok(res, { sessions: [], dbDisabled: true });
+      }
+
+      const tenantId = getTenantId(req);
+      if (!tenantId) return fail(res, 400, "tenant_required");
+
+      const sessions = await listVoiceCallSessions(db, {
+        tenantId,
+        status: s(req.query?.status),
+        limit: Math.max(1, Math.min(200, n(req.query?.limit, 50))),
+      });
+
+      return ok(res, { sessions });
+    } catch (err) {
+      console.error("[voice/live:list] error", err);
+      return fail(res, 500, "voice_live_list_failed");
+    }
+  });
+
+  r.get("/voice/live/:id", async (req, res) => {
+    try {
+      if (dbDisabled || !db) {
+        return fail(res, 503, "db_unavailable");
+      }
+
+      const tenantId = getTenantId(req);
+      if (!tenantId) return fail(res, 400, "tenant_required");
+
+      const session = await getVoiceCallSessionById(db, s(req.params?.id));
+      if (!session) return fail(res, 404, "voice_session_not_found");
+      if (s(session.tenantId) !== s(tenantId)) return fail(res, 403, "forbidden");
+
+      return ok(res, { session });
+    } catch (err) {
+      console.error("[voice/live:get] error", err);
+      return fail(res, 500, "voice_live_read_failed");
+    }
+  });
+
+  r.post("/voice/live/:id/request-handoff", async (req, res) => {
+    try {
+      if (dbDisabled || !db) {
+        return fail(res, 503, "db_unavailable");
+      }
+
+      const tenantId = getTenantId(req);
+      const tenantKey = getTenantKey(req);
+      const actor = getActor(req);
+
+      if (!tenantId) return fail(res, 400, "tenant_required");
+
+      const session = await getVoiceCallSessionById(db, s(req.params?.id));
+      if (!session) return fail(res, 404, "voice_session_not_found");
+      if (s(session.tenantId) !== s(tenantId)) return fail(res, 403, "forbidden");
+
+      const joinMode = s(req.body?.joinMode || req.body?.mode, "live").toLowerCase();
+      const operatorName = s(req.body?.operatorName || actor);
+      const operatorUserId =
+        s(req.body?.operatorUserId) ||
+        s(req.user?.id) ||
+        s(req.user?.user_id) ||
+        null;
+
+      const updated = await updateVoiceCallSession(db, session.id, {
+        status: "handoff_requested",
+        operatorJoinRequested: true,
+        operatorJoinMode: ["live", "whisper", "monitor"].includes(joinMode)
+          ? joinMode
+          : "live",
+        operatorName,
+        operatorUserId,
+        operatorRequestedAt: new Date().toISOString(),
+      });
+
+      try {
+        if (audit?.log) {
+          await audit.log({
+            tenantId,
+            tenantKey,
+            actor,
+            action: "voice.session.handoff_requested",
+            objectType: "voice_call_session",
+            objectId: session.id,
+            meta: {
+              joinMode: updated?.operatorJoinMode || joinMode,
+              requestedDepartment: updated?.requestedDepartment || session.requestedDepartment,
+            },
+          });
+        }
+      } catch {}
+
+      return ok(res, { session: updated });
+    } catch (err) {
+      console.error("[voice/live:request-handoff] error", err);
+      return fail(res, 500, "voice_handoff_request_failed");
+    }
+  });
+
+  r.post("/voice/live/:id/joined", async (req, res) => {
+    try {
+      if (dbDisabled || !db) {
+        return fail(res, 503, "db_unavailable");
+      }
+
+      const tenantId = getTenantId(req);
+      const tenantKey = getTenantKey(req);
+      const actor = getActor(req);
+
+      if (!tenantId) return fail(res, 400, "tenant_required");
+
+      const session = await getVoiceCallSessionById(db, s(req.params?.id));
+      if (!session) return fail(res, 404, "voice_session_not_found");
+      if (s(session.tenantId) !== s(tenantId)) return fail(res, 403, "forbidden");
+
+      const updated = await updateVoiceCallSession(db, session.id, {
+        status: session.operatorJoinMode === "whisper" ? "agent_whisper" : "agent_live",
+        operatorJoined: true,
+        whisperActive: session.operatorJoinMode === "whisper",
+        operatorJoinRequested: true,
+        operatorJoinedAt: new Date().toISOString(),
+      });
+
+      try {
+        if (audit?.log) {
+          await audit.log({
+            tenantId,
+            tenantKey,
+            actor,
+            action: "voice.session.operator_joined",
+            objectType: "voice_call_session",
+            objectId: session.id,
+            meta: {
+              joinMode: updated?.operatorJoinMode || session.operatorJoinMode,
+            },
+          });
+        }
+      } catch {}
+
+      return ok(res, { session: updated });
+    } catch (err) {
+      console.error("[voice/live:joined] error", err);
+      return fail(res, 500, "voice_operator_join_failed");
+    }
+  });
+
+  r.post("/voice/live/:id/takeover", async (req, res) => {
+    try {
+      if (dbDisabled || !db) {
+        return fail(res, 503, "db_unavailable");
+      }
+
+      const tenantId = getTenantId(req);
+      const tenantKey = getTenantKey(req);
+      const actor = getActor(req);
+
+      if (!tenantId) return fail(res, 400, "tenant_required");
+
+      const session = await getVoiceCallSessionById(db, s(req.params?.id));
+      if (!session) return fail(res, 404, "voice_session_not_found");
+      if (s(session.tenantId) !== s(tenantId)) return fail(res, 403, "forbidden");
+
+      const updated = await updateVoiceCallSession(db, session.id, {
+        status: "agent_live",
+        operatorJoined: true,
+        takeoverActive: true,
+        whisperActive: false,
+        botActive: false,
+      });
+
+      try {
+        if (audit?.log) {
+          await audit.log({
+            tenantId,
+            tenantKey,
+            actor,
+            action: "voice.session.takeover",
+            objectType: "voice_call_session",
+            objectId: session.id,
+            meta: {},
+          });
+        }
+      } catch {}
+
+      return ok(res, { session: updated });
+    } catch (err) {
+      console.error("[voice/live:takeover] error", err);
+      return fail(res, 500, "voice_takeover_failed");
+    }
+  });
+
+  r.post("/voice/live/:id/end", async (req, res) => {
+    try {
+      if (dbDisabled || !db) {
+        return fail(res, 503, "db_unavailable");
+      }
+
+      const tenantId = getTenantId(req);
+      const tenantKey = getTenantKey(req);
+      const actor = getActor(req);
+
+      if (!tenantId) return fail(res, 400, "tenant_required");
+
+      const session = await getVoiceCallSessionById(db, s(req.params?.id));
+      if (!session) return fail(res, 404, "voice_session_not_found");
+      if (s(session.tenantId) !== s(tenantId)) return fail(res, 403, "forbidden");
+
+      const updated = await updateVoiceCallSession(db, session.id, {
+        status: "completed",
+        botActive: false,
+        endedAt: new Date().toISOString(),
+      });
+
+      try {
+        if (audit?.log) {
+          await audit.log({
+            tenantId,
+            tenantKey,
+            actor,
+            action: "voice.session.ended",
+            objectType: "voice_call_session",
+            objectId: session.id,
+            meta: {},
+          });
+        }
+      } catch {}
+
+      return ok(res, { session: updated });
+    } catch (err) {
+      console.error("[voice/live:end] error", err);
+      return fail(res, 500, "voice_end_failed");
     }
   });
 

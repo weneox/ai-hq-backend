@@ -48,8 +48,8 @@ create table if not exists tenants (
   industry_key text not null default 'generic_business',
   country_code text,
   timezone text not null default 'Asia/Baku',
-  default_language text not null default 'az',
-  enabled_languages jsonb not null default '["az"]'::jsonb,
+  default_language text not null default 'en',
+  supported_languages jsonb not null default '["en"]'::jsonb,
   market_region text,
   plan_key text not null default 'starter',
   status text not null default 'active',
@@ -2868,8 +2868,8 @@ alter table tenant_voice_settings add column if not exists enabled boolean defau
 alter table tenant_voice_settings add column if not exists provider text default 'twilio';
 alter table tenant_voice_settings add column if not exists mode text default 'assistant';
 alter table tenant_voice_settings add column if not exists display_name text default '';
-alter table tenant_voice_settings add column if not exists default_language text default 'az';
-alter table tenant_voice_settings add column if not exists supported_languages jsonb default '["az"]'::jsonb;
+alter table tenant_voice_settings add column if not exists default_language text default 'en';
+alter table tenant_voice_settings add column if not exists supported_languages jsonb default '["en"]'::jsonb;
 alter table tenant_voice_settings add column if not exists greeting jsonb default '{}'::jsonb;
 alter table tenant_voice_settings add column if not exists fallback_greeting jsonb default '{}'::jsonb;
 alter table tenant_voice_settings add column if not exists business_context text default '';
@@ -2915,11 +2915,11 @@ begin
   exception when others then null;
   end;
   begin
-    alter table tenant_voice_settings alter column default_language set default 'az';
+    alter table tenant_voice_settings alter column default_language set default 'en';
   exception when others then null;
   end;
   begin
-    alter table tenant_voice_settings alter column supported_languages set default '["az"]'::jsonb;
+    alter table tenant_voice_settings alter column supported_languages set default '["en"]'::jsonb;
   exception when others then null;
   end;
   begin
@@ -3625,138 +3625,38 @@ exception when others then null;
 end$$;
 
 -- ============================================================
--- seed voice settings for NEOX
+-- generic tenant voice defaults only
+-- no tenant-specific seed data here
 -- ============================================================
-do $$
-declare
-  v_tenant_id uuid;
-begin
-  select id into v_tenant_id
-  from tenants
-  where tenant_key = 'neox'
-  limit 1;
 
-  if v_tenant_id is not null then
-    insert into tenant_voice_settings (
-      tenant_id,
-      enabled,
-      provider,
-      mode,
-      display_name,
-      default_language,
-      supported_languages,
-      greeting,
-      fallback_greeting,
-      business_context,
-      instructions,
-      business_hours_enabled,
-      business_hours,
-      operator_enabled,
-      operator_phone,
-      operator_label,
-      transfer_strategy,
-      callback_enabled,
-      callback_mode,
-      max_call_seconds,
-      silence_hangup_seconds,
-      capture_rules,
-      lead_rules,
-      escalation_rules,
-      reporting_rules,
-      twilio_phone_number,
-      twilio_config,
-      cost_control,
-      meta
-    )
-    values (
-      v_tenant_id,
-      true,
-      'twilio',
-      'assistant',
-      'NEOX Voice Agent',
-      'az',
-      '["az","en","tr","ru"]'::jsonb,
-      jsonb_build_object(
-        'az', 'Salam, mən NEOX şirkətinin virtual asistentiyəm. Sizə necə kömək edə bilərəm?',
-        'en', 'Hello, I am the virtual assistant of NEOX. How can I help you?',
-        'tr', 'Salam, ben NEOX şirketinin sanal asistanıyım. Size nasıl yardımcı olabilirim?',
-        'ru', 'Здравствуйте, я виртуальный ассистент компании NEOX. Чем могу помочь?'
-      ),
-      jsonb_build_object(
-        'az', 'Hazırda səsli xidmət əlçatan deyil. Zəhmət olmasa əlaqə nömrənizi qeyd edin.',
-        'en', 'Voice service is currently unavailable. Please leave your contact number.',
-        'tr', 'Sesli hizmet şu anda kullanılamıyor. Lütfen iletişim numaranızı bırakın.',
-        'ru', 'Голосовой сервис сейчас недоступен. Пожалуйста, оставьте свой номер.'
-      ),
-      'NEOX provides AI automation, websites, AI assistants, and digital growth systems for businesses.',
-      '',
-      false,
-      '{}'::jsonb,
-      true,
-      '+994518005577',
-      'Sales Operator',
-      'handoff',
-      true,
-      'lead_only',
-      180,
-      12,
-      jsonb_build_object(
-        'collectName', true,
-        'collectPhone', true,
-        'collectServiceInterest', true,
-        'collectPreferredCallbackTime', true
-      ),
-      jsonb_build_object(
-        'autoCreateLead', true,
-        'minIntentScore', 40
-      ),
-      jsonb_build_object(
-        'humanKeywords', jsonb_build_array(
-          'operator','menecer','manager','human',
-          'adamla danışım','adamla danisim',
-          'real adam','zəng edin','zeng edin',
-          'call me','əlaqə','elaqe'
-        )
-      ),
-      jsonb_build_object(
-        'storeTranscript', true,
-        'storeSummary', true,
-        'notifyOnLead', true,
-        'notifyOnMissed', true
-      ),
-      null,
-      '{}'::jsonb,
-      jsonb_build_object(
-        'dailySoftLimitUsd', 10,
-        'monthlySoftLimitUsd', 150,
-        'warnAtPercent', 80
-      ),
-      '{}'::jsonb
-    )
-    on conflict (tenant_id) do update
-      set enabled = excluded.enabled,
-          provider = excluded.provider,
-          mode = excluded.mode,
-          display_name = excluded.display_name,
-          default_language = excluded.default_language,
-          supported_languages = excluded.supported_languages,
-          greeting = excluded.greeting,
-          fallback_greeting = excluded.fallback_greeting,
-          business_context = excluded.business_context,
-          operator_enabled = excluded.operator_enabled,
-          operator_phone = excluded.operator_phone,
-          operator_label = excluded.operator_label,
-          transfer_strategy = excluded.transfer_strategy,
-          callback_enabled = excluded.callback_enabled,
-          callback_mode = excluded.callback_mode,
-          max_call_seconds = excluded.max_call_seconds,
-          silence_hangup_seconds = excluded.silence_hangup_seconds,
-          capture_rules = excluded.capture_rules,
-          lead_rules = excluded.lead_rules,
-          escalation_rules = excluded.escalation_rules,
-          reporting_rules = excluded.reporting_rules,
-          cost_control = excluded.cost_control,
-          updated_at = now();
-  end if;
+do $$
+begin
+  update tenant_voice_settings
+  set
+    display_name = coalesce(nullif(display_name, ''), ''),
+    default_language = coalesce(nullif(default_language, ''), 'en'),
+    supported_languages = coalesce(supported_languages, '["en"]'::jsonb),
+    greeting = coalesce(greeting, '{}'::jsonb),
+    fallback_greeting = coalesce(fallback_greeting, '{}'::jsonb),
+    business_context = coalesce(business_context, ''),
+    instructions = coalesce(instructions, ''),
+    operator_label = coalesce(nullif(operator_label, ''), ''),
+    transfer_strategy = case
+      when transfer_strategy in ('handoff','callback','schedule_callback','never') then transfer_strategy
+      else 'handoff'
+    end,
+    callback_mode = case
+      when callback_mode in ('disabled','lead_only','always','after_hours') then callback_mode
+      else 'lead_only'
+    end,
+    capture_rules = coalesce(capture_rules, '{}'::jsonb),
+    lead_rules = coalesce(lead_rules, '{}'::jsonb),
+    escalation_rules = coalesce(escalation_rules, '{}'::jsonb),
+    reporting_rules = coalesce(reporting_rules, '{}'::jsonb),
+    twilio_config = coalesce(twilio_config, '{}'::jsonb),
+    cost_control = coalesce(cost_control, '{}'::jsonb),
+    meta = coalesce(meta, '{}'::jsonb),
+    updated_at = now()
+  where true;
 exception when others then null;
 end$$;
