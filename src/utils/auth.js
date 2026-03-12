@@ -67,8 +67,31 @@ export function getAuthTenantKey(req) {
       req?.auth?.tenant_key ||
       req?.user?.tenantKey ||
       req?.user?.tenant_key ||
+      req?.tenant?.tenant_key ||
       req?.tenant?.key ||
       req?.tenantKey ||
+      req?.headers?.["x-tenant-key"] ||
+      req?.body?.tenantKey ||
+      req?.body?.tenant_key ||
+      req?.query?.tenantKey ||
+      req?.query?.tenant_key ||
+      ""
+  );
+}
+
+export function getAuthTenantId(req) {
+  return cleanString(
+    req?.auth?.tenantId ||
+      req?.auth?.tenant_id ||
+      req?.user?.tenantId ||
+      req?.user?.tenant_id ||
+      req?.tenant?.id ||
+      req?.tenantId ||
+      req?.headers?.["x-tenant-id"] ||
+      req?.body?.tenantId ||
+      req?.body?.tenant_id ||
+      req?.query?.tenantId ||
+      req?.query?.tenant_id ||
       ""
   );
 }
@@ -96,6 +119,7 @@ export function getAuthActor(req) {
 export function getAuthContext(req) {
   return {
     tenantKey: getAuthTenantKey(req),
+    tenantId: getAuthTenantId(req),
     role: getAuthRole(req),
     actor: getAuthActor(req),
   };
