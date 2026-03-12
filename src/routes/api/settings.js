@@ -1,10 +1,11 @@
 // src/routes/api/settings.js
-// FINAL v2.7.0 — workspace settings routes + auto content schedule support
+// FINAL v2.7.1 — workspace settings routes + auth debug probes
 // ✅ tenant auth context / internal token support
 // ✅ owner/admin workspace write
 // ✅ tenant secrets routes
-// ✅ NEW: publish_policy.schedule + publish_policy.automation normalization
+// ✅ publish_policy.schedule + publish_policy.automation normalization
 // ✅ backward-compatible with older draftSchedule payloads
+// ✅ DEBUG: /settings/__debug-auth
 
 import express from "express";
 import {
@@ -265,8 +266,6 @@ function buildNormalizedPublishPolicy(input = {}, tenantTimezone = "Asia/Baku") 
     ...root,
     schedule,
     automation,
-
-    // backward compatibility
     draftSchedule: {
       enabled: schedule.enabled,
       hour: Number(schedule.time.split(":")[0]),
@@ -361,6 +360,18 @@ async function auditSafe(db, req, tenant, action, objectType, objectId, meta = {
 
 export function settingsRoutes({ db }) {
   const router = express.Router();
+
+  router.get("/settings/__debug-auth", async (req, res) => {
+    return res.status(200).json({
+      ok: true,
+      marker: "SETTINGS_DEBUG_AUTH_V1",
+      auth: req.auth || null,
+      user: req.user || null,
+      tenantKeyResolved: resolveTenantKey(req),
+      roleResolved: getUserRole(req),
+      isInternal: isInternalServiceRequest(req),
+    });
+  });
 
   router.get("/settings/workspace", async (req, res) => {
     try {
