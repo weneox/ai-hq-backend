@@ -58,7 +58,21 @@ function getTenantId(req) {
     s(req.session?.tenantId) ||
     s(req.session?.tenant_id) ||
     s(req.tenant?.id) ||
-    s(req.tenantId)
+    s(req.tenantId) ||
+    s(req.headers?.["x-tenant-id"]) ||
+    s(req.body?.tenantId) ||
+    s(req.body?.tenant_id) ||
+    s(req.query?.tenantId) ||
+    s(req.query?.tenant_id) ||
+    s(req.params?.tenantId) ||
+    s(req.params?.tenant_id) ||
+    s(req.body?.tenantKey) ||
+    s(req.body?.tenant_key) ||
+    s(req.query?.tenantKey) ||
+    s(req.query?.tenant_key) ||
+    s(req.params?.tenantKey) ||
+    s(req.params?.tenant_key) ||
+    s(req.headers?.["x-tenant-key"])
   );
 }
 
@@ -70,7 +84,21 @@ function getTenantKey(req) {
     s(req.session?.tenant_key) ||
     s(req.tenant?.tenant_key) ||
     s(req.tenant?.key) ||
-    s(req.tenantKey)
+    s(req.tenantKey) ||
+    s(req.headers?.["x-tenant-key"]) ||
+    s(req.body?.tenantKey) ||
+    s(req.body?.tenant_key) ||
+    s(req.query?.tenantKey) ||
+    s(req.query?.tenant_key) ||
+    s(req.params?.tenantKey) ||
+    s(req.params?.tenant_key) ||
+    s(req.headers?.["x-tenant-id"]) ||
+    s(req.body?.tenantId) ||
+    s(req.body?.tenant_id) ||
+    s(req.query?.tenantId) ||
+    s(req.query?.tenant_id) ||
+    s(req.params?.tenantId) ||
+    s(req.params?.tenant_id)
   );
 }
 
@@ -122,6 +150,10 @@ function normalizeSettingsInput(body = {}) {
 function isLiveVoiceStatus(v) {
   const x = String(v || "").trim().toLowerCase();
   return ["live", "active", "in_progress", "ongoing", "ringing", "queued", "bridged"].includes(x);
+}
+
+function sameTenant(a, b) {
+  return s(a) === s(b);
 }
 
 export function voiceRoutes({ db, dbDisabled = false, audit } = {}) {
@@ -397,7 +429,7 @@ export function voiceRoutes({ db, dbDisabled = false, audit } = {}) {
       const call = await getVoiceCallById(db, s(req.params?.id));
       if (!call) return fail(res, 404, "voice_call_not_found");
 
-      if (s(call.tenantId) !== s(tenantId)) {
+      if (!sameTenant(call.tenantId ?? call.tenant_id, tenantId)) {
         return fail(res, 403, "forbidden");
       }
 
@@ -427,7 +459,9 @@ export function voiceRoutes({ db, dbDisabled = false, audit } = {}) {
 
       const call = await getVoiceCallById(db, s(req.params?.id));
       if (!call) return fail(res, 404, "voice_call_not_found");
-      if (s(call.tenantId) !== s(tenantId)) return fail(res, 403, "forbidden");
+      if (!sameTenant(call.tenantId ?? call.tenant_id, tenantId)) {
+        return fail(res, 403, "forbidden");
+      }
 
       const events = await listVoiceCallEvents(db, call.id);
 
@@ -454,7 +488,9 @@ export function voiceRoutes({ db, dbDisabled = false, audit } = {}) {
 
       const call = await getVoiceCallById(db, s(req.params?.id));
       if (!call) return fail(res, 404, "voice_call_not_found");
-      if (s(call.tenantId) !== s(tenantId)) return fail(res, 403, "forbidden");
+      if (!sameTenant(call.tenantId ?? call.tenant_id, tenantId)) {
+        return fail(res, 403, "forbidden");
+      }
 
       const allSessions = await listVoiceCallSessions(db, {
         tenantId,
@@ -498,14 +534,18 @@ export function voiceRoutes({ db, dbDisabled = false, audit } = {}) {
 
       const call = await getVoiceCallById(db, callId);
       if (!call) return fail(res, 404, "voice_call_not_found");
-      if (s(call.tenantId) !== s(tenantId)) return fail(res, 403, "forbidden");
+      if (!sameTenant(call.tenantId ?? call.tenant_id, tenantId)) {
+        return fail(res, 403, "forbidden");
+      }
 
       let session = null;
 
       if (providedSessionId) {
         session = await getVoiceCallSessionById(db, providedSessionId);
         if (!session) return fail(res, 404, "voice_session_not_found");
-        if (s(session.tenantId) !== s(tenantId)) return fail(res, 403, "forbidden");
+        if (!sameTenant(session.tenantId ?? session.tenant_id, tenantId)) {
+          return fail(res, 403, "forbidden");
+        }
       } else {
         const allSessions = await listVoiceCallSessions(db, {
           tenantId,
@@ -589,14 +629,18 @@ export function voiceRoutes({ db, dbDisabled = false, audit } = {}) {
 
       const call = await getVoiceCallById(db, callId);
       if (!call) return fail(res, 404, "voice_call_not_found");
-      if (s(call.tenantId) !== s(tenantId)) return fail(res, 403, "forbidden");
+      if (!sameTenant(call.tenantId ?? call.tenant_id, tenantId)) {
+        return fail(res, 403, "forbidden");
+      }
 
       let session = null;
 
       if (providedSessionId) {
         session = await getVoiceCallSessionById(db, providedSessionId);
         if (!session) return fail(res, 404, "voice_session_not_found");
-        if (s(session.tenantId) !== s(tenantId)) return fail(res, 403, "forbidden");
+        if (!sameTenant(session.tenantId ?? session.tenant_id, tenantId)) {
+          return fail(res, 403, "forbidden");
+        }
       } else {
         const allSessions = await listVoiceCallSessions(db, {
           tenantId,
@@ -702,7 +746,9 @@ export function voiceRoutes({ db, dbDisabled = false, audit } = {}) {
 
       const session = await getVoiceCallSessionById(db, s(req.params?.id));
       if (!session) return fail(res, 404, "voice_session_not_found");
-      if (s(session.tenantId) !== s(tenantId)) return fail(res, 403, "forbidden");
+      if (!sameTenant(session.tenantId ?? session.tenant_id, tenantId)) {
+        return fail(res, 403, "forbidden");
+      }
 
       return ok(res, { session });
     } catch (err) {
@@ -725,7 +771,9 @@ export function voiceRoutes({ db, dbDisabled = false, audit } = {}) {
 
       const session = await getVoiceCallSessionById(db, s(req.params?.id));
       if (!session) return fail(res, 404, "voice_session_not_found");
-      if (s(session.tenantId) !== s(tenantId)) return fail(res, 403, "forbidden");
+      if (!sameTenant(session.tenantId ?? session.tenant_id, tenantId)) {
+        return fail(res, 403, "forbidden");
+      }
 
       const joinMode = s(req.body?.joinMode || req.body?.mode, "live").toLowerCase();
       const operatorName = s(req.body?.operatorName || actor);
@@ -784,7 +832,9 @@ export function voiceRoutes({ db, dbDisabled = false, audit } = {}) {
 
       const session = await getVoiceCallSessionById(db, s(req.params?.id));
       if (!session) return fail(res, 404, "voice_session_not_found");
-      if (s(session.tenantId) !== s(tenantId)) return fail(res, 403, "forbidden");
+      if (!sameTenant(session.tenantId ?? session.tenant_id, tenantId)) {
+        return fail(res, 403, "forbidden");
+      }
 
       const updated = await updateVoiceCallSession(db, session.id, {
         status: session.operatorJoinMode === "whisper" ? "agent_whisper" : "agent_live",
@@ -831,7 +881,9 @@ export function voiceRoutes({ db, dbDisabled = false, audit } = {}) {
 
       const session = await getVoiceCallSessionById(db, s(req.params?.id));
       if (!session) return fail(res, 404, "voice_session_not_found");
-      if (s(session.tenantId) !== s(tenantId)) return fail(res, 403, "forbidden");
+      if (!sameTenant(session.tenantId ?? session.tenant_id, tenantId)) {
+        return fail(res, 403, "forbidden");
+      }
 
       const updated = await updateVoiceCallSession(db, session.id, {
         status: "agent_live",
@@ -876,7 +928,9 @@ export function voiceRoutes({ db, dbDisabled = false, audit } = {}) {
 
       const session = await getVoiceCallSessionById(db, s(req.params?.id));
       if (!session) return fail(res, 404, "voice_session_not_found");
-      if (s(session.tenantId) !== s(tenantId)) return fail(res, 403, "forbidden");
+      if (!sameTenant(session.tenantId ?? session.tenant_id, tenantId)) {
+        return fail(res, 403, "forbidden");
+      }
 
       const updated = await updateVoiceCallSession(db, session.id, {
         status: "completed",
