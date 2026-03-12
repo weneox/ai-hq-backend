@@ -144,11 +144,13 @@ export function parseCookies(req) {
     const v = part.slice(i + 1).trim();
     if (!k) return;
 
+    let decoded = v;
     try {
-      out[k] = decodeURIComponent(v);
-    } catch {
-      out[k] = v;
-    }
+      decoded = decodeURIComponent(v);
+    } catch {}
+
+    if (!out[k]) out[k] = [];
+    out[k].push(decoded);
   });
 
   return out;
@@ -471,15 +473,21 @@ export function clearAdminFailedAttempts(req) {
   memoryAttempts.delete(attemptKey(req, "admin"));
 }
 
+function pickLastCookieValue(parsed, name) {
+  const values = parsed?.[name];
+  if (!Array.isArray(values) || !values.length) return "";
+  return s(values[values.length - 1]);
+}
+
 export function readAdminSessionFromRequest(req) {
   const cookies = parseCookies(req);
-  const token = cookies[getAdminCookieName()] || "";
+  const token = pickLastCookieValue(cookies, getAdminCookieName());
   return verifyAdminSessionToken(token);
 }
 
 export function readUserSessionFromRequest(req) {
   const cookies = parseCookies(req);
-  const token = cookies[getUserCookieName()] || "";
+  const token = pickLastCookieValue(cookies, getUserCookieName());
   return verifyUserSessionToken(token);
 }
 
@@ -496,6 +504,7 @@ export function requireAdminSession(req, res, next) {
     return res.status(401).json({
       ok: false,
       error: "Unauthorized",
+      reason: session?.error || "invalid admin session",
     });
   }
 
@@ -509,11 +518,12 @@ export function requireUserSession(req, res, next) {
     return res.status(401).json({
       ok: false,
       error: "Unauthorized",
-      reason: session?.error || "invalid session",
+      reason: session?.error || "invalid user session",
     });
   }
 
   req.adminSession = null;
+
   req.auth = {
     userId: session.payload.userId,
     tenantId: session.payload.tenantId,
@@ -531,6 +541,7 @@ export function requireUserSession(req, res, next) {
     tenant_id: session.payload.tenantId,
     tenant_key: session.payload.tenantKey,
     email: session.payload.email,
+    user_email: session.payload.email,
     fullName: session.payload.fullName || "",
     full_name: session.payload.fullName || "",
     role: session.payload.role || "member",
