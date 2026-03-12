@@ -1,3 +1,6 @@
+// src/routes/api/channelConnect.js
+// FINAL v1.0 — branded Meta / Instagram connect flow for tenant users
+
 import express from "express";
 import crypto from "crypto";
 
@@ -41,13 +44,19 @@ function serverErr(res, error, extra = {}) {
 }
 
 function stateSecret() {
-  return s(cfg.USER_SESSION_SECRET || cfg.ADMIN_SESSION_SECRET || cfg.META_APP_SECRET, "");
+  return s(
+    cfg.USER_SESSION_SECRET || cfg.ADMIN_SESSION_SECRET || cfg.META_APP_SECRET,
+    ""
+  );
 }
 
 function signState(payload) {
   const json = JSON.stringify(payload || {});
   const body = Buffer.from(json, "utf8").toString("base64url");
-  const sig = crypto.createHmac("sha256", stateSecret()).update(body).digest("base64url");
+  const sig = crypto
+    .createHmac("sha256", stateSecret())
+    .update(body)
+    .digest("base64url");
   return `${body}.${sig}`;
 }
 
@@ -59,7 +68,11 @@ function verifyState(raw) {
     const [body, sig] = token.split(".");
     if (!body || !sig) return null;
 
-    const expected = crypto.createHmac("sha256", stateSecret()).update(body).digest("base64url");
+    const expected = crypto
+      .createHmac("sha256", stateSecret())
+      .update(body)
+      .digest("base64url");
+
     if (expected !== sig) return null;
 
     const parsed = JSON.parse(Buffer.from(body, "base64url").toString("utf8"));
@@ -78,7 +91,12 @@ function verifyState(raw) {
 function redirectBase() {
   const x = s(cfg.CHANNELS_RETURN_URL);
   if (x) return x;
-  const firstCors = s(cfg.CORS_ORIGIN).split(",").map((v) => v.trim()).filter(Boolean)[0];
+
+  const firstCors = s(cfg.CORS_ORIGIN)
+    .split(",")
+    .map((v) => v.trim())
+    .filter(Boolean)[0];
+
   return firstCors || "";
 }
 
@@ -111,13 +129,12 @@ async function readJsonSafe(res) {
 async function fetchJson(url, opts = {}) {
   const res = await fetch(url, opts);
   const json = await readJsonSafe(res);
+
   if (!res.ok) {
-    const msg =
-      json?.error?.message ||
-      json?.message ||
-      `HTTP ${res.status}`;
+    const msg = json?.error?.message || json?.message || `HTTP ${res.status}`;
     throw new Error(msg);
   }
+
   return json;
 }
 
@@ -137,6 +154,7 @@ async function getPagesForUserToken(userAccessToken) {
     "id,name,access_token,instagram_business_account{id,username},connected_instagram_account{id,username}"
   );
   url.searchParams.set("access_token", s(userAccessToken));
+
   const json = await fetchJson(url.toString());
   return Array.isArray(json?.data) ? json.data : [];
 }
@@ -158,6 +176,7 @@ function pickBestInstagramPage(pages = []) {
       };
     }
   }
+
   return null;
 }
 
@@ -203,6 +222,7 @@ export function channelConnectRoutes({ db }) {
       url.searchParams.set("client_id", s(cfg.META_APP_ID));
       url.searchParams.set("redirect_uri", s(cfg.META_REDIRECT_URI));
       url.searchParams.set("state", state);
+      url.searchParams.set("response_type", "code");
       url.searchParams.set(
         "scope",
         [
@@ -211,6 +231,7 @@ export function channelConnectRoutes({ db }) {
           "pages_messaging",
           "instagram_basic",
           "instagram_manage_messages",
+          "business_management",
         ].join(",")
       );
 
@@ -284,11 +305,19 @@ export function channelConnectRoutes({ db }) {
         last_sync_at: new Date().toISOString(),
       });
 
-      await auditSafe(db, req, tenant, "settings.channel.meta.connected", "tenant_channel", "instagram", {
-        pageId: selected.pageId,
-        igUserId: selected.igUserId,
-        igUsername: selected.igUsername || null,
-      });
+      await auditSafe(
+        db,
+        req,
+        tenant,
+        "settings.channel.meta.connected",
+        "tenant_channel",
+        "instagram",
+        {
+          pageId: selected.pageId,
+          igUserId: selected.igUserId,
+          igUsername: selected.igUsername || null,
+        }
+      );
 
       const redirectUrl = buildRedirectUrl({
         section: "channels",
@@ -310,6 +339,7 @@ export function channelConnectRoutes({ db }) {
         section: "channels",
         meta_error: s(err?.message || "Meta callback failed"),
       });
+
       if (redirectUrl) return res.redirect(redirectUrl);
 
       return serverErr(res, err?.message || "Failed to complete Meta connect");
@@ -381,6 +411,11 @@ export function channelConnectRoutes({ db }) {
           update tenant_channels
           set
             status = 'disconnected',
+            display_name = 'Instagram',
+            external_page_id = null,
+            external_user_id = null,
+            external_username = null,
+            secrets_ref = null,
             health = '{}'::jsonb,
             last_sync_at = null
           where tenant_id = $1
@@ -389,7 +424,14 @@ export function channelConnectRoutes({ db }) {
         [tenant.id]
       );
 
-      await auditSafe(db, req, tenant, "settings.channel.meta.disconnected", "tenant_channel", "instagram");
+      await auditSafe(
+        db,
+        req,
+        tenant,
+        "settings.channel.meta.disconnected",
+        "tenant_channel",
+        "instagram"
+      );
 
       return ok(res, {
         disconnected: true,
