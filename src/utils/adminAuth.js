@@ -47,10 +47,10 @@ function cookieDomain() {
       cfg.COOKIE_DOMAIN ||
       cfg.USER_COOKIE_DOMAIN ||
       ""
-  );
-  if (explicit) return explicit;
+  ).replace(/\/+$/, "");
 
-  return ".hq.weneox.com";
+  if (explicit) return explicit;
+  return undefined;
 }
 
 export function getAdminCookieName() {
@@ -65,13 +65,14 @@ export function adminCookieOptions() {
   const isProd = s(cfg.APP_ENV).toLowerCase() === "production";
   const maxAgeMs =
     Math.max(1, Number(cfg.ADMIN_SESSION_TTL_HOURS || 12)) * 60 * 60 * 1000;
+  const domain = cookieDomain();
 
   return {
     httpOnly: true,
     secure: isProd,
     sameSite: isProd ? "none" : "lax",
     path: "/",
-    domain: cookieDomain(),
+    ...(domain ? { domain } : {}),
     maxAge: maxAgeMs,
   };
 }
@@ -80,36 +81,41 @@ export function userCookieOptions() {
   const isProd = s(cfg.APP_ENV).toLowerCase() === "production";
   const maxAgeMs =
     Math.max(1, Number(cfg.USER_SESSION_TTL_HOURS || 24 * 7)) * 60 * 60 * 1000;
+  const domain = cookieDomain();
 
   return {
     httpOnly: true,
     secure: isProd,
     sameSite: isProd ? "none" : "lax",
     path: "/",
-    domain: cookieDomain(),
+    ...(domain ? { domain } : {}),
     maxAge: maxAgeMs,
   };
 }
 
 export function clearAdminCookie(res) {
   const isProd = s(cfg.APP_ENV).toLowerCase() === "production";
+  const domain = cookieDomain();
+
   res.clearCookie(getAdminCookieName(), {
     httpOnly: true,
     secure: isProd,
     sameSite: isProd ? "none" : "lax",
     path: "/",
-    domain: cookieDomain(),
+    ...(domain ? { domain } : {}),
   });
 }
 
 export function clearUserCookie(res) {
   const isProd = s(cfg.APP_ENV).toLowerCase() === "production";
+  const domain = cookieDomain();
+
   res.clearCookie(getUserCookieName(), {
     httpOnly: true,
     secure: isProd,
     sameSite: isProd ? "none" : "lax",
     path: "/",
-    domain: cookieDomain(),
+    ...(domain ? { domain } : {}),
   });
 }
 
@@ -505,4 +511,4 @@ export function requireUserSession(req, res, next) {
   };
 
   return next();
-}
+} 
