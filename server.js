@@ -135,9 +135,12 @@ async function main() {
       ok: true,
       service: "ai-hq-backend",
       env: cfg.APP_ENV,
+      marker: "ROOT_BUILD_V1",
       endpoints: [
         "GET /health",
         "GET /__whoami",
+        "GET /__buildcheck",
+        "GET /api/__buildcheck",
         "POST /api/__voice-test",
         "GET /api/admin-auth/me",
         "POST /api/admin-auth/login",
@@ -167,6 +170,22 @@ async function main() {
       now: new Date().toISOString(),
       corsOrigin: s(cfg.CORS_ORIGIN),
       allowedOrigins,
+      marker: "WHOAMI_BUILD_V1",
+    });
+  });
+
+  app.get("/__buildcheck", (_req, res) => {
+    res.setHeader("Content-Type", "application/json; charset=utf-8");
+    return res.status(200).json({
+      ok: true,
+      service: "ai-hq-backend",
+      marker: "BUILD_CHECK_V1",
+      env: cfg.APP_ENV,
+      port: cfg.PORT,
+      time: new Date().toISOString(),
+      publicBaseUrl: s(cfg.PUBLIC_BASE_URL),
+      userSessionCookieName: s(cfg.USER_SESSION_COOKIE_NAME),
+      hasUserSessionSecret: Boolean(s(cfg.USER_SESSION_SECRET)),
     });
   });
 
@@ -178,6 +197,7 @@ async function main() {
       ok: true,
       service: "ai-hq-backend",
       env: cfg.APP_ENV,
+      marker: "HEALTH_BUILD_V1",
       db: {
         enabled: hasDbUrl,
         ok: false,
@@ -236,9 +256,25 @@ async function main() {
     return res.status(200).json({
       ok: true,
       route: "__voice-test",
+      marker: "VOICE_TEST_BUILD_V1",
       body: req.body || null,
       hasInternalToken: !!req.headers["x-internal-token"],
       hasWebhookToken: !!req.headers["x-webhook-token"],
+    });
+  });
+
+  app.get("/api/__buildcheck", (_req, res) => {
+    res.setHeader("Content-Type", "application/json; charset=utf-8");
+    return res.status(200).json({
+      ok: true,
+      service: "ai-hq-backend",
+      marker: "API_BUILD_CHECK_V1",
+      env: cfg.APP_ENV,
+      port: cfg.PORT,
+      time: new Date().toISOString(),
+      publicBaseUrl: s(cfg.PUBLIC_BASE_URL),
+      userSessionCookieName: s(cfg.USER_SESSION_COOKIE_NAME),
+      hasUserSessionSecret: Boolean(s(cfg.USER_SESSION_SECRET)),
     });
   });
 
@@ -323,6 +359,9 @@ async function main() {
       `[ai-hq] adminAuth enabled=${cfg.ADMIN_PANEL_ENABLED ? "ON" : "OFF"} passcodeHash=${
         cfg.ADMIN_PANEL_PASSCODE_HASH ? "ON" : "OFF"
       } sessionSecret=${cfg.ADMIN_SESSION_SECRET ? "ON" : "OFF"}`
+    );
+    console.log(
+      `[ai-hq] build markers: ROOT_BUILD_V1 / WHOAMI_BUILD_V1 / BUILD_CHECK_V1 / API_BUILD_CHECK_V1`
     );
   });
 
