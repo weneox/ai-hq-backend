@@ -53,6 +53,15 @@ function cookieDomain() {
   return undefined;
 }
 
+function sessionSameSite() {
+  const raw = s(cfg.SESSION_COOKIE_SAMESITE || cfg.COOKIE_SAMESITE || "");
+  const x = raw.toLowerCase();
+
+  if (x === "none") return "none";
+  if (x === "strict") return "strict";
+  return "lax";
+}
+
 export function getAdminCookieName() {
   return s(cfg.ADMIN_SESSION_COOKIE_NAME, "aihq_admin");
 }
@@ -66,11 +75,12 @@ export function adminCookieOptions() {
   const maxAgeMs =
     Math.max(1, Number(cfg.ADMIN_SESSION_TTL_HOURS || 12)) * 60 * 60 * 1000;
   const domain = cookieDomain();
+  const sameSite = sessionSameSite();
 
   return {
     httpOnly: true,
     secure: isProd,
-    sameSite: isProd ? "none" : "lax",
+    sameSite,
     path: "/",
     ...(domain ? { domain } : {}),
     maxAge: maxAgeMs,
@@ -82,11 +92,12 @@ export function userCookieOptions() {
   const maxAgeMs =
     Math.max(1, Number(cfg.USER_SESSION_TTL_HOURS || 24 * 7)) * 60 * 60 * 1000;
   const domain = cookieDomain();
+  const sameSite = sessionSameSite();
 
   return {
     httpOnly: true,
     secure: isProd,
-    sameSite: isProd ? "none" : "lax",
+    sameSite,
     path: "/",
     ...(domain ? { domain } : {}),
     maxAge: maxAgeMs,
@@ -96,11 +107,12 @@ export function userCookieOptions() {
 export function clearAdminCookie(res) {
   const isProd = s(cfg.APP_ENV).toLowerCase() === "production";
   const domain = cookieDomain();
+  const sameSite = sessionSameSite();
 
   res.clearCookie(getAdminCookieName(), {
     httpOnly: true,
     secure: isProd,
-    sameSite: isProd ? "none" : "lax",
+    sameSite,
     path: "/",
     ...(domain ? { domain } : {}),
   });
@@ -109,11 +121,12 @@ export function clearAdminCookie(res) {
 export function clearUserCookie(res) {
   const isProd = s(cfg.APP_ENV).toLowerCase() === "production";
   const domain = cookieDomain();
+  const sameSite = sessionSameSite();
 
   res.clearCookie(getUserCookieName(), {
     httpOnly: true,
     secure: isProd,
-    sameSite: isProd ? "none" : "lax",
+    sameSite,
     path: "/",
     ...(domain ? { domain } : {}),
   });
@@ -255,10 +268,10 @@ export function createUserSessionToken(user = {}, meta = {}) {
 
     userId: s(user.id),
     tenantId: s(user.tenant_id || user.tenantId),
-    tenantKey: s(user.tenant_key || user.tenantKey),
+    tenantKey: s(user.tenant_key || user.tenantKey).toLowerCase(),
     email: s(user.user_email || user.email).toLowerCase(),
     fullName: s(user.full_name || user.fullName),
-    role: s(user.role, "member"),
+    role: s(user.role, "member").toLowerCase(),
     sessionVersion: Number(user.session_version ?? user.sessionVersion ?? 1),
 
     meta: {
@@ -496,6 +509,7 @@ export function requireUserSession(req, res, next) {
     return res.status(401).json({
       ok: false,
       error: "Unauthorized",
+      reason: session?.error || "invalid session",
     });
   }
 
@@ -510,5 +524,19 @@ export function requireUserSession(req, res, next) {
     sessionVersion: Number(session.payload.sessionVersion || 1),
   };
 
+  req.user = {
+    id: session.payload.userId,
+    tenantId: session.payload.tenantId,
+    tenantKey: session.payload.tenantKey,
+    tenant_id: session.payload.tenantId,
+    tenant_key: session.payload.tenantKey,
+    email: session.payload.email,
+    fullName: session.payload.fullName || "",
+    full_name: session.payload.fullName || "",
+    role: session.payload.role || "member",
+    sessionVersion: Number(session.payload.sessionVersion || 1),
+    session_version: Number(session.payload.sessionVersion || 1),
+  };
+
   return next();
-} 
+}
