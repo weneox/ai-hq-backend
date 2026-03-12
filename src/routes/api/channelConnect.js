@@ -234,8 +234,6 @@ export function channelConnectRoutes({ db }) {
         "scope",
         [
           "pages_show_list",
-          "pages_manage_metadata",
-          "pages_messaging",
           "instagram_basic",
           "instagram_manage_messages",
           "business_management",
@@ -252,15 +250,18 @@ export function channelConnectRoutes({ db }) {
     try {
       const code = s(req.query.code);
       const error = s(req.query.error);
+      const errorCode = s(req.query.error_code);
+      const errorMessage = s(req.query.error_message);
       const stateRaw = s(req.query.state);
 
-      if (error) {
+      if (error || errorCode || errorMessage) {
         const redirectUrl = buildRedirectUrl({
           section: "channels",
-          meta_error: error,
+          meta_error: errorMessage || error || "Meta connect failed",
         });
+
         if (redirectUrl) return res.redirect(redirectUrl);
-        return bad(res, error);
+        return bad(res, errorMessage || error || "Meta connect failed");
       }
 
       const state = verifyState(stateRaw);
