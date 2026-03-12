@@ -204,44 +204,74 @@ function getReqActor(req) {
   return s(req?.auth?.email || req?.auth?.userId || "system");
 }
 
+async function buildMetaOAuthUrl({ db, req }) {
+  const tenantKey = getReqTenantKey(req);
+  if (!tenantKey) {
+    const err = new Error("Missing tenant context");
+    err.status = 401;
+    throw err;
+  }
+
+  if (!s(cfg.META_APP_ID) || !s(cfg.META_APP_SECRET) || !s(cfg.META_REDIRECT_URI)) {
+    const err = new Error("Meta OAuth env missing");
+    err.status = 400;
+    throw err;
+  }
+
+  const tenant = await dbGetTenantByKey(db, tenantKey);
+  if (!tenant?.id) {
+    const err = new Error("Tenant not found");
+    err.status = 400;
+    throw err;
+  }
+
+  const state = signState({
+    tenantKey,
+    actor: getReqActor(req),
+    exp: Date.now() + 10 * 60 * 1000,
+  });
+
+  const url = new URL("https://www.facebook.com/v23.0/dialog/oauth");
+  url.searchParams.set("client_id", s(cfg.META_APP_ID));
+  url.searchParams.set("redirect_uri", s(cfg.META_REDIRECT_URI));
+  url.searchParams.set("state", state);
+  url.searchParams.set("response_type", "code");
+  url.searchParams.set(
+    "scope",
+    [
+      "pages_show_list",
+      "instagram_basic",
+      "instagram_manage_messages",
+      "business_management",
+    ].join(",")
+  );
+
+  return url.toString();
+}
+
 export function channelConnectRoutes({ db }) {
   const r = express.Router();
 
+  r.get("/channels/meta/connect-url", requireUserSession, async (req, res) => {
+    try {
+      const url = await buildMetaOAuthUrl({ db, req });
+      return ok(res, { url });
+    } catch (err) {
+      const status = Number(err?.status || 500);
+      if (status === 401) return unauth(res, err?.message || "Unauthorized");
+      if (status === 400) return bad(res, err?.message || "Bad request");
+      return serverErr(res, err?.message || "Failed to build Meta connect URL");
+    }
+  });
+
   r.get("/channels/meta/connect", requireUserSession, async (req, res) => {
     try {
-      const tenantKey = getReqTenantKey(req);
-      if (!tenantKey) return unauth(res, "Missing tenant context");
-
-      if (!s(cfg.META_APP_ID) || !s(cfg.META_APP_SECRET) || !s(cfg.META_REDIRECT_URI)) {
-        return bad(res, "Meta OAuth env missing");
-      }
-
-      const tenant = await dbGetTenantByKey(db, tenantKey);
-      if (!tenant?.id) return bad(res, "Tenant not found");
-
-      const state = signState({
-        tenantKey,
-        actor: getReqActor(req),
-        exp: Date.now() + 10 * 60 * 1000,
-      });
-
-      const url = new URL("https://www.facebook.com/v23.0/dialog/oauth");
-      url.searchParams.set("client_id", s(cfg.META_APP_ID));
-      url.searchParams.set("redirect_uri", s(cfg.META_REDIRECT_URI));
-      url.searchParams.set("state", state);
-      url.searchParams.set("response_type", "code");
-      url.searchParams.set(
-        "scope",
-        [
-          "pages_show_list",
-          "instagram_basic",
-          "instagram_manage_messages",
-          "business_management",
-        ].join(",")
-      );
-
-      return res.redirect(url.toString());
+      const url = await buildMetaOAuthUrl({ db, req });
+      return res.redirect(url);
     } catch (err) {
+      const status = Number(err?.status || 500);
+      if (status === 401) return unauth(res, err?.message || "Unauthorized");
+      if (status === 400) return bad(res, err?.message || "Bad request");
       return serverErr(res, err?.message || "Failed to start Meta connect");
     }
   });
