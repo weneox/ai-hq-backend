@@ -117,9 +117,9 @@ async function resolveTenantScope(req, db) {
     `
       select
         id::text as id,
-        key
+        tenant_key
       from tenants
-      where lower(key) = lower($1)
+      where lower(tenant_key) = lower($1)
       limit 1
     `,
     [tenantKey]
@@ -129,7 +129,7 @@ async function resolveTenantScope(req, db) {
 
   return {
     tenantId: s(row?.id),
-    tenantKey: s(row?.key || tenantKey),
+    tenantKey: s(row?.tenant_key || tenantKey),
   };
 }
 
@@ -180,7 +180,19 @@ function normalizeSettingsInput(body = {}) {
 
 function isLiveVoiceStatus(v) {
   const x = String(v || "").trim().toLowerCase();
-  return ["live", "active", "in_progress", "ongoing", "ringing", "queued", "bridged"].includes(x);
+  return [
+    "live",
+    "active",
+    "in_progress",
+    "ongoing",
+    "ringing",
+    "queued",
+    "bridged",
+    "bot_active",
+    "agent_ringing",
+    "agent_whisper",
+    "agent_live",
+  ].includes(x);
 }
 
 function sameTenant(a, b) {
@@ -215,9 +227,7 @@ export function voiceRoutes({ db, dbDisabled = false, audit } = {}) {
 
       const settings = await getTenantVoiceSettings(db, scope.tenantId);
 
-      return ok(res, {
-        settings,
-      });
+      return ok(res, { settings });
     } catch (err) {
       console.error("[voice/settings:get] error", err);
       return fail(res, 500, "voice_settings_read_failed");
@@ -255,9 +265,7 @@ export function voiceRoutes({ db, dbDisabled = false, audit } = {}) {
         }
       } catch {}
 
-      return ok(res, {
-        settings,
-      });
+      return ok(res, { settings });
     } catch (err) {
       console.error("[voice/settings:post] error", err);
       return fail(res, 500, "voice_settings_save_failed");
@@ -278,9 +286,7 @@ export function voiceRoutes({ db, dbDisabled = false, audit } = {}) {
 
       const settings = await getTenantVoiceSettings(db, scope.tenantId);
 
-      return ok(res, {
-        settings,
-      });
+      return ok(res, { settings });
     } catch (err) {
       console.error("[voice/settings-alias:get] error", err);
       return fail(res, 500, "voice_settings_read_failed");
@@ -318,9 +324,7 @@ export function voiceRoutes({ db, dbDisabled = false, audit } = {}) {
         }
       } catch {}
 
-      return ok(res, {
-        settings,
-      });
+      return ok(res, { settings });
     } catch (err) {
       console.error("[voice/settings-alias:post] error", err);
       return fail(res, 500, "voice_settings_save_failed");
@@ -359,9 +363,7 @@ export function voiceRoutes({ db, dbDisabled = false, audit } = {}) {
         }
       } catch {}
 
-      return ok(res, {
-        settings,
-      });
+      return ok(res, { settings });
     } catch (err) {
       console.error("[voice/toggle] error", err);
       return fail(res, 500, "voice_toggle_failed");
@@ -444,9 +446,7 @@ export function voiceRoutes({ db, dbDisabled = false, audit } = {}) {
         limit: Math.max(1, Math.min(200, n(req.query?.limit, 50))),
       });
 
-      return ok(res, {
-        calls,
-      });
+      return ok(res, { calls });
     } catch (err) {
       console.error("[voice/calls:list] error", err);
       return fail(res, 500, "voice_calls_list_failed");
@@ -471,10 +471,7 @@ export function voiceRoutes({ db, dbDisabled = false, audit } = {}) {
 
       const events = await listVoiceCallEvents(db, call.id);
 
-      return ok(res, {
-        call,
-        events,
-      });
+      return ok(res, { call, events });
     } catch (err) {
       console.error("[voice/calls:get] error", err);
       return fail(res, 500, "voice_call_read_failed");
@@ -502,9 +499,7 @@ export function voiceRoutes({ db, dbDisabled = false, audit } = {}) {
 
       const events = await listVoiceCallEvents(db, call.id);
 
-      return ok(res, {
-        events,
-      });
+      return ok(res, { events });
     } catch (err) {
       console.error("[voice/calls:events] error", err);
       return fail(res, 500, "voice_call_events_failed");
@@ -546,9 +541,7 @@ export function voiceRoutes({ db, dbDisabled = false, audit } = {}) {
         );
       });
 
-      return ok(res, {
-        sessions,
-      });
+      return ok(res, { sessions });
     } catch (err) {
       console.error("[voice/calls:sessions] error", err);
       return fail(res, 500, "voice_call_sessions_failed");
@@ -608,7 +601,7 @@ export function voiceRoutes({ db, dbDisabled = false, audit } = {}) {
         s(req.user?.user_id) ||
         null;
 
-      const normalizedJoinMode = ["live", "whisper", "monitor"].includes(joinMode)
+      const normalizedJoinMode = ["live", "whisper", "monitor", "barge"].includes(joinMode)
         ? joinMode
         : "live";
 
@@ -622,6 +615,7 @@ export function voiceRoutes({ db, dbDisabled = false, audit } = {}) {
         operatorRequestedAt: new Date().toISOString(),
         operatorJoinedAt: new Date().toISOString(),
         whisperActive: normalizedJoinMode === "whisper",
+        takeoverActive: normalizedJoinMode === "barge",
       });
 
       try {
@@ -641,9 +635,7 @@ export function voiceRoutes({ db, dbDisabled = false, audit } = {}) {
         }
       } catch {}
 
-      return ok(res, {
-        session: updated,
-      });
+      return ok(res, { session: updated });
     } catch (err) {
       console.error("[voice/calls:join] error", err);
       return fail(res, 500, "voice_join_failed");
@@ -715,9 +707,7 @@ export function voiceRoutes({ db, dbDisabled = false, audit } = {}) {
         }
       } catch {}
 
-      return ok(res, {
-        session: updated,
-      });
+      return ok(res, { session: updated });
     } catch (err) {
       console.error("[voice/calls:end] error", err);
       return fail(res, 500, "voice_end_failed");
@@ -742,9 +732,7 @@ export function voiceRoutes({ db, dbDisabled = false, audit } = {}) {
         Math.max(1, Math.min(365, n(req.query?.limit, 30)))
       );
 
-      return ok(res, {
-        usage,
-      });
+      return ok(res, { usage });
     } catch (err) {
       console.error("[voice/usage] error", err);
       return fail(res, 500, "voice_usage_read_failed");
@@ -821,12 +809,14 @@ export function voiceRoutes({ db, dbDisabled = false, audit } = {}) {
         s(req.user?.user_id) ||
         null;
 
+      const normalizedJoinMode = ["live", "whisper", "monitor", "barge"].includes(joinMode)
+        ? joinMode
+        : "live";
+
       const updated = await updateVoiceCallSession(db, session.id, {
-        status: "handoff_requested",
+        status: "agent_ringing",
         operatorJoinRequested: true,
-        operatorJoinMode: ["live", "whisper", "monitor"].includes(joinMode)
-          ? joinMode
-          : "live",
+        operatorJoinMode: normalizedJoinMode,
         operatorName,
         operatorUserId,
         operatorRequestedAt: new Date().toISOString(),
@@ -842,7 +832,7 @@ export function voiceRoutes({ db, dbDisabled = false, audit } = {}) {
             objectType: "voice_call_session",
             objectId: session.id,
             meta: {
-              joinMode: updated?.operatorJoinMode || joinMode,
+              joinMode: updated?.operatorJoinMode || normalizedJoinMode,
               requestedDepartment: updated?.requestedDepartment || session.requestedDepartment,
             },
           });
@@ -873,10 +863,11 @@ export function voiceRoutes({ db, dbDisabled = false, audit } = {}) {
         return fail(res, 403, "forbidden");
       }
 
+      const mode = s(session.operatorJoinMode, "live");
       const updated = await updateVoiceCallSession(db, session.id, {
-        status: session.operatorJoinMode === "whisper" ? "agent_whisper" : "agent_live",
+        status: mode === "whisper" ? "agent_whisper" : "agent_live",
         operatorJoined: true,
-        whisperActive: session.operatorJoinMode === "whisper",
+        whisperActive: mode === "whisper",
         operatorJoinRequested: true,
         operatorJoinedAt: new Date().toISOString(),
       });
@@ -891,7 +882,7 @@ export function voiceRoutes({ db, dbDisabled = false, audit } = {}) {
             objectType: "voice_call_session",
             objectId: session.id,
             meta: {
-              joinMode: updated?.operatorJoinMode || session.operatorJoinMode,
+              joinMode: updated?.operatorJoinMode || mode,
             },
           });
         }
@@ -927,6 +918,7 @@ export function voiceRoutes({ db, dbDisabled = false, audit } = {}) {
         takeoverActive: true,
         whisperActive: false,
         botActive: false,
+        operatorJoinedAt: new Date().toISOString(),
       });
 
       try {
