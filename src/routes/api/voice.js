@@ -51,7 +51,7 @@ function getActor(req) {
   );
 }
 
-function getTenantId(req) {
+function readTenantId(req) {
   return (
     s(req.user?.tenantId) ||
     s(req.user?.tenant_id) ||
@@ -65,18 +65,11 @@ function getTenantId(req) {
     s(req.query?.tenantId) ||
     s(req.query?.tenant_id) ||
     s(req.params?.tenantId) ||
-    s(req.params?.tenant_id) ||
-    s(req.body?.tenantKey) ||
-    s(req.body?.tenant_key) ||
-    s(req.query?.tenantKey) ||
-    s(req.query?.tenant_key) ||
-    s(req.params?.tenantKey) ||
-    s(req.params?.tenant_key) ||
-    s(req.headers?.["x-tenant-key"])
+    s(req.params?.tenant_id)
   );
 }
 
-function getTenantKey(req) {
+function readTenantKey(req) {
   return (
     s(req.user?.tenantKey) ||
     s(req.user?.tenant_key) ||
@@ -91,15 +84,53 @@ function getTenantKey(req) {
     s(req.query?.tenantKey) ||
     s(req.query?.tenant_key) ||
     s(req.params?.tenantKey) ||
-    s(req.params?.tenant_key) ||
-    s(req.headers?.["x-tenant-id"]) ||
-    s(req.body?.tenantId) ||
-    s(req.body?.tenant_id) ||
-    s(req.query?.tenantId) ||
-    s(req.query?.tenant_id) ||
-    s(req.params?.tenantId) ||
-    s(req.params?.tenant_id)
+    s(req.params?.tenant_key)
   );
+}
+
+async function resolveTenantScope(req, db) {
+  const tenantId = readTenantId(req);
+  const tenantKey = readTenantKey(req);
+
+  if (tenantId) {
+    return {
+      tenantId,
+      tenantKey,
+    };
+  }
+
+  if (!tenantKey) {
+    return {
+      tenantId: "",
+      tenantKey: "",
+    };
+  }
+
+  if (!db?.query) {
+    return {
+      tenantId: "",
+      tenantKey,
+    };
+  }
+
+  const q = await db.query(
+    `
+      select
+        id::text as id,
+        key
+      from tenants
+      where lower(key) = lower($1)
+      limit 1
+    `,
+    [tenantKey]
+  );
+
+  const row = q?.rows?.[0] || null;
+
+  return {
+    tenantId: s(row?.id),
+    tenantKey: s(row?.key || tenantKey),
+  };
 }
 
 function normalizeSettingsInput(body = {}) {
@@ -156,6 +187,17 @@ function sameTenant(a, b) {
   return s(a) === s(b);
 }
 
+async function requireTenantScope(req, res, db) {
+  const scope = await resolveTenantScope(req, db);
+
+  if (!scope.tenantId) {
+    fail(res, 400, "tenant_required");
+    return null;
+  }
+
+  return scope;
+}
+
 export function voiceRoutes({ db, dbDisabled = false, audit } = {}) {
   const r = express.Router();
 
@@ -168,10 +210,10 @@ export function voiceRoutes({ db, dbDisabled = false, audit } = {}) {
         });
       }
 
-      const tenantId = getTenantId(req);
-      if (!tenantId) return fail(res, 400, "tenant_required");
+      const scope = await requireTenantScope(req, res, db);
+      if (!scope) return;
 
-      const settings = await getTenantVoiceSettings(db, tenantId);
+      const settings = await getTenantVoiceSettings(db, scope.tenantId);
 
       return ok(res, {
         settings,
@@ -188,24 +230,22 @@ export function voiceRoutes({ db, dbDisabled = false, audit } = {}) {
         return fail(res, 503, "db_unavailable");
       }
 
-      const tenantId = getTenantId(req);
-      const tenantKey = getTenantKey(req);
+      const scope = await requireTenantScope(req, res, db);
+      if (!scope) return;
+
       const actor = getActor(req);
-
-      if (!tenantId) return fail(res, 400, "tenant_required");
-
       const input = normalizeSettingsInput(req.body || {});
-      const settings = await upsertTenantVoiceSettings(db, tenantId, input);
+      const settings = await upsertTenantVoiceSettings(db, scope.tenantId, input);
 
       try {
         if (audit?.log) {
           await audit.log({
-            tenantId,
-            tenantKey,
+            tenantId: scope.tenantId,
+            tenantKey: scope.tenantKey,
             actor,
             action: "voice.settings.updated",
             objectType: "tenant_voice_settings",
-            objectId: tenantId,
+            objectId: scope.tenantId,
             meta: {
               enabled: settings?.enabled ?? input.enabled,
               provider: settings?.provider ?? input.provider,
@@ -233,10 +273,10 @@ export function voiceRoutes({ db, dbDisabled = false, audit } = {}) {
         });
       }
 
-      const tenantId = getTenantId(req);
-      if (!tenantId) return fail(res, 400, "tenant_required");
+      const scope = await requireTenantScope(req, res, db);
+      if (!scope) return;
 
-      const settings = await getTenantVoiceSettings(db, tenantId);
+      const settings = await getTenantVoiceSettings(db, scope.tenantId);
 
       return ok(res, {
         settings,
@@ -253,24 +293,22 @@ export function voiceRoutes({ db, dbDisabled = false, audit } = {}) {
         return fail(res, 503, "db_unavailable");
       }
 
-      const tenantId = getTenantId(req);
-      const tenantKey = getTenantKey(req);
+      const scope = await requireTenantScope(req, res, db);
+      if (!scope) return;
+
       const actor = getActor(req);
-
-      if (!tenantId) return fail(res, 400, "tenant_required");
-
       const input = normalizeSettingsInput(req.body || {});
-      const settings = await upsertTenantVoiceSettings(db, tenantId, input);
+      const settings = await upsertTenantVoiceSettings(db, scope.tenantId, input);
 
       try {
         if (audit?.log) {
           await audit.log({
-            tenantId,
-            tenantKey,
+            tenantId: scope.tenantId,
+            tenantKey: scope.tenantKey,
             actor,
             action: "voice.settings.updated",
             objectType: "tenant_voice_settings",
-            objectId: tenantId,
+            objectId: scope.tenantId,
             meta: {
               enabled: settings?.enabled ?? input.enabled,
               provider: settings?.provider ?? input.provider,
@@ -295,16 +333,14 @@ export function voiceRoutes({ db, dbDisabled = false, audit } = {}) {
         return fail(res, 503, "db_unavailable");
       }
 
-      const tenantId = getTenantId(req);
-      const tenantKey = getTenantKey(req);
+      const scope = await requireTenantScope(req, res, db);
+      if (!scope) return;
+
       const actor = getActor(req);
-
-      if (!tenantId) return fail(res, 400, "tenant_required");
-
-      const current = await getTenantVoiceSettings(db, tenantId);
+      const current = await getTenantVoiceSettings(db, scope.tenantId);
       const enabled = b(req.body?.enabled, !current?.enabled);
 
-      const settings = await upsertTenantVoiceSettings(db, tenantId, {
+      const settings = await upsertTenantVoiceSettings(db, scope.tenantId, {
         ...(current || {}),
         enabled,
       });
@@ -312,12 +348,12 @@ export function voiceRoutes({ db, dbDisabled = false, audit } = {}) {
       try {
         if (audit?.log) {
           await audit.log({
-            tenantId,
-            tenantKey,
+            tenantId: scope.tenantId,
+            tenantKey: scope.tenantKey,
             actor,
             action: enabled ? "voice.enabled" : "voice.disabled",
             objectType: "tenant_voice_settings",
-            objectId: tenantId,
+            objectId: scope.tenantId,
             meta: { enabled },
           });
         }
@@ -350,12 +386,12 @@ export function voiceRoutes({ db, dbDisabled = false, audit } = {}) {
         });
       }
 
-      const tenantId = getTenantId(req);
-      if (!tenantId) return fail(res, 400, "tenant_required");
+      const scope = await requireTenantScope(req, res, db);
+      if (!scope) return;
 
-      const settings = await getTenantVoiceSettings(db, tenantId);
+      const settings = await getTenantVoiceSettings(db, scope.tenantId);
       const calls = await listVoiceCalls(db, {
-        tenantId,
+        tenantId: scope.tenantId,
         status: s(req.query?.status),
         limit: Math.max(1, Math.min(200, n(req.query?.limit, 100))),
       });
@@ -399,11 +435,11 @@ export function voiceRoutes({ db, dbDisabled = false, audit } = {}) {
         });
       }
 
-      const tenantId = getTenantId(req);
-      if (!tenantId) return fail(res, 400, "tenant_required");
+      const scope = await requireTenantScope(req, res, db);
+      if (!scope) return;
 
       const calls = await listVoiceCalls(db, {
-        tenantId,
+        tenantId: scope.tenantId,
         status: s(req.query?.status),
         limit: Math.max(1, Math.min(200, n(req.query?.limit, 50))),
       });
@@ -423,13 +459,13 @@ export function voiceRoutes({ db, dbDisabled = false, audit } = {}) {
         return fail(res, 503, "db_unavailable");
       }
 
-      const tenantId = getTenantId(req);
-      if (!tenantId) return fail(res, 400, "tenant_required");
+      const scope = await requireTenantScope(req, res, db);
+      if (!scope) return;
 
       const call = await getVoiceCallById(db, s(req.params?.id));
       if (!call) return fail(res, 404, "voice_call_not_found");
 
-      if (!sameTenant(call.tenantId ?? call.tenant_id, tenantId)) {
+      if (!sameTenant(call.tenantId ?? call.tenant_id, scope.tenantId)) {
         return fail(res, 403, "forbidden");
       }
 
@@ -454,12 +490,13 @@ export function voiceRoutes({ db, dbDisabled = false, audit } = {}) {
         });
       }
 
-      const tenantId = getTenantId(req);
-      if (!tenantId) return fail(res, 400, "tenant_required");
+      const scope = await requireTenantScope(req, res, db);
+      if (!scope) return;
 
       const call = await getVoiceCallById(db, s(req.params?.id));
       if (!call) return fail(res, 404, "voice_call_not_found");
-      if (!sameTenant(call.tenantId ?? call.tenant_id, tenantId)) {
+
+      if (!sameTenant(call.tenantId ?? call.tenant_id, scope.tenantId)) {
         return fail(res, 403, "forbidden");
       }
 
@@ -483,17 +520,18 @@ export function voiceRoutes({ db, dbDisabled = false, audit } = {}) {
         });
       }
 
-      const tenantId = getTenantId(req);
-      if (!tenantId) return fail(res, 400, "tenant_required");
+      const scope = await requireTenantScope(req, res, db);
+      if (!scope) return;
 
       const call = await getVoiceCallById(db, s(req.params?.id));
       if (!call) return fail(res, 404, "voice_call_not_found");
-      if (!sameTenant(call.tenantId ?? call.tenant_id, tenantId)) {
+
+      if (!sameTenant(call.tenantId ?? call.tenant_id, scope.tenantId)) {
         return fail(res, 403, "forbidden");
       }
 
       const allSessions = await listVoiceCallSessions(db, {
-        tenantId,
+        tenantId: scope.tenantId,
         status: s(req.query?.status),
         limit: Math.max(1, Math.min(200, n(req.query?.limit, 100))),
       });
@@ -523,18 +561,17 @@ export function voiceRoutes({ db, dbDisabled = false, audit } = {}) {
         return fail(res, 503, "db_unavailable");
       }
 
-      const tenantId = getTenantId(req);
-      const tenantKey = getTenantKey(req);
+      const scope = await requireTenantScope(req, res, db);
+      if (!scope) return;
+
       const actor = getActor(req);
-
-      if (!tenantId) return fail(res, 400, "tenant_required");
-
       const callId = s(req.params?.id);
       const providedSessionId = s(req.body?.sessionId);
 
       const call = await getVoiceCallById(db, callId);
       if (!call) return fail(res, 404, "voice_call_not_found");
-      if (!sameTenant(call.tenantId ?? call.tenant_id, tenantId)) {
+
+      if (!sameTenant(call.tenantId ?? call.tenant_id, scope.tenantId)) {
         return fail(res, 403, "forbidden");
       }
 
@@ -543,12 +580,13 @@ export function voiceRoutes({ db, dbDisabled = false, audit } = {}) {
       if (providedSessionId) {
         session = await getVoiceCallSessionById(db, providedSessionId);
         if (!session) return fail(res, 404, "voice_session_not_found");
-        if (!sameTenant(session.tenantId ?? session.tenant_id, tenantId)) {
+
+        if (!sameTenant(session.tenantId ?? session.tenant_id, scope.tenantId)) {
           return fail(res, 403, "forbidden");
         }
       } else {
         const allSessions = await listVoiceCallSessions(db, {
-          tenantId,
+          tenantId: scope.tenantId,
           limit: 100,
         });
 
@@ -589,8 +627,8 @@ export function voiceRoutes({ db, dbDisabled = false, audit } = {}) {
       try {
         if (audit?.log) {
           await audit.log({
-            tenantId,
-            tenantKey,
+            tenantId: scope.tenantId,
+            tenantKey: scope.tenantKey,
             actor,
             action: "voice.session.joined_from_call_view",
             objectType: "voice_call_session",
@@ -618,18 +656,17 @@ export function voiceRoutes({ db, dbDisabled = false, audit } = {}) {
         return fail(res, 503, "db_unavailable");
       }
 
-      const tenantId = getTenantId(req);
-      const tenantKey = getTenantKey(req);
+      const scope = await requireTenantScope(req, res, db);
+      if (!scope) return;
+
       const actor = getActor(req);
-
-      if (!tenantId) return fail(res, 400, "tenant_required");
-
       const callId = s(req.params?.id);
       const providedSessionId = s(req.body?.sessionId);
 
       const call = await getVoiceCallById(db, callId);
       if (!call) return fail(res, 404, "voice_call_not_found");
-      if (!sameTenant(call.tenantId ?? call.tenant_id, tenantId)) {
+
+      if (!sameTenant(call.tenantId ?? call.tenant_id, scope.tenantId)) {
         return fail(res, 403, "forbidden");
       }
 
@@ -638,12 +675,13 @@ export function voiceRoutes({ db, dbDisabled = false, audit } = {}) {
       if (providedSessionId) {
         session = await getVoiceCallSessionById(db, providedSessionId);
         if (!session) return fail(res, 404, "voice_session_not_found");
-        if (!sameTenant(session.tenantId ?? session.tenant_id, tenantId)) {
+
+        if (!sameTenant(session.tenantId ?? session.tenant_id, scope.tenantId)) {
           return fail(res, 403, "forbidden");
         }
       } else {
         const allSessions = await listVoiceCallSessions(db, {
-          tenantId,
+          tenantId: scope.tenantId,
           limit: 100,
         });
 
@@ -666,8 +704,8 @@ export function voiceRoutes({ db, dbDisabled = false, audit } = {}) {
       try {
         if (audit?.log) {
           await audit.log({
-            tenantId,
-            tenantKey,
+            tenantId: scope.tenantId,
+            tenantKey: scope.tenantKey,
             actor,
             action: "voice.session.ended_from_call_view",
             objectType: "voice_call_session",
@@ -695,12 +733,12 @@ export function voiceRoutes({ db, dbDisabled = false, audit } = {}) {
         });
       }
 
-      const tenantId = getTenantId(req);
-      if (!tenantId) return fail(res, 400, "tenant_required");
+      const scope = await requireTenantScope(req, res, db);
+      if (!scope) return;
 
       const usage = await getVoiceDailyUsage(
         db,
-        tenantId,
+        scope.tenantId,
         Math.max(1, Math.min(365, n(req.query?.limit, 30)))
       );
 
@@ -719,11 +757,11 @@ export function voiceRoutes({ db, dbDisabled = false, audit } = {}) {
         return ok(res, { sessions: [], dbDisabled: true });
       }
 
-      const tenantId = getTenantId(req);
-      if (!tenantId) return fail(res, 400, "tenant_required");
+      const scope = await requireTenantScope(req, res, db);
+      if (!scope) return;
 
       const sessions = await listVoiceCallSessions(db, {
-        tenantId,
+        tenantId: scope.tenantId,
         status: s(req.query?.status),
         limit: Math.max(1, Math.min(200, n(req.query?.limit, 50))),
       });
@@ -741,12 +779,13 @@ export function voiceRoutes({ db, dbDisabled = false, audit } = {}) {
         return fail(res, 503, "db_unavailable");
       }
 
-      const tenantId = getTenantId(req);
-      if (!tenantId) return fail(res, 400, "tenant_required");
+      const scope = await requireTenantScope(req, res, db);
+      if (!scope) return;
 
       const session = await getVoiceCallSessionById(db, s(req.params?.id));
       if (!session) return fail(res, 404, "voice_session_not_found");
-      if (!sameTenant(session.tenantId ?? session.tenant_id, tenantId)) {
+
+      if (!sameTenant(session.tenantId ?? session.tenant_id, scope.tenantId)) {
         return fail(res, 403, "forbidden");
       }
 
@@ -763,15 +802,14 @@ export function voiceRoutes({ db, dbDisabled = false, audit } = {}) {
         return fail(res, 503, "db_unavailable");
       }
 
-      const tenantId = getTenantId(req);
-      const tenantKey = getTenantKey(req);
+      const scope = await requireTenantScope(req, res, db);
+      if (!scope) return;
+
       const actor = getActor(req);
-
-      if (!tenantId) return fail(res, 400, "tenant_required");
-
       const session = await getVoiceCallSessionById(db, s(req.params?.id));
       if (!session) return fail(res, 404, "voice_session_not_found");
-      if (!sameTenant(session.tenantId ?? session.tenant_id, tenantId)) {
+
+      if (!sameTenant(session.tenantId ?? session.tenant_id, scope.tenantId)) {
         return fail(res, 403, "forbidden");
       }
 
@@ -797,8 +835,8 @@ export function voiceRoutes({ db, dbDisabled = false, audit } = {}) {
       try {
         if (audit?.log) {
           await audit.log({
-            tenantId,
-            tenantKey,
+            tenantId: scope.tenantId,
+            tenantKey: scope.tenantKey,
             actor,
             action: "voice.session.handoff_requested",
             objectType: "voice_call_session",
@@ -824,15 +862,14 @@ export function voiceRoutes({ db, dbDisabled = false, audit } = {}) {
         return fail(res, 503, "db_unavailable");
       }
 
-      const tenantId = getTenantId(req);
-      const tenantKey = getTenantKey(req);
+      const scope = await requireTenantScope(req, res, db);
+      if (!scope) return;
+
       const actor = getActor(req);
-
-      if (!tenantId) return fail(res, 400, "tenant_required");
-
       const session = await getVoiceCallSessionById(db, s(req.params?.id));
       if (!session) return fail(res, 404, "voice_session_not_found");
-      if (!sameTenant(session.tenantId ?? session.tenant_id, tenantId)) {
+
+      if (!sameTenant(session.tenantId ?? session.tenant_id, scope.tenantId)) {
         return fail(res, 403, "forbidden");
       }
 
@@ -847,8 +884,8 @@ export function voiceRoutes({ db, dbDisabled = false, audit } = {}) {
       try {
         if (audit?.log) {
           await audit.log({
-            tenantId,
-            tenantKey,
+            tenantId: scope.tenantId,
+            tenantKey: scope.tenantKey,
             actor,
             action: "voice.session.operator_joined",
             objectType: "voice_call_session",
@@ -873,15 +910,14 @@ export function voiceRoutes({ db, dbDisabled = false, audit } = {}) {
         return fail(res, 503, "db_unavailable");
       }
 
-      const tenantId = getTenantId(req);
-      const tenantKey = getTenantKey(req);
+      const scope = await requireTenantScope(req, res, db);
+      if (!scope) return;
+
       const actor = getActor(req);
-
-      if (!tenantId) return fail(res, 400, "tenant_required");
-
       const session = await getVoiceCallSessionById(db, s(req.params?.id));
       if (!session) return fail(res, 404, "voice_session_not_found");
-      if (!sameTenant(session.tenantId ?? session.tenant_id, tenantId)) {
+
+      if (!sameTenant(session.tenantId ?? session.tenant_id, scope.tenantId)) {
         return fail(res, 403, "forbidden");
       }
 
@@ -896,8 +932,8 @@ export function voiceRoutes({ db, dbDisabled = false, audit } = {}) {
       try {
         if (audit?.log) {
           await audit.log({
-            tenantId,
-            tenantKey,
+            tenantId: scope.tenantId,
+            tenantKey: scope.tenantKey,
             actor,
             action: "voice.session.takeover",
             objectType: "voice_call_session",
@@ -920,15 +956,14 @@ export function voiceRoutes({ db, dbDisabled = false, audit } = {}) {
         return fail(res, 503, "db_unavailable");
       }
 
-      const tenantId = getTenantId(req);
-      const tenantKey = getTenantKey(req);
+      const scope = await requireTenantScope(req, res, db);
+      if (!scope) return;
+
       const actor = getActor(req);
-
-      if (!tenantId) return fail(res, 400, "tenant_required");
-
       const session = await getVoiceCallSessionById(db, s(req.params?.id));
       if (!session) return fail(res, 404, "voice_session_not_found");
-      if (!sameTenant(session.tenantId ?? session.tenant_id, tenantId)) {
+
+      if (!sameTenant(session.tenantId ?? session.tenant_id, scope.tenantId)) {
         return fail(res, 403, "forbidden");
       }
 
@@ -941,8 +976,8 @@ export function voiceRoutes({ db, dbDisabled = false, audit } = {}) {
       try {
         if (audit?.log) {
           await audit.log({
-            tenantId,
-            tenantKey,
+            tenantId: scope.tenantId,
+            tenantKey: scope.tenantKey,
             actor,
             action: "voice.session.ended",
             objectType: "voice_call_session",
@@ -961,26 +996,25 @@ export function voiceRoutes({ db, dbDisabled = false, audit } = {}) {
 
   r.post("/voice/test", async (req, res) => {
     try {
-      const tenantId = getTenantId(req);
-      const tenantKey = getTenantKey(req);
-      const actor = getActor(req);
+      const scope = await resolveTenantScope(req, db);
+      if (!scope?.tenantId) return fail(res, 400, "tenant_required");
 
-      if (!tenantId) return fail(res, 400, "tenant_required");
+      const actor = getActor(req);
 
       let settings = null;
       if (!dbDisabled && db) {
-        settings = await getTenantVoiceSettings(db, tenantId);
+        settings = await getTenantVoiceSettings(db, scope.tenantId);
       }
 
       try {
         if (audit?.log) {
           await audit.log({
-            tenantId,
-            tenantKey,
+            tenantId: scope.tenantId,
+            tenantKey: scope.tenantKey,
             actor,
             action: "voice.test.requested",
             objectType: "voice_test",
-            objectId: tenantId,
+            objectId: scope.tenantId,
             meta: {
               hasSettings: !!settings,
               provider: settings?.provider || "twilio",
