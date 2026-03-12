@@ -101,12 +101,22 @@ async function main() {
         return cb(null, true);
       }
 
-      console.error(`[cors] blocked origin=${origin} allowed=${allowedOrigins.join(",")}`);
+      console.error(
+        `[cors] blocked origin=${origin} allowed=${allowedOrigins.join(",")}`
+      );
       return cb(new Error(`CORS blocked for origin: ${origin}`));
     },
     credentials: true,
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization", "x-internal-token", "x-webhook-token"],
+    allowedHeaders: [
+      "Content-Type",
+      "Authorization",
+      "x-internal-token",
+      "x-webhook-token",
+      "x-callback-token",
+      "x-debug-token",
+      "Accept",
+    ],
     optionsSuccessStatus: 204,
   };
 
@@ -132,6 +142,8 @@ async function main() {
         "GET /api/admin-auth/me",
         "POST /api/admin-auth/login",
         "POST /api/admin-auth/logout",
+        "POST /api/auth/login",
+        "POST /api/auth/logout",
         "GET /api",
       ],
     });
@@ -172,7 +184,8 @@ async function main() {
       },
       workers: {
         outboundRetryEnabled: !!cfg.OUTBOUND_RETRY_ENABLED,
-        draftScheduleEnabled: s(process.env.DRAFT_SCHEDULE_WORKER_ENABLED, "1") !== "0",
+        draftScheduleEnabled:
+          s(process.env.DRAFT_SCHEDULE_WORKER_ENABLED, "1") !== "0",
       },
     };
 
@@ -286,9 +299,13 @@ async function main() {
 
     console.log(`[ai-hq] listening on :${cfg.PORT} env=${cfg.APP_ENV}`);
     console.log(`[ai-hq] CORS_ORIGIN=${cfg.CORS_ORIGIN}`);
-    console.log(`[ai-hq] allowedOrigins=${allowedOrigins.join(",") || "(empty)"}`);
+    console.log(
+      `[ai-hq] allowedOrigins=${allowedOrigins.join(",") || "(empty)"}`
+    );
     console.log(`[ai-hq] DB=${hasDb ? "ON" : "OFF"}`);
-    console.log(`[ai-hq] OpenAI=${cfg.OPENAI_API_KEY ? "ON" : "OFF"} model=${cfg.OPENAI_MODEL}`);
+    console.log(
+      `[ai-hq] OpenAI=${cfg.OPENAI_API_KEY ? "ON" : "OFF"} model=${cfg.OPENAI_MODEL}`
+    );
     console.log(`[ai-hq] WS_AUTH_TOKEN=${cfg.WS_AUTH_TOKEN ? "ON" : "OFF"}`);
     console.log(
       `[ai-hq] META_GATEWAY=${cfg.META_GATEWAY_BASE_URL ? "ON" : "OFF"} retryWorker=${

@@ -38,6 +38,21 @@ function safeEqBuffer(a, b) {
   }
 }
 
+function cookieDomain() {
+  const isProd = s(cfg.APP_ENV).toLowerCase() === "production";
+  if (!isProd) return undefined;
+
+  const explicit = s(
+    cfg.SESSION_COOKIE_DOMAIN ||
+      cfg.COOKIE_DOMAIN ||
+      cfg.USER_COOKIE_DOMAIN ||
+      ""
+  );
+  if (explicit) return explicit;
+
+  return ".hq.weneox.com";
+}
+
 export function getAdminCookieName() {
   return s(cfg.ADMIN_SESSION_COOKIE_NAME, "aihq_admin");
 }
@@ -56,6 +71,7 @@ export function adminCookieOptions() {
     secure: isProd,
     sameSite: isProd ? "none" : "lax",
     path: "/",
+    domain: cookieDomain(),
     maxAge: maxAgeMs,
   };
 }
@@ -70,6 +86,7 @@ export function userCookieOptions() {
     secure: isProd,
     sameSite: isProd ? "none" : "lax",
     path: "/",
+    domain: cookieDomain(),
     maxAge: maxAgeMs,
   };
 }
@@ -81,6 +98,7 @@ export function clearAdminCookie(res) {
     secure: isProd,
     sameSite: isProd ? "none" : "lax",
     path: "/",
+    domain: cookieDomain(),
   });
 }
 
@@ -91,6 +109,7 @@ export function clearUserCookie(res) {
     secure: isProd,
     sameSite: isProd ? "none" : "lax",
     path: "/",
+    domain: cookieDomain(),
   });
 }
 
