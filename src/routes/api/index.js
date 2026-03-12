@@ -1,5 +1,8 @@
 import express from "express";
-import { requireUserSession } from "../../utils/adminAuth.js";
+import {
+  requireUserSession,
+  readUserSessionFromRequest,
+} from "../../utils/adminAuth.js";
 
 import { healthRoutes } from "./health.js";
 import { modeRoutes } from "./mode.js";
@@ -25,8 +28,31 @@ import { voiceInternalRoutes } from "./voiceInternal.js";
 import { voiceRoutes } from "./voice.js";
 import { channelConnectRoutes } from "./channelConnect.js";
 
+function s(v, d = "") {
+  return String(v ?? d).trim();
+}
+
 export function apiRouter({ db, wsHub, audit, dbDisabled = false }) {
   const r = express.Router();
+
+  // -----------------------------
+  // PUBLIC / DEBUG BEFORE GUARD
+  // -----------------------------
+  r.get("/__guard-before", (req, res) => {
+    const session = readUserSessionFromRequest(req);
+
+    return res.status(200).json({
+      ok: true,
+      marker: "API_GUARD_BEFORE_V1",
+      hasCookieHeader: Boolean(s(req.headers.cookie)),
+      cookieHeaderLength: s(req.headers.cookie).length,
+      verify: {
+        ok: !!session?.ok,
+        error: session?.error || null,
+      },
+      payload: session?.ok ? session.payload : null,
+    });
+  });
 
   // public / infra
   r.use("/", healthRoutes({ db }));
@@ -38,9 +64,24 @@ export function apiRouter({ db, wsHub, audit, dbDisabled = false }) {
   // public oauth / connect callback flow
   r.use("/", channelConnectRoutes({ db }));
 
-  // authenticated app routes
+  // -----------------------------
+  // REQUIRE USER SESSION
+  // -----------------------------
   r.use(requireUserSession);
 
+  // -----------------------------
+  // DEBUG AFTER GUARD
+  // -----------------------------
+  r.get("/__guard-after", (req, res) => {
+    return res.status(200).json({
+      ok: true,
+      marker: "API_GUARD_AFTER_V1",
+      auth: req.auth || null,
+      user: req.user || null,
+    });
+  });
+
+  // authenticated app routes
   r.use("/", modeRoutes({ db, wsHub }));
   r.use("/", agentsRoutes());
   r.use("/", renderRoutes());
