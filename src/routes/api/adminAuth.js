@@ -152,6 +152,45 @@ export function adminAuthRoutes({ db, wsHub } = {}) {
     });
   });
 
+  r.get("/auth/me", async (req, res) => {
+    const userSession = readUserSessionFromRequest(req);
+    const dbOk = await checkDb(db);
+
+    if (!userSession?.ok) {
+      return res.status(401).json({
+        ok: false,
+        authenticated: false,
+        error: "Unauthorized",
+        user: null,
+        runtime: {
+          env: cfg.APP_ENV,
+          hasDb: !!db,
+          dbOk,
+        },
+      });
+    }
+
+    return res.status(200).json({
+      ok: true,
+      authenticated: true,
+      user: {
+        id: userSession.payload?.userId || null,
+        tenantId: userSession.payload?.tenantId || null,
+        tenantKey: userSession.payload?.tenantKey || null,
+        email: userSession.payload?.email || null,
+        fullName: userSession.payload?.fullName || "",
+        role: userSession.payload?.role || "member",
+        exp: userSession.payload?.exp || null,
+        iat: userSession.payload?.iat || null,
+      },
+      runtime: {
+        env: cfg.APP_ENV,
+        hasDb: !!db,
+        dbOk,
+      },
+    });
+  });
+
   r.post("/admin-auth/login", (req, res) => {
     if (!cfg.ADMIN_PANEL_ENABLED) {
       return res.status(403).json({

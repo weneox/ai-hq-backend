@@ -1,3 +1,5 @@
+// src/config.js
+
 function s(v, d = "") {
   return String(v ?? d).trim();
 }
@@ -41,10 +43,19 @@ export const cfg = {
   ADMIN_PANEL_ENABLED: b(process.env.ADMIN_PANEL_ENABLED, true),
   ADMIN_PANEL_PASSCODE_HASH: s(process.env.ADMIN_PANEL_PASSCODE_HASH, ""),
   ADMIN_SESSION_SECRET: s(process.env.ADMIN_SESSION_SECRET, ""),
-  ADMIN_SESSION_COOKIE_NAME: s(process.env.ADMIN_SESSION_COOKIE_NAME, "aihq_admin"),
+  ADMIN_SESSION_COOKIE_NAME: s(
+    process.env.ADMIN_SESSION_COOKIE_NAME,
+    "aihq_admin"
+  ),
   ADMIN_SESSION_TTL_HOURS: n(process.env.ADMIN_SESSION_TTL_HOURS, 12),
-  ADMIN_RATE_LIMIT_WINDOW_MS: n(process.env.ADMIN_RATE_LIMIT_WINDOW_MS, 15 * 60 * 1000),
-  ADMIN_RATE_LIMIT_MAX_ATTEMPTS: n(process.env.ADMIN_RATE_LIMIT_MAX_ATTEMPTS, 5),
+  ADMIN_RATE_LIMIT_WINDOW_MS: n(
+    process.env.ADMIN_RATE_LIMIT_WINDOW_MS,
+    15 * 60 * 1000
+  ),
+  ADMIN_RATE_LIMIT_MAX_ATTEMPTS: n(
+    process.env.ADMIN_RATE_LIMIT_MAX_ATTEMPTS,
+    5
+  ),
 
   USER_SESSION_SECRET: s(
     process.env.USER_SESSION_SECRET,
@@ -54,10 +65,12 @@ export const cfg = {
     process.env.USER_SESSION_COOKIE_NAME,
     "aihq_user"
   ),
-  USER_SESSION_TTL_HOURS: n(
-    process.env.USER_SESSION_TTL_HOURS,
-    24 * 7
-  ),
+  USER_SESSION_TTL_HOURS: n(process.env.USER_SESSION_TTL_HOURS, 24 * 7),
+
+  // cookie domain config
+  SESSION_COOKIE_DOMAIN: s(process.env.SESSION_COOKIE_DOMAIN, ""),
+  COOKIE_DOMAIN: s(process.env.COOKIE_DOMAIN, ""),
+  USER_COOKIE_DOMAIN: s(process.env.USER_COOKIE_DOMAIN, ""),
 
   TENANT_SECRET_MASTER_KEY: s(process.env.TENANT_SECRET_MASTER_KEY, ""),
   AIHQ_SECRETS_PATH: s(process.env.AIHQ_SECRETS_PATH, "/api/settings/secrets"),
@@ -73,8 +86,14 @@ export const cfg = {
   OPENAI_MAX_OUTPUT_TOKENS: n(process.env.OPENAI_MAX_OUTPUT_TOKENS, 800),
   OPENAI_TIMEOUT_MS: n(process.env.OPENAI_TIMEOUT_MS, 25_000),
   OPENAI_DEBATE_CONCURRENCY: n(process.env.OPENAI_DEBATE_CONCURRENCY, 2),
-  OPENAI_DEBATE_AGENT_TOKENS: n(process.env.OPENAI_DEBATE_AGENT_TOKENS, 900),
-  OPENAI_DEBATE_SYNTH_TOKENS: n(process.env.OPENAI_DEBATE_SYNTH_TOKENS, 1400),
+  OPENAI_DEBATE_AGENT_TOKENS: n(
+    process.env.OPENAI_DEBATE_AGENT_TOKENS,
+    900
+  ),
+  OPENAI_DEBATE_SYNTH_TOKENS: n(
+    process.env.OPENAI_DEBATE_SYNTH_TOKENS,
+    1400
+  ),
 
   GEMINI_API_KEY: s(process.env.GEMINI_API_KEY, ""),
   ANTHROPIC_API_KEY: s(process.env.ANTHROPIC_API_KEY, ""),
@@ -88,7 +107,6 @@ export const cfg = {
   META_PAGE_ACCESS_TOKEN: s(process.env.META_PAGE_ACCESS_TOKEN, ""),
   META_API_VERSION: s(process.env.META_API_VERSION, "v23.0"),
 
-  // Meta OAuth connect flow
   META_APP_ID: s(process.env.META_APP_ID, ""),
   META_APP_SECRET: s(process.env.META_APP_SECRET, ""),
   META_REDIRECT_URI: s(process.env.META_REDIRECT_URI, ""),
@@ -121,7 +139,10 @@ export const cfg = {
   META_GATEWAY_TIMEOUT_MS: n(process.env.META_GATEWAY_TIMEOUT_MS, 20_000),
 
   OUTBOUND_RETRY_ENABLED: b(process.env.OUTBOUND_RETRY_ENABLED, true),
-  OUTBOUND_RETRY_INTERVAL_MS: n(process.env.OUTBOUND_RETRY_INTERVAL_MS, 15_000),
+  OUTBOUND_RETRY_INTERVAL_MS: n(
+    process.env.OUTBOUND_RETRY_INTERVAL_MS,
+    15_000
+  ),
   OUTBOUND_RETRY_BATCH_SIZE: n(process.env.OUTBOUND_RETRY_BATCH_SIZE, 10),
 
   DEBUG_DEBATE_RAW: b(process.env.DEBUG_DEBATE_RAW, false),
