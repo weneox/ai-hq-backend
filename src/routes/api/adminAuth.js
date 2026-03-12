@@ -116,6 +116,28 @@ async function markUserLogin(db, userId) {
   } catch {}
 }
 
+function clearCookieLegacy(res, name) {
+  const variants = [
+    { path: "/" },
+    { path: "/", domain: ".hq.weneox.com" },
+    { path: "/", domain: "hq.weneox.com" },
+    { path: "/", domain: ".weneox.com" },
+    { path: "/", domain: "weneox.com" },
+    { path: "/", domain: "api.hq.weneox.com" },
+  ];
+
+  for (const v of variants) {
+    try {
+      res.clearCookie(name, {
+        httpOnly: true,
+        secure: true,
+        sameSite: "lax",
+        ...v,
+      });
+    } catch {}
+  }
+}
+
 export function adminAuthRoutes({ db, wsHub } = {}) {
   const r = express.Router();
 
@@ -385,8 +407,12 @@ export function adminAuthRoutes({ db, wsHub } = {}) {
 
   r.post("/admin-auth/logout", (_req, res) => {
     setNoStore(res);
+
     clearAdminCookie(res);
     clearUserCookie(res);
+
+    clearCookieLegacy(res, getAdminCookieName());
+    clearCookieLegacy(res, getUserCookieName());
 
     return res.status(200).json({
       ok: true,
@@ -396,7 +422,12 @@ export function adminAuthRoutes({ db, wsHub } = {}) {
 
   r.post("/auth/logout", (_req, res) => {
     setNoStore(res);
+
     clearUserCookie(res);
+    clearAdminCookie(res);
+
+    clearCookieLegacy(res, getUserCookieName());
+    clearCookieLegacy(res, getAdminCookieName());
 
     return res.status(200).json({
       ok: true,
