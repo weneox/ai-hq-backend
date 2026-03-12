@@ -15,6 +15,8 @@ import {
   clearAdminFailedAttempts,
   readAdminSessionFromRequest,
   readUserSessionFromRequest,
+  getAdminCookieName,
+  getUserCookieName,
 } from "../../utils/adminAuth.js";
 import { cfg } from "../../config.js";
 
@@ -30,6 +32,16 @@ function getIp(req) {
   const xfwd = s(req?.headers?.["x-forwarded-for"]);
   if (xfwd) return xfwd.split(",")[0].trim();
   return s(req?.ip) || s(req?.socket?.remoteAddress) || "unknown";
+}
+
+function setNoStore(res) {
+  res.setHeader(
+    "Cache-Control",
+    "no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0"
+  );
+  res.setHeader("Pragma", "no-cache");
+  res.setHeader("Expires", "0");
+  res.setHeader("Surrogate-Control", "no-store");
 }
 
 async function checkDb(db) {
@@ -108,6 +120,8 @@ export function adminAuthRoutes({ db, wsHub } = {}) {
   const r = express.Router();
 
   r.get("/admin-auth/me", async (req, res) => {
+    setNoStore(res);
+
     const adminSession = readAdminSessionFromRequest(req);
     const userSession = readUserSessionFromRequest(req);
     const dbOk = await checkDb(db);
@@ -153,6 +167,8 @@ export function adminAuthRoutes({ db, wsHub } = {}) {
   });
 
   r.get("/auth/me", async (req, res) => {
+    setNoStore(res);
+
     const userSession = readUserSessionFromRequest(req);
     const dbOk = await checkDb(db);
 
@@ -192,6 +208,8 @@ export function adminAuthRoutes({ db, wsHub } = {}) {
   });
 
   r.post("/admin-auth/login", (req, res) => {
+    setNoStore(res);
+
     if (!cfg.ADMIN_PANEL_ENABLED) {
       return res.status(403).json({
         ok: false,
@@ -239,7 +257,7 @@ export function adminAuthRoutes({ db, wsHub } = {}) {
       ua: s(req.headers["user-agent"]),
     });
 
-    res.cookie(cfg.ADMIN_SESSION_COOKIE_NAME, token, adminCookieOptions());
+    res.cookie(getAdminCookieName(), token, adminCookieOptions());
 
     return res.status(200).json({
       ok: true,
@@ -249,6 +267,8 @@ export function adminAuthRoutes({ db, wsHub } = {}) {
   });
 
   r.post("/auth/login", async (req, res) => {
+    setNoStore(res);
+
     if (!db) {
       return res.status(503).json({
         ok: false,
@@ -343,7 +363,7 @@ export function adminAuthRoutes({ db, wsHub } = {}) {
       }
     );
 
-    res.cookie(cfg.USER_SESSION_COOKIE_NAME, token, userCookieOptions());
+    res.cookie(getUserCookieName(), token, userCookieOptions());
 
     await markUserLogin(db, user.id);
 
@@ -364,8 +384,10 @@ export function adminAuthRoutes({ db, wsHub } = {}) {
   });
 
   r.post("/admin-auth/logout", (_req, res) => {
+    setNoStore(res);
     clearAdminCookie(res);
     clearUserCookie(res);
+
     return res.status(200).json({
       ok: true,
       loggedOut: true,
@@ -373,7 +395,9 @@ export function adminAuthRoutes({ db, wsHub } = {}) {
   });
 
   r.post("/auth/logout", (_req, res) => {
+    setNoStore(res);
     clearUserCookie(res);
+
     return res.status(200).json({
       ok: true,
       loggedOut: true,
