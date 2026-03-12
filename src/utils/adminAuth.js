@@ -212,7 +212,12 @@ export function verifyAdminSessionToken(token) {
       return { ok: false, error: "invalid token format" };
     }
 
-    const [payloadB64, sigB64] = raw.split(".");
+    const parts = raw.split(".");
+    if (parts.length !== 2) {
+      return { ok: false, error: "invalid token parts" };
+    }
+
+    const [payloadB64, sigB64] = parts;
     if (!payloadB64 || !sigB64) {
       return { ok: false, error: "invalid token parts" };
     }
@@ -296,7 +301,12 @@ export function verifyUserSessionToken(token) {
       return { ok: false, error: "invalid token format" };
     }
 
-    const [payloadB64, sigB64] = raw.split(".");
+    const parts = raw.split(".");
+    if (parts.length !== 2) {
+      return { ok: false, error: "invalid token parts" };
+    }
+
+    const [payloadB64, sigB64] = parts;
     if (!payloadB64 || !sigB64) {
       return { ok: false, error: "invalid token parts" };
     }
@@ -496,6 +506,7 @@ export function requireAdminSession(req, res, next) {
     return res.status(401).json({
       ok: false,
       error: "Unauthorized",
+      reason: session?.error || "invalid admin session",
     });
   }
 
@@ -505,11 +516,13 @@ export function requireAdminSession(req, res, next) {
 
 export function requireUserSession(req, res, next) {
   const session = readUserSessionFromRequest(req);
+
   if (!session?.ok) {
     return res.status(401).json({
       ok: false,
       error: "Unauthorized",
       reason: session?.error || "invalid session",
+      marker: "REQUIRE_USER_SESSION_DEBUG_V1",
     });
   }
 

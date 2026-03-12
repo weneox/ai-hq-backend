@@ -15,6 +15,7 @@ import {
   clearAdminFailedAttempts,
   readAdminSessionFromRequest,
   readUserSessionFromRequest,
+  parseCookies,
   getAdminCookieName,
   getUserCookieName,
 } from "../../utils/adminAuth.js";
@@ -116,28 +117,6 @@ async function markUserLogin(db, userId) {
   } catch {}
 }
 
-function clearCookieLegacy(res, name) {
-  const variants = [
-    { path: "/" },
-    { path: "/", domain: ".hq.weneox.com" },
-    { path: "/", domain: "hq.weneox.com" },
-    { path: "/", domain: ".weneox.com" },
-    { path: "/", domain: "weneox.com" },
-    { path: "/", domain: "api.hq.weneox.com" },
-  ];
-
-  for (const v of variants) {
-    try {
-      res.clearCookie(name, {
-        httpOnly: true,
-        secure: true,
-        sameSite: "lax",
-        ...v,
-      });
-    } catch {}
-  }
-}
-
 export function adminAuthRoutes({ db, wsHub } = {}) {
   const r = express.Router();
 
@@ -177,7 +156,10 @@ export function adminAuthRoutes({ db, wsHub } = {}) {
               exp: userSession.payload?.exp || null,
               iat: userSession.payload?.iat || null,
             }
-          : null,
+          : {
+              ok: false,
+              error: userSession?.error || null,
+            },
       },
       runtime: {
         env: cfg.APP_ENV,
@@ -199,12 +181,14 @@ export function adminAuthRoutes({ db, wsHub } = {}) {
         ok: false,
         authenticated: false,
         error: "Unauthorized",
+        reason: userSession?.error || "invalid_session",
         user: null,
         runtime: {
           env: cfg.APP_ENV,
           hasDb: !!db,
           dbOk,
         },
+        marker: "AUTH_ME_DEBUG_V1",
       });
     }
 
@@ -221,6 +205,41 @@ export function adminAuthRoutes({ db, wsHub } = {}) {
         exp: userSession.payload?.exp || null,
         iat: userSession.payload?.iat || null,
       },
+      runtime: {
+        env: cfg.APP_ENV,
+        hasDb: !!db,
+        dbOk,
+      },
+      marker: "AUTH_ME_DEBUG_V1",
+    });
+  });
+
+  r.get("/auth/debug-session", async (req, res) => {
+    setNoStore(res);
+
+    const cookies = parseCookies(req);
+    const rawToken = cookies[getUserCookieName()] || "";
+    const userSession = readUserSessionFromRequest(req);
+    const dbOk = await checkDb(db);
+
+    return res.status(200).json({
+      ok: true,
+      marker: "AUTH_DEBUG_SESSION_V1",
+      cookieNames: Object.keys(cookies || {}),
+      hasUserCookie: Boolean(rawToken),
+      userCookieName: getUserCookieName(),
+      rawTokenLength: rawToken ? rawToken.length : 0,
+      verify: userSession?.ok
+        ? {
+            ok: true,
+            error: null,
+            payload: userSession.payload || null,
+          }
+        : {
+            ok: false,
+            error: userSession?.error || "unknown",
+            payload: null,
+          },
       runtime: {
         env: cfg.APP_ENV,
         hasDb: !!db,
@@ -407,12 +426,8 @@ export function adminAuthRoutes({ db, wsHub } = {}) {
 
   r.post("/admin-auth/logout", (_req, res) => {
     setNoStore(res);
-
     clearAdminCookie(res);
     clearUserCookie(res);
-
-    clearCookieLegacy(res, getAdminCookieName());
-    clearCookieLegacy(res, getUserCookieName());
 
     return res.status(200).json({
       ok: true,
@@ -422,12 +437,7 @@ export function adminAuthRoutes({ db, wsHub } = {}) {
 
   r.post("/auth/logout", (_req, res) => {
     setNoStore(res);
-
     clearUserCookie(res);
-    clearAdminCookie(res);
-
-    clearCookieLegacy(res, getUserCookieName());
-    clearCookieLegacy(res, getAdminCookieName());
 
     return res.status(200).json({
       ok: true,
