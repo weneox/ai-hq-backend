@@ -35,11 +35,11 @@ export function apiRouter({ db, wsHub, audit, dbDisabled = false }) {
   r.use("/", voiceInternalRoutes({ db }));
   r.use("/", tenantsRoutes({ db }));
 
+  // public oauth / connect callback flow
+  r.use("/", channelConnectRoutes({ db }));
+
   // authenticated app routes
   r.use(requireUserSession);
-
-  // channel connect flow
-  r.use("/", channelConnectRoutes({ db }));
 
   r.use("/", modeRoutes({ db, wsHub }));
   r.use("/", agentsRoutes());
@@ -60,7 +60,6 @@ export function apiRouter({ db, wsHub, audit, dbDisabled = false }) {
   r.use("/", debugRoutes());
   r.use("/", teamRoutes({ db }));
 
-  // voice module
   r.use(
     "/",
     voiceRoutes({

@@ -1,10 +1,10 @@
 // src/routes/api/channelConnect.js
-// FINAL v1.0 — branded Meta / Instagram connect flow for tenant users
 
 import express from "express";
 import crypto from "crypto";
 
 import { cfg } from "../../config.js";
+import { requireUserSession } from "../../utils/adminAuth.js";
 import { dbGetTenantByKey, dbUpsertTenantChannel } from "../../db/helpers/settings.js";
 import {
   dbUpsertTenantSecret,
@@ -12,7 +12,6 @@ import {
   dbGetTenantProviderSecrets,
 } from "../../db/helpers/tenantSecrets.js";
 import { dbAudit } from "../../db/helpers/audit.js";
-import { getAuthActor, getAuthTenantKey } from "../../utils/auth.js";
 
 function s(v, d = "") {
   return String(v ?? d).trim();
@@ -180,11 +179,11 @@ function pickBestInstagramPage(pages = []) {
   return null;
 }
 
-async function auditSafe(db, req, tenant, action, objectType, objectId, meta = {}) {
+async function auditSafe(db, actor, tenant, action, objectType, objectId, meta = {}) {
   try {
     await dbAudit(
       db,
-      s(getAuthActor(req), "system"),
+      s(actor, "system"),
       action,
       objectType,
       objectId,
@@ -197,12 +196,20 @@ async function auditSafe(db, req, tenant, action, objectType, objectId, meta = {
   } catch {}
 }
 
+function getReqTenantKey(req) {
+  return lower(req?.auth?.tenantKey || "");
+}
+
+function getReqActor(req) {
+  return s(req?.auth?.email || req?.auth?.userId || "system");
+}
+
 export function channelConnectRoutes({ db }) {
   const r = express.Router();
 
-  r.get("/channels/meta/connect", async (req, res) => {
+  r.get("/channels/meta/connect", requireUserSession, async (req, res) => {
     try {
-      const tenantKey = lower(getAuthTenantKey(req));
+      const tenantKey = getReqTenantKey(req);
       if (!tenantKey) return unauth(res, "Missing tenant context");
 
       if (!s(cfg.META_APP_ID) || !s(cfg.META_APP_SECRET) || !s(cfg.META_REDIRECT_URI)) {
@@ -214,7 +221,7 @@ export function channelConnectRoutes({ db }) {
 
       const state = signState({
         tenantKey,
-        actor: s(getAuthActor(req), "system"),
+        actor: getReqActor(req),
         exp: Date.now() + 10 * 60 * 1000,
       });
 
@@ -307,7 +314,7 @@ export function channelConnectRoutes({ db }) {
 
       await auditSafe(
         db,
-        req,
+        state.actor || "system",
         tenant,
         "settings.channel.meta.connected",
         "tenant_channel",
@@ -346,9 +353,9 @@ export function channelConnectRoutes({ db }) {
     }
   });
 
-  r.get("/channels/meta/status", async (req, res) => {
+  r.get("/channels/meta/status", requireUserSession, async (req, res) => {
     try {
-      const tenantKey = lower(getAuthTenantKey(req));
+      const tenantKey = getReqTenantKey(req);
       if (!tenantKey) return unauth(res, "Missing tenant context");
 
       const tenant = await dbGetTenantByKey(db, tenantKey);
@@ -396,9 +403,9 @@ export function channelConnectRoutes({ db }) {
     }
   });
 
-  r.post("/channels/meta/disconnect", async (req, res) => {
+  r.post("/channels/meta/disconnect", requireUserSession, async (req, res) => {
     try {
-      const tenantKey = lower(getAuthTenantKey(req));
+      const tenantKey = getReqTenantKey(req);
       if (!tenantKey) return unauth(res, "Missing tenant context");
 
       const tenant = await dbGetTenantByKey(db, tenantKey);
@@ -426,7 +433,7 @@ export function channelConnectRoutes({ db }) {
 
       await auditSafe(
         db,
-        req,
+        getReqActor(req),
         tenant,
         "settings.channel.meta.disconnected",
         "tenant_channel",
