@@ -188,7 +188,7 @@ export function adminAuthRoutes({ db, wsHub } = {}) {
           hasDb: !!db,
           dbOk,
         },
-        marker: "AUTH_ME_DEBUG_V1",
+        marker: "AUTH_ME_DEBUG_V2",
       });
     }
 
@@ -210,7 +210,7 @@ export function adminAuthRoutes({ db, wsHub } = {}) {
         hasDb: !!db,
         dbOk,
       },
-      marker: "AUTH_ME_DEBUG_V1",
+      marker: "AUTH_ME_DEBUG_V2",
     });
   });
 
@@ -224,7 +224,7 @@ export function adminAuthRoutes({ db, wsHub } = {}) {
 
     return res.status(200).json({
       ok: true,
-      marker: "AUTH_DEBUG_SESSION_V1",
+      marker: "AUTH_DEBUG_SESSION_V2",
       cookieNames: Object.keys(cookies || {}),
       hasUserCookie: Boolean(rawToken),
       userCookieName: getUserCookieName(),
@@ -298,6 +298,7 @@ export function adminAuthRoutes({ db, wsHub } = {}) {
       ua: s(req.headers["user-agent"]),
     });
 
+    clearAdminCookie(res);
     res.cookie(getAdminCookieName(), token, adminCookieOptions());
 
     return res.status(200).json({
@@ -404,6 +405,7 @@ export function adminAuthRoutes({ db, wsHub } = {}) {
       }
     );
 
+    clearUserCookie(res);
     res.cookie(getUserCookieName(), token, userCookieOptions());
 
     await markUserLogin(db, user.id);
@@ -427,7 +429,6 @@ export function adminAuthRoutes({ db, wsHub } = {}) {
   r.post("/admin-auth/logout", (_req, res) => {
     setNoStore(res);
     clearAdminCookie(res);
-    clearUserCookie(res);
 
     return res.status(200).json({
       ok: true,
