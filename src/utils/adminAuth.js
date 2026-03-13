@@ -104,32 +104,30 @@ export function userCookieOptions() {
   };
 }
 
-export function clearAdminCookie(res) {
+function clearCookieWithOptions(res, name, path = "/") {
   const isProd = s(cfg.APP_ENV).toLowerCase() === "production";
   const domain = cookieDomain();
   const sameSite = sessionSameSite();
 
-  res.clearCookie(getAdminCookieName(), {
+  res.clearCookie(name, {
     httpOnly: true,
     secure: isProd,
     sameSite,
-    path: "/",
+    path,
     ...(domain ? { domain } : {}),
   });
 }
 
-export function clearUserCookie(res) {
-  const isProd = s(cfg.APP_ENV).toLowerCase() === "production";
-  const domain = cookieDomain();
-  const sameSite = sessionSameSite();
+export function clearAdminCookie(res) {
+  clearCookieWithOptions(res, getAdminCookieName(), "/");
+  clearCookieWithOptions(res, getAdminCookieName(), "/api");
+  clearCookieWithOptions(res, getAdminCookieName(), "/admin");
+}
 
-  res.clearCookie(getUserCookieName(), {
-    httpOnly: true,
-    secure: isProd,
-    sameSite,
-    path: "/",
-    ...(domain ? { domain } : {}),
-  });
+export function clearUserCookie(res) {
+  clearCookieWithOptions(res, getUserCookieName(), "/");
+  clearCookieWithOptions(res, getUserCookieName(), "/api");
+  clearCookieWithOptions(res, getUserCookieName(), "/auth");
 }
 
 export function parseCookies(req) {
@@ -144,6 +142,10 @@ export function parseCookies(req) {
     const v = part.slice(i + 1).trim();
     if (!k) return;
 
+    if (Object.prototype.hasOwnProperty.call(out, k)) {
+      return;
+    }
+
     try {
       out[k] = decodeURIComponent(v);
     } catch {
@@ -152,6 +154,28 @@ export function parseCookies(req) {
   });
 
   return out;
+}
+
+function getAllCookieValues(req, cookieName) {
+  const raw = req?.headers?.cookie || "";
+  const values = [];
+
+  raw.split(";").forEach((part) => {
+    const i = part.indexOf("=");
+    if (i <= 0) return;
+
+    const k = part.slice(0, i).trim();
+    const v = part.slice(i + 1).trim();
+    if (!k || k !== cookieName) return;
+
+    try {
+      values.push(decodeURIComponent(v));
+    } catch {
+      values.push(v);
+    }
+  });
+
+  return values.filter(Boolean);
 }
 
 function getAdminSessionSecret() {
@@ -482,15 +506,31 @@ export function clearAdminFailedAttempts(req) {
 }
 
 export function readAdminSessionFromRequest(req) {
+  const cookieName = getAdminCookieName();
+  const values = getAllCookieValues(req, cookieName);
+
+  for (const token of values) {
+    const checked = verifyAdminSessionToken(token);
+    if (checked?.ok) return checked;
+  }
+
   const cookies = parseCookies(req);
-  const token = cookies[getAdminCookieName()] || "";
-  return verifyAdminSessionToken(token);
+  const fallbackToken = cookies[cookieName] || "";
+  return verifyAdminSessionToken(fallbackToken);
 }
 
 export function readUserSessionFromRequest(req) {
+  const cookieName = getUserCookieName();
+  const values = getAllCookieValues(req, cookieName);
+
+  for (const token of values) {
+    const checked = verifyUserSessionToken(token);
+    if (checked?.ok) return checked;
+  }
+
   const cookies = parseCookies(req);
-  const token = cookies[getUserCookieName()] || "";
-  return verifyUserSessionToken(token);
+  const fallbackToken = cookies[cookieName] || "";
+  return verifyUserSessionToken(fallbackToken);
 }
 
 export function requireAdminSession(req, res, next) {
@@ -522,7 +562,7 @@ export function requireUserSession(req, res, next) {
       ok: false,
       error: "Unauthorized",
       reason: session?.error || "invalid session",
-      marker: "REQUIRE_USER_SESSION_DEBUG_V1",
+      marker: "REQUIRE_USER_SESSION_DEBUG_V2",
     });
   }
 
