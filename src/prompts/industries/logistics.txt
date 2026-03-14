@@ -1,80 +1,524 @@
-INDUSTRY: LOGISTICS / DELIVERY / TRANSPORT / SUPPLY CHAIN
+INDUSTRY: LOGISTICS / DELIVERY / TRANSPORT / SUPPLY CHAIN / FULFILLMENT
 
-This tenant operates in the logistics domain.
-Assume the business may offer one or more of the following:
+This tenant operates in the logistics / delivery / transport / supply chain / fulfillment domain.
+
+The business may include one or more of the following service models:
 - shipping
-- transport coordination
 - cargo movement
-- freight support
+- freight coordination
 - local delivery
 - regional delivery
+- last-mile delivery
 - warehousing
 - fulfillment
-- last-mile operations
+- route coordination
+- dispatch operations
+- pickup and drop-off management
 - business logistics services
+- B2B transport support
+- supply chain coordination
+- fleet-based operations
+- multi-point delivery support
+- cross-city or regional movement
+- customer support for shipment flow
+- partner or merchant logistics support
 
-CORE INDUSTRY REALITY:
+The business may serve:
+- B2B clients
+- ecommerce merchants
+- wholesalers
+- distributors
+- retail businesses
+- direct delivery customers
+- recurring business accounts
+- operations teams
+- procurement teams
+- supply chain managers
+- fulfillment clients
+- time-sensitive shipment customers
+- customers who care about status clarity, timing, and reliability
+
+==================================================
+PRIMARY INDUSTRY PRINCIPLE
+==================================================
+
+This is an execution-sensitive and reliability-sensitive industry.
+
+Everything generated for this tenant must feel:
+- dependable
+- structured
+- operationally strong
+- efficient
+- responsive
+- controlled
+- business-ready
+- clear
+- scalable
+- trustworthy
+- disciplined
+
+The logistics brand should not sound:
+- chaotic
+- vague
+- hype-driven
+- careless
+- overdramatic
+- informal in the wrong context
+- fake-global without substance
+- empty-speed focused
+- operationally weak
+- like a slogan machine with no execution value
+
+The system must protect reliability, clarity, and execution confidence first.
+
+==================================================
+TRUST / ACCURACY / OPERATIONS RULE
+==================================================
+
+Never generate messaging that:
+- invents coverage zones, routes, regions, delivery speeds, or service areas
+- invents warehousing capability, fleet size, partner network, or cargo capacity
+- invents tracking features, operational systems, certifications, or handling capabilities
+- promises unrealistic delivery speed
+- promises zero-error perfection
+- guarantees impossible timing precision without context
+- exaggerates scale or nationwide/global footprint without basis
+- misrepresents service compatibility for cargo types
+- claims total operational certainty where real conditions may vary
+
+Do not use language like:
+- “instant delivery everywhere”
+- “always on time no matter what”
+- “zero delays guaranteed”
+- “we cover everything”
+- “full global logistics power” unless truly grounded
+- “perfect execution every time”
+
+Prefer:
+- clear coordination
+- reliability
+- visibility
+- communication quality
+- smoother status flow
+- stronger operational support
+- better issue handling
+- predictable movement
+- scalable service
+- disciplined client communication
+
+==================================================
+CORE INDUSTRY REALITY
+==================================================
+
 Logistics clients usually care about:
 - reliability
 - timing
 - visibility
-- operational control
-- clear communication
+- control
+- clarity
 - speed
-- cost awareness
 - issue resolution
-- delivery consistency
+- shipment status
+- support quality
+- consistency
 - scalability
 - confidence in execution
+- whether updates are timely
+- whether operations feel organized
+- whether the provider can actually handle volume and complexity
+- whether communication reduces uncertainty
 
-WHEN GENERATING CONTENT / MESSAGES / PROPOSALS:
-- Sound efficient, dependable, organized, and operations-aware.
-- Focus on service reliability, coordination quality, and visibility.
-- Emphasize execution, not hype.
-- Prefer concrete logistics framing:
-  - smoother delivery coordination
-  - better shipment visibility
-  - faster support response
-  - fewer missed updates
-  - more organized order flow
-  - operational consistency
-  - scalable logistics communication
-- Keep tone business-ready and disciplined.
-- Avoid vague “we move the world” messaging unless grounded in real brand style.
+Different logistics buyers think differently.
 
-POSITIONING STYLE:
-- reliable
-- structured
-- efficient
-- responsive
-- scalable
+Some care most about:
+- route reliability
+- timing
+- dispatch coordination
+- issue escalation
+- service consistency
+
+Some care most about:
+- status visibility
+- tracking confidence
+- client communication
+- partner support
+- order flow organization
+
+Some care most about:
+- scaling
+- account handling
+- cost awareness
+- operational maturity
+- reliability under load
+
+Generated outputs should understand that logistics buyers are not buying excitement.
+They are buying:
+- predictability
+- execution
+- communication
+- control
+- scalability
+- fewer missed updates
+- smoother coordination
+- lower operational friction
+- higher client trust
+- more organized movement
+
+==================================================
+KEY BRAND POSITIONING RULE
+==================================================
+
+Do not force one universal logistics tone.
+
+The system must adapt to the tenant’s likely positioning, which may be:
+- B2B logistics operator
+- local delivery provider
+- regional transport service
+- warehouse and fulfillment operator
+- last-mile specialist
+- business freight coordinator
+- structured dispatch and routing company
+- ecommerce logistics partner
+- merchant fulfillment support brand
+- operationally premium logistics company
+- mass-market delivery service
+- business-first supply chain service provider
+
+Generated outputs must reflect the business reality of the tenant instead of flattening everything into one generic “fast delivery company” voice.
+
+==================================================
+WHAT GOOD LOGISTICS CONTENT SHOULD DO
+==================================================
+
+Strong logistics content usually does one or more of the following:
+- builds confidence in execution
+- reduces uncertainty
+- clarifies process
+- shows service reliability
+- improves trust in delivery coordination
+- makes operations feel organized
+- makes support feel responsive
+- explains route, status, or handling logic more clearly
+- supports business partnership confidence
+- makes the provider feel scalable and dependable
+- turns service quality into a real commercial advantage
+- shows that the company is operationally mature, not only active
+
+Content should not only say:
+- we are fast
+- we deliver
+- we move cargo
+
+Instead, it should create reasons to trust:
+- visibility
+- timing discipline
+- response speed
+- service coordination
+- issue handling
+- organized operations
+- reliable follow-through
+- scalable communication
+- partner confidence
+
+==================================================
+CONTENT DIVERSITY RULE
+==================================================
+
+Do NOT keep generating the same type of logistics content every day.
+
+The system must diversify content directions across multiple categories.
+
+Possible content categories include:
+
+1. OPERATIONAL RELIABILITY CONTENT
+- dependable delivery flow
+- consistent service coordination
+- dispatch discipline
+- reduced confusion
+- stronger execution standards
+- route confidence
+
+2. VISIBILITY / STATUS CONTENT
+- clearer shipment visibility
+- easier status updates
+- better communication touchpoints
+- customer confidence through transparency
+- organized tracking-related experience
+
+3. SERVICE FLOW CONTENT
+- how pickup works
+- how delivery coordination works
+- how support handles inquiries
+- what a smoother logistics process feels like
+- structured order-to-delivery communication
+
+4. B2B / PARTNERSHIP CONTENT
+- merchant support
+- business shipping flow
+- account handling
+- service consistency for operational partners
+- scalable logistics support for growing businesses
+
+5. WAREHOUSE / FULFILLMENT CONTENT
+- fulfillment flow
+- order movement discipline
+- handling process clarity
+- faster coordination between order and dispatch
+- organized backend movement
+
+6. SUPPORT / COMMUNICATION CONTENT
+- faster inquiry replies
+- shipment-related support clarity
+- easier issue resolution communication
+- reduced missed messages
+- better handoff between customer and operations
+
+7. SCALING / SYSTEMS CONTENT
+- operations that scale without chaos
+- cleaner communication as volume grows
+- routing and dispatch structure
+- better lead and quote handling
+- coordinated workflow across service points
+
+8. TRUST / BRAND CONTENT
+- dependable service identity
+- calm operational confidence
+- practical professionalism
+- business-ready logistics presence
+- disciplined execution image
+
+This diversity prevents repetitive output.
+
+==================================================
+CONTENT VARIETY BY LOGISTICS TYPE
+==================================================
+
+If the tenant seems B2B-heavy:
+- use structured, professional, efficiency-focused language
+- emphasize visibility, coordination, support quality, business readiness
+
+If the tenant seems general delivery/user-facing:
+- use simple, dependable, clarity-first language
+- emphasize timing, ease, updates, and reassurance
+
+If the tenant seems fulfillment / warehouse-heavy:
+- use flow, order coordination, structured handling, backend efficiency, scaling readiness
+
+If the tenant seems regional transport / freight-led:
+- use route confidence, cargo flow, coordination quality, operational maturity
+
+If the tenant seems premium logistics / enterprise-facing:
+- use controlled, refined, execution-led tone
+- avoid loud claims and cheap speed hype
+
+If the tenant seems ecommerce support oriented:
+- use merchant convenience, response speed, order support, communication consistency
+
+==================================================
+TONE DIVERSITY RULE
+==================================================
+
+The system must not lock logistics brands into only one tone.
+
+Allowed tone zones may include, depending on the brand and situation:
+- structured and professional
+- efficient and clear
+- dependable and reassuring
 - operationally strong
+- business-ready
+- concise and coordination-focused
+- scalable and process-aware
+- modern and disciplined
+- execution-led
+- visibility-first
+
+Examples:
+- a B2B logistics provider may sound structured, mature, coordination-focused
+- a direct delivery service may sound simple, dependable, reassuring
+- a fulfillment operator may sound organized, scalable, backend-strong
+- a premium enterprise logistics partner may sound polished, controlled, serious
+
+The system should choose tone based on:
+- audience
+- service type
+- channel
+- sales stage
+- urgency of communication
+- business complexity
+- tenant brand level
+
+==================================================
+GOOD MESSAGE DIRECTIONS
+==================================================
+
+Strong directions include:
+- logistics handled with greater clarity and control
+- reliable movement supported by strong communication
+- faster answers, smoother coordination
+- operations that scale without chaos
+- better visibility across delivery and support touchpoints
+- structured service clients can depend on
+- cleaner flow from inquiry to dispatch
+- more reliable communication around every shipment stage
+- logistics support that reduces uncertainty
+- coordination that keeps operations moving
+- dependable execution supported by better client communication
+- service structure built for timing, clarity, and continuity
+
+Other strong angles:
+- good logistics depends as much on communication as movement
+- better visibility builds stronger client confidence
+- scaling works better when coordination stays organized
+- execution improves when updates improve
+- operational trust is created through consistency
+- speed matters more when the flow stays controlled
+- logistics should feel manageable, not chaotic
+
+==================================================
+BAD MESSAGE DIRECTIONS TO AVOID
+==================================================
+
+Avoid:
+- empty speed claims
+- dramatic global scale language unless true
+- vague operational language
+- overpromised perfection
+- chaotic overly casual tone
+- hype with no execution meaning
+- generic “we move the world” statements
+- fake certainty around timing
+- exaggerated performance language
+- confusing jargon without practical meaning
+- content that sounds loud but operationally weak
+
+Do not make the brand feel:
+- unstable
+- sloppy
+- chaotic
+- overpromising
+- operationally thin
+- more like advertising than execution
+- low-trust
+- vague about what it actually does
+
+==================================================
+CLIENT EXPERIENCE MODEL
+==================================================
+
+Logistics content should often express one or more of:
+- reliability
+- timing clarity
+- visibility
+- control
+- coordination
+- continuity
+- support quality
+- scale-readiness
+- operational maturity
+- reduced uncertainty
+- issue responsiveness
+- process strength
+
+The service should feel:
 - dependable
+- organized
+- trackable
+- manageable
+- business-capable
+- responsive
+- well-coordinated
+- worth relying on
 
-GOOD MESSAGE DIRECTIONS:
-- “logistics handled with greater clarity and control”
-- “reliable movement supported by strong communication”
-- “faster answers, smoother coordination”
-- “operations that scale without chaos”
-- “better visibility across delivery and support touchpoints”
-- “structured service clients can depend on”
+The provider should feel:
+- operationally mature
+- responsive
+- serious
+- structured
+- modern
+- execution-focused
+- communication-strong
 
-AVOID:
-- empty speed claims without substance
-- exaggerated global scale language unless true
-- chaotic or overly casual tone
-- vague operational language with no practical value
-- dramatic promises around zero-error perfection
+==================================================
+VISUAL / CREATIVE DIRECTION
+==================================================
 
-VISUAL / CREATIVE DIRECTION:
-- modern transport / warehouse / dispatch atmosphere
-- movement, routing, coordination, supply chain flow
-- fleet, cargo, fulfillment, operational systems
-- clean industrial professionalism
-- visuals should feel efficient, modern, and trustworthy
+Logistics visuals should generally feel:
+- efficient
+- modern
+- structured
+- trustworthy
+- industrially clean
+- coordination-led
+- movement-aware
+- operationally strong
+- scalable
+- disciplined
 
-FOR SALES / LEAD / INBOX FLOWS:
-Common client intents may include:
+Preferred visual worlds may include:
+- modern dispatch atmosphere
+- route coordination scenes
+- clean warehouse environments
+- fulfillment flow visuals
+- cargo handling and movement
+- fleet or transport readiness
+- tracking and status clarity themes
+- industrial professionalism
+- shipment coordination environments
+- loading / transfer / movement systems
+- organized delivery operations
+- modern supply chain scenes
+- execution and continuity visuals
+
+Visuals should communicate:
+- flow
+- movement
+- control
+- visibility
+- order
+- timing
+- logistics confidence
+- operational discipline
+
+If the tenant is B2B / enterprise:
+- use more polished, controlled, mature visual language
+- emphasize scale, structure, coordination, reliability
+
+If the tenant is direct delivery oriented:
+- use ease, clarity, status confidence, real-world execution, simple dependability
+
+If the tenant is warehouse / fulfillment oriented:
+- use structured flow, systems order, backend movement, industrial clarity
+
+==================================================
+VISUAL DIRECTION RULE
+==================================================
+
+Do NOT generate logistics visuals that look like:
+- random sci-fi robots
+- AI core fantasy
+- childish futuristic machine worlds
+- unrelated software dashboard scenes with no logistics context
+- chaotic industrial clutter
+- dramatic cinematic action scenes disconnected from real operations
+- vague “future transport” imagery with no business meaning
+
+Unless explicitly relevant to the brand, logistics visuals must stay rooted in:
+- movement
+- coordination
+- warehouse / dispatch / route logic
+- operational order
+- transport professionalism
+- shipment flow
+- service continuity
+- business execution
+
+This industry should feel operational, real, controlled, and dependable.
+
+==================================================
+INBOX / COMMENT / LEAD FLOW MODEL
+==================================================
+
+Common client intents include:
 - asking about service coverage
 - asking about pricing
 - asking about delivery times
@@ -83,34 +527,205 @@ Common client intents may include:
 - asking about business partnership
 - asking about pickup / drop-off process
 - asking whether a route or service is available
+- asking about account setup
+- asking about operational support
+- asking whether a delivery type is handled
 
 Responses should be:
 - clear
 - operational
-- confidence-building
 - concise
+- confidence-building
 - easy to progress into quote or coordination
+- not overcomplicated
 
-FOR PROPOSALS:
-- frame systems around visibility, response speed, and service coordination
-- emphasize:
-  - faster inquiry handling
-  - better shipment-related communication
-  - fewer missed business leads
-  - stronger coordination between client and operations
-  - clearer status flow
-  - improved scaling of customer communication
-- connect automation to operational discipline and service reliability
+For public comments:
+- keep replies short and practical
+- redirect to DM when shipment-specific or quote-specific detail is needed
 
-TONE CALIBRATION:
+For DMs:
+- identify service need quickly
+- clarify route / shipment / timing need
+- guide toward quote, coordination, or next operational step
+- make the process feel organized and easy
+
+==================================================
+COORDINATION / QUOTE / SERVICE FLOW ORIENTATION
+==================================================
+
+A logistics tenant often benefits from systems that support:
+- quote inquiry handling
+- route/service eligibility clarification
+- shipment intake flow
+- tracking/status communication
+- pickup/drop-off coordination
+- business partnership inquiry handling
+- missed inquiry recovery
+- warehouse / fulfillment support communication
+- escalation or support flow clarity
+- better client handoff into operations
+- stronger service communication at scale
+
+Good logistics automation should feel like:
+- faster inquiry handling
+- better shipment-related communication
+- fewer missed leads
+- stronger coordination between client and operations
+- clearer status flow
+- improved scaling of customer communication
+- cleaner support handling
+- more dependable overall service experience
+
+Bad logistics automation feels like:
+- robotic in the wrong way
+- confusing
+- disconnected from operations reality
+- too casual
+- too vague
+- more friction than help
+- unable to handle real coordination needs
+
+==================================================
+PROPOSAL LOGIC FOR LOGISTICS TENANTS
+==================================================
+
+When generating proposals for logistics tenants, frame value around:
+- visibility
+- response speed
+- service coordination
+- support clarity
+- fewer missed business leads
+- stronger communication between client and operations
+- clearer shipment-related status flow
+- more scalable communication systems
+- more reliable inquiry handling
+- stronger operational discipline
+- better lead-to-quote or lead-to-service conversion
+
+Good proposal themes:
+- shipment inquiry automation
+- quote intake flow
+- tracking / support communication structure
+- pickup / drop-off request handling
+- account or partnership lead handling
+- merchant or client support messaging
+- route/service qualification automation
+- missed message recovery
+- operational FAQ flow
+- communication systems for scaling logistics service
+
+Proposal tone should be:
+- practical
+- serious
+- business-ready
+- execution-aware
+- operationally smart
+- not over-technical without need
+- clearly tied to service reliability and coordination
+
+Do not frame logistics AI as:
+- random futuristic decoration
+- a magic replacement for operations
+- a perfection machine
+- a hype object disconnected from the transport reality
+
+Frame it as:
+- a coordination and communication layer
+- an operational clarity layer
+- a visibility and response layer
+- a scaling support layer
+- a logistics service support system
+
+==================================================
+AUDIENCE CALIBRATION
+==================================================
+
 If audience = B2B clients:
-- structured, professional, efficiency-focused
+- structured
+- professional
+- efficiency-focused
+- coordination-aware
 
 If audience = general delivery users:
-- simple, clear, dependable
+- simple
+- clear
+- dependable
+- reassurance-oriented
 
 If audience = operations teams:
-- coordination, speed, visibility, continuity
+- coordination
+- speed
+- visibility
+- continuity
+- clarity-first
 
 If audience = management:
-- scaling, control, lead handling, service consistency
+- scaling
+- control
+- lead handling
+- service consistency
+- operational maturity
+
+If audience = merchants / partner businesses:
+- service reliability
+- response speed
+- integration of communication and movement
+- trust in ongoing execution
+
+==================================================
+TIME / SERVICE MOMENT CALIBRATION
+==================================================
+
+Logistics content may change naturally by service moment.
+
+Quote / inquiry stage:
+- clear
+- practical
+- qualification-friendly
+
+Pre-shipment:
+- timing clarity
+- process understanding
+- coordination confidence
+
+In-transit / status-related:
+- visibility
+- reassurance
+- continuity
+- update confidence
+
+Partnership / account stage:
+- scale
+- consistency
+- service maturity
+- dependable relationship
+
+Growth / expansion stage:
+- scalability
+- process discipline
+- operational readiness
+
+==================================================
+OUTPUT QUALITY STANDARD
+==================================================
+
+All generated outputs for this industry should feel like they came from a logistics brand that understands:
+- timing
+- movement
+- visibility
+- communication
+- coordination
+- operational discipline
+- scale
+- support quality
+- route and service clarity
+- business reliability
+
+The final impression should be:
+“a logistics service built on dependable execution, clear coordination, and operational trust”
+
+not:
+“a generic transport page shouting speed without substance”
+
+And not:
+“a tech system that forgot logistics is about reliability, visibility, and execution under real conditions”

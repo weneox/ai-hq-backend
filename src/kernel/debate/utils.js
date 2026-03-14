@@ -9,10 +9,24 @@ export function clamp(n, a, b) {
 export function withTimeout(promise, ms, label = "timeout") {
   const t = Number(ms);
   if (!Number.isFinite(t) || t <= 0) return promise;
-  return Promise.race([
-    promise,
-    new Promise((_, rej) => setTimeout(() => rej(new Error(label)), t)),
-  ]);
+
+  let timer = null;
+
+  return new Promise((resolve, reject) => {
+    timer = setTimeout(() => {
+      reject(new Error(label));
+    }, t);
+
+    Promise.resolve(promise)
+      .then((value) => {
+        if (timer) clearTimeout(timer);
+        resolve(value);
+      })
+      .catch((err) => {
+        if (timer) clearTimeout(timer);
+        reject(err);
+      });
+  });
 }
 
 export async function mapLimit(items, limit, worker) {
@@ -20,7 +34,7 @@ export async function mapLimit(items, limit, worker) {
   const out = new Array(arr.length);
   let i = 0;
 
-  const runners = Array.from({ length: Math.max(1, limit) }, async () => {
+  const runners = Array.from({ length: Math.max(1, Number(limit) || 1) }, async () => {
     while (true) {
       const idx = i++;
       if (idx >= arr.length) break;
@@ -69,8 +83,13 @@ export function uniqStrings(arr = []) {
 
 export function truncate(s0, n) {
   const t = String(s0 || "").trim();
-  if (t.length <= n) return t;
-  return t.slice(0, Math.max(0, n - 1)).trim() + "…";
+  const max = Number(n);
+
+  if (!Number.isFinite(max) || max <= 0) return "";
+  if (t.length <= max) return t;
+  if (max === 1) return "…";
+
+  return t.slice(0, Math.max(0, max - 1)).trim() + "…";
 }
 
 export function fixMojibake(input) {
@@ -166,6 +185,7 @@ export function extractText(resp) {
       }
 
       if (typeof node.text === "string") parts.push(node.text);
+
       if (
         node.text &&
         typeof node.text === "object" &&
@@ -193,11 +213,17 @@ export function extractText(resp) {
 export function stripLeadingJunkToJsonCandidate(t) {
   const s0 = String(t || "").trim();
   if (!s0) return "";
-  const fence = s0.match(/```json\s*([\s\S]*?)\s*```/i);
-  if (fence?.[1]) return String(fence[1] || "").trim();
+
+  const fencedJson =
+    s0.match(/```json\s*([\s\S]*?)\s*```/i) ||
+    s0.match(/```\s*([\s\S]*?)\s*```/i);
+
+  if (fencedJson?.[1]) return String(fencedJson[1] || "").trim();
+
   const start = s0.indexOf("{");
   const end = s0.lastIndexOf("}");
   if (start >= 0 && end > start) return s0.slice(start, end + 1).trim();
+
   return s0;
 }
 
@@ -210,7 +236,7 @@ export function extractJsonFromText(text) {
   } catch {}
 
   const cand = stripLeadingJunkToJsonCandidate(s0);
-  if (cand && cand !== s0) {
+  if (cand) {
     try {
       return JSON.parse(cand);
     } catch {}

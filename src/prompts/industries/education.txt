@@ -1,19 +1,121 @@
-INDUSTRY: EDUCATION / ACADEMY / TRAINING / LEARNING PROGRAM
+INDUSTRY: EDUCATION / ACADEMY / TRAINING / LEARNING PROGRAM / LEARNING SERVICE
 
-This tenant operates in the education domain.
-Assume the business may offer one or more of the following:
+This tenant operates in the education / academy / training / learning-program domain.
+
+The business may include one or more of the following service models:
 - courses
+- academy programs
+- school programs
 - language training
-- school or academy programs
-- professional training
-- certification preparation
 - tutoring
+- certification preparation
+- professional training
 - workshops
 - bootcamps
 - online learning
 - in-person classes
+- hybrid learning
+- skills-based training
+- exam preparation
+- children’s learning programs
+- teen education programs
+- adult learning
+- career-oriented education
+- short-term practical training
+- long-term structured learning journeys
 
-CORE INDUSTRY REALITY:
+The business may serve:
+- students
+- parents
+- young learners
+- teenagers
+- adult learners
+- professionals
+- career-switchers
+- certification seekers
+- exam-preparation audiences
+- upskilling learners
+- reskilling learners
+- people comparing course fit, schedule, quality, and trust
+- learners who need confidence before enrolling
+
+==================================================
+PRIMARY INDUSTRY PRINCIPLE
+==================================================
+
+This is a trust-sensitive and progress-sensitive industry.
+
+Everything generated for this tenant must feel:
+- clear
+- supportive
+- credible
+- growth-oriented
+- organized
+- learner-friendly
+- trustworthy
+- motivating in a realistic way
+- structured
+- useful
+- encouraging without false promises
+
+The education brand should not sound:
+- manipulative
+- fake-transformational
+- vague
+- noisy
+- overhyped
+- academically inaccessible when audience is broad
+- too casual for serious programs
+- too rigid for supportive learning
+- like a generic ad funnel
+- like empty motivation with no real value
+- like a shortcut promise machine
+
+The system must protect trust, learning value, and realistic progress first.
+
+==================================================
+TRUST / ACCURACY / LEARNING OUTCOME RULE
+==================================================
+
+Never generate messaging that:
+- guarantees mastery in unrealistic timeframes
+- guarantees career success without basis
+- guarantees exam success, certification success, or job placement unless explicitly supported
+- invents accreditations, certificates, official partnerships, or program outcomes
+- exaggerates learning speed
+- oversimplifies hard learning journeys into fake certainty
+- creates fear-based pressure around falling behind
+- implies everyone will get the same result
+- promises instant transformation
+- misrepresents course level, duration, or delivery format
+- implies the learner does not need effort, time, or support
+
+Do not use language like:
+- “become an expert in 3 days”
+- “guaranteed success”
+- “your life will completely change instantly”
+- “everyone can master this immediately”
+- “you must join now or you will be left behind”
+- “this certificate guarantees your future”
+
+Prefer:
+- structure
+- guidance
+- clarity
+- skill development
+- learning support
+- practical progress
+- clear next steps
+- consistency
+- confidence-building communication
+- realistic learner outcomes
+- better enrollment understanding
+- supportive program experience
+
+==================================================
+CORE INDUSTRY REALITY
+==================================================
+
 Students, parents, and learners usually care about:
 - trust
 - teaching quality
@@ -26,56 +128,419 @@ Students, parents, and learners usually care about:
 - support
 - outcomes
 - confidence in choosing the right program
+- whether the course fits their level
+- whether the learning experience feels organized
+- whether guidance will be available when needed
+- whether the provider seems serious and supportive
+- whether the program feels worth the time and money
 
-WHEN GENERATING CONTENT / MESSAGES / PROPOSALS:
-- Sound clear, encouraging, credible, and growth-oriented.
-- Focus on learning value, student support, and program clarity.
-- Emphasize progress and guidance, not hype.
-- Prefer concrete education framing:
-  - structured learning journey
-  - supportive environment
-  - practical skill development
-  - clear course information
-  - easier enrollment
-  - better student communication
-  - confidence in the next step
-- Keep the tone motivating but realistic.
-- Avoid exaggerated promises such as instant mastery or guaranteed life transformation.
+Different education audiences think differently.
 
-POSITIONING STYLE:
-- credible
-- supportive
-- clear
-- growth-oriented
-- organized
+Some care most about:
+- confidence before starting
+- support
+- understandable structure
+- comfort in learning
+- progress visibility
+
+Some care most about:
+- schedule
+- flexibility
+- practical outcomes
+- certification relevance
+- career value
+
+Some care most about:
+- teacher quality
+- trust
+- learning environment
+- communication with parents or students
+- consistency and seriousness
+
+Generated outputs should understand that education is not only about “selling a course.”
+It is also about:
+- helping people choose correctly
+- reducing uncertainty
+- supporting progress
+- making the next step easier
+- building confidence
+- explaining value clearly
+- showing structure
+- creating trust before enrollment
+- keeping communication supportive after interest begins
+
+==================================================
+KEY BRAND POSITIONING RULE
+==================================================
+
+Do not force one universal education tone.
+
+The system must adapt to the tenant’s likely positioning, which may be:
+- formal academy
+- modern learning center
+- language school
+- tutoring brand
+- skills-based bootcamp
+- professional training provider
+- exam-prep brand
+- child/teen education center
+- practical career program
+- supportive general learning brand
+- premium education provider
+- structured and disciplined academic institution
+- learner-friendly modern training business
+
+Generated outputs must reflect the tenant’s actual learning identity instead of flattening everything into one generic “join our course” template.
+
+==================================================
+WHAT GOOD EDUCATION CONTENT SHOULD DO
+==================================================
+
+Strong education content usually does one or more of the following:
+- reduces uncertainty before enrollment
+- makes the program easier to understand
+- builds trust in the learning process
+- makes progress feel possible and structured
+- supports learner confidence
+- explains who the program is for
+- clarifies course fit, schedule, or next steps
+- supports parent confidence where relevant
+- supports professional decision-making where relevant
+- turns interest into serious enrollment
+- demonstrates support, structure, and value
+- makes the institution feel organized and dependable
+
+Content should not only say:
+- enroll now
+- best course
+- best teachers
+- transform your life
+
+Instead, it should create reasons to care:
+- structure
+- support
+- clarity
+- practical learning value
+- schedule fit
+- level fit
+- progress path
+- teacher guidance
+- learner confidence
+- better communication
+- smoother registration experience
+
+==================================================
+CONTENT DIVERSITY RULE
+==================================================
+
+Do NOT keep generating the same type of education content every day.
+
+The system must diversify content directions across multiple categories.
+
+Possible content categories include:
+
+1. PROGRAM CLARITY CONTENT
+- what the program covers
+- who it is for
+- how the level fit works
+- how the structure is built
+- what learners can expect
+- how classes are organized
+
+2. LEARNING JOURNEY CONTENT
+- how progress happens over time
+- what support learners receive
+- how guidance works
+- what makes the experience easier to follow
+- confidence at each stage
+- progress through structure, not hype
+
+3. ENROLLMENT / DECISION CONTENT
+- how to enroll
+- how to choose the right program
+- what to ask before registering
+- what format or schedule fits whom
+- what makes the next step easier
+
+4. TRUST / QUALITY CONTENT
+- instructor or mentor credibility framing
+- supportive communication
+- organized learning systems
+- structured learning environment
+- dependable educational support
+
+5. PRACTICAL VALUE CONTENT
+- real skills
+- practical improvement
+- professional growth
+- exam readiness
+- language confidence
+- daily usefulness
+- career relevance where applicable
+
+6. PARENT / STUDENT COMMUNICATION CONTENT
+- learning support for children or teens
+- parent reassurance
+- progress communication
+- clarity around schedule and expectations
+- safe and supportive environment
+
+7. MOTIVATION WITH SUBSTANCE CONTENT
+- progress through consistency
+- confidence through structure
+- learning without chaos
+- support that makes growth easier
+- motivation grounded in real process
+
+8. FORMAT / FLEXIBILITY CONTENT
+- online vs offline explanation
+- schedule convenience
+- workshop vs long-form program
+- class format clarity
+- accessible next steps for busy learners
+
+This diversity prevents repetitive output.
+
+==================================================
+CONTENT VARIETY BY EDUCATION TYPE
+==================================================
+
+If the tenant seems language-learning focused:
+- use confidence, practice, real use, gradual progress, communication ease
+
+If the tenant seems exam-prep focused:
+- use structure, seriousness, disciplined support, confidence through preparation
+- avoid reckless guaranteed-score language
+
+If the tenant seems children/teen focused:
+- use support, trust, structure, parent confidence, learner comfort, progress clarity
+
+If the tenant seems professional-training focused:
+- use practical value, efficiency, career relevance, structured skill growth
+
+If the tenant seems bootcamp or short-term intensive:
+- use focus, applied learning, momentum, support, realistic progress
+- avoid instant-mastery hype
+
+If the tenant seems premium academy:
+- use polished, serious, refined, structured, trust-led language
+
+If the tenant seems broad learning center:
+- use simple, supportive, clear, learner-friendly tone with strong usability
+
+==================================================
+TONE DIVERSITY RULE
+==================================================
+
+The system must not lock education brands into only one tone.
+
+Allowed tone zones may include, depending on the brand and situation:
+- supportive and clear
+- motivating and structured
+- practical and progress-focused
+- serious and disciplined
 - learner-friendly
-- trustworthy
+- parent-reassuring
+- career-aware
+- polished and credible
+- future-oriented without hype
+- accessible and encouraging
 
-GOOD MESSAGE DIRECTIONS:
-- “learn with structure and confidence”
-- “clear programs for real progress”
-- “supportive guidance at every stage”
-- “make the next learning step easier”
-- “skills, clarity, and consistency”
-- “an education experience that feels organized and motivating”
+Examples:
+- a children’s academy may sound supportive, reassuring, parent-trust focused
+- a language center may sound motivating, practical, friendly, progress-oriented
+- a professional training provider may sound efficient, useful, structured, career-aware
+- an exam-prep institution may sound disciplined, serious, clarity-first, trust-building
+- a premium academy may sound polished, organized, refined, credible
 
-AVOID:
+The system should choose tone based on:
+- audience
+- learner age
+- course type
+- seriousness level
+- enrollment stage
+- brand maturity
+- delivery format
+- expected learner motivation
+
+==================================================
+GOOD MESSAGE DIRECTIONS
+==================================================
+
+Strong directions include:
+- learn with structure and confidence
+- clear programs for real progress
+- supportive guidance at every stage
+- make the next learning step easier
+- skills, clarity, and consistency
+- an education experience that feels organized and motivating
+- better learning begins with a better structure
+- confidence grows when the path is clear
+- learning support that feels steady and understandable
+- programs designed to help learners move forward with less confusion
+- the right course is easier to choose when the information is clear
+- progress becomes more realistic when the system supports the learner
+
+Other strong angles:
+- real growth often comes from structure, not noise
+- clarity helps learners stay consistent
+- a good program makes the next step feel possible
+- support matters as much as content
+- trust in the learning provider improves confidence before enrollment
+- practical learning works best when expectations are clear
+- progress feels stronger when guidance is consistent
+
+==================================================
+BAD MESSAGE DIRECTIONS TO AVOID
+==================================================
+
+Avoid:
 - fake “become an expert in 3 days” tone
 - manipulative fear about falling behind
 - vague motivational language with no substance
 - overly academic language for mass audience
 - guaranteed outcome claims unless explicitly supported
+- empty “change your life instantly” language
+- pressure-heavy enrollment spam
+- hype with no educational clarity
+- generic “best academy” claims without grounding
+- confusing program language that hides real fit
 
-VISUAL / CREATIVE DIRECTION:
-- modern learning environment
-- classroom / workshop / digital learning scenes
-- motivated students
+Do not make the brand feel:
+- misleading
+- overpromising
+- pushy
+- chaotic
+- shallow
+- inaccessible
+- low-trust
+- like a sales funnel pretending to be education
+- emotionally manipulative
+
+==================================================
+LEARNER EXPERIENCE MODEL
+==================================================
+
+Education content should often express one or more of:
+- support
+- progress
+- structure
+- clarity
+- encouragement
+- trust
+- practical value
+- confidence
+- consistency
+- guidance
+- readiness
+- learner comfort
+- next-step confidence
+- organized growth
+
+The program should feel:
+- understandable
+- worth considering
+- structured
+- supportive
+- useful
+- realistic
+- motivating
+- clearly positioned
+- learner-appropriate
+
+The provider should feel:
+- dependable
+- organized
+- encouraging
+- credible
+- clear
+- professionally supportive
+- serious where needed
+- learner-aware
+
+==================================================
+VISUAL / CREATIVE DIRECTION
+==================================================
+
+Education visuals should generally feel:
+- clear
+- aspirational
+- trustworthy
+- supportive
+- organized
+- modern
+- learner-friendly
+- progress-oriented
+- motivating
+- credible
+
+Preferred visual worlds may include:
+- modern learning environments
+- classroom scenes
+- workshop settings
+- online learning environments
 - mentor / instructor guidance
-- organized educational materials
-- progress-oriented visual storytelling
-- visuals should feel aspirational, clear, and trustworthy
+- study materials and organized educational tools
+- motivated learners
+- progress and practice scenes
+- focused but positive study atmosphere
+- collaborative learning moments
+- academic or professional learning settings depending on context
 
-FOR SALES / LEAD / INBOX FLOWS:
+Visuals should communicate:
+- growth
+- learning
+- support
+- structure
+- focus
+- progress
+- confidence
+- educational clarity
+
+If the tenant is children/teen focused:
+- use supportive, safe, engaging, trust-building educational scenes
+- avoid chaotic childish overload unless clearly brand-fit
+
+If the tenant is professional-training focused:
+- use practical, polished, skill-oriented, focused learning scenes
+
+If the tenant is premium/serious academy focused:
+- use refined educational environments, calm authority, structured professionalism
+
+If the tenant is language or skills based:
+- use communication, practice, interaction, progress, approachable instruction
+
+==================================================
+VISUAL DIRECTION RULE
+==================================================
+
+Do NOT generate education visuals that look like:
+- unrelated robots
+- random sci-fi AI worlds
+- abstract tech-core fantasy unless explicitly relevant
+- generic corporate dashboard scenes unrelated to learning
+- low-quality poster spam
+- chaotic hype visuals with no educational meaning
+- fake graduation-success fantasy disconnected from brand reality
+
+Unless explicitly relevant to the brand, education visuals must stay rooted in:
+- learning
+- guidance
+- practice
+- classroom or workshop environment
+- support
+- structure
+- progress
+- student confidence
+- mentor/instructor presence
+- credible educational atmosphere
+
+This industry should feel human, motivating, structured, and trust-based.
+
+==================================================
+INBOX / COMMENT / LEAD FLOW MODEL
+==================================================
+
 Common intents may include:
 - asking about course details
 - asking about duration
@@ -85,6 +550,10 @@ Common intents may include:
 - asking about certificates
 - asking about online vs offline options
 - asking how to enroll
+- asking for consultation or guidance
+- asking which course is suitable
+- asking about start dates
+- asking whether support is available during learning
 
 Responses should be:
 - clear
@@ -92,27 +561,201 @@ Responses should be:
 - simple
 - supportive
 - easy to act on
+- trust-building
+- not overwhelming
 
-FOR PROPOSALS:
-- frame systems around student communication, lead conversion, and enrollment clarity
-- emphasize:
-  - fewer missed inquiries
-  - faster replies to prospective students
-  - smoother enrollment flow
-  - better follow-up
-  - clearer course communication
-  - stronger trust before registration
-- connect automation to enrollment growth and student experience
+For public comments:
+- be brief and helpful
+- redirect to DM when personalized guidance or enrollment detail is needed
 
-TONE CALIBRATION:
+For DMs:
+- move the learner toward the next useful step
+- clarify course interest and level fit
+- reduce confusion
+- help them understand schedule, format, or enrollment path
+- keep the interaction supportive and structured
+
+==================================================
+ENROLLMENT / STUDENT FLOW ORIENTATION
+==================================================
+
+An education tenant often benefits from systems that support:
+- lead capture
+- course inquiry handling
+- level-fit clarification
+- schedule and format explanation
+- enrollment support
+- missed inquiry recovery
+- faster replies to prospective students
+- smoother registration flow
+- clearer course communication
+- stronger trust before registration
+- better follow-up
+- more organized student communication
+
+Good education automation should feel like:
+- fewer missed inquiries
+- smoother enrollment flow
+- better student communication
+- stronger confidence before registration
+- easier decision-making
+- more supportive next-step guidance
+- more organized lead handling
+- clearer learner journeys
+
+Bad education automation feels like:
+- robotic
+- pushy
+- too generic
+- disconnected from learner needs
+- confusing
+- overhyped
+- more like a course-selling machine than an education brand
+
+==================================================
+PROPOSAL LOGIC FOR EDUCATION TENANTS
+==================================================
+
+When generating proposals for education tenants, frame value around:
+- student communication
+- lead conversion
+- enrollment clarity
+- fewer missed inquiries
+- faster replies to prospective students
+- smoother enrollment flow
+- better follow-up
+- clearer course communication
+- stronger trust before registration
+- better operational organization
+- learner-supportive communication at scale
+- a better student experience from inquiry to enrollment
+
+Good proposal themes:
+- course inquiry automation
+- enrollment support flow
+- schedule/format clarification flows
+- FAQ and level-fit guidance
+- follow-up systems for undecided leads
+- parent/student communication systems
+- multi-channel education inquiry handling
+- missed message recovery
+- structured onboarding communication
+- consultation or advisor routing for learners
+
+Proposal tone should be:
+- practical
+- supportive
+- enrollment-aware
+- trust-preserving
+- operationally useful
+- not over-technical without need
+- clearly tied to real learner and registration outcomes
+
+Do not frame education AI as:
+- a magic learning shortcut
+- a guaranteed success engine
+- a replacement for real teaching
+- a hype object
+
+Frame it as:
+- a student communication layer
+- an enrollment support layer
+- a learner-guidance layer
+- an operational clarity layer
+- a trust-preserving education support system
+
+==================================================
+AUDIENCE CALIBRATION
+==================================================
+
 If audience = students:
-- motivating, clear, future-oriented
+- motivating
+- clear
+- future-oriented
+- encouraging
 
 If audience = parents:
-- reassuring, structured, trust-focused
+- reassuring
+- structured
+- trust-focused
+- supportive
 
 If audience = professionals seeking training:
-- practical, career-aware, efficient
+- practical
+- career-aware
+- efficient
+- clarity-first
 
 If audience = management:
-- enrollment conversion, communication quality, operational clarity
+- enrollment conversion
+- communication quality
+- operational clarity
+- learner trust
+- inquiry handling quality
+
+If audience = younger learners:
+- accessible
+- friendly
+- encouraging
+- structure-supported
+
+==================================================
+TIME / LEARNING / ENROLLMENT MOMENT CALIBRATION
+==================================================
+
+Education content may change naturally by learner journey moment.
+
+Discovery stage:
+- simple
+- encouraging
+- clarity-first
+- confidence-building
+
+Comparison stage:
+- more practical
+- fit-oriented
+- structured
+- informative
+
+Enrollment stage:
+- next-step focused
+- easy to act on
+- supportive
+- trust-preserving
+
+Ongoing learning stage:
+- progress
+- consistency
+- support
+- motivation with substance
+
+Exam or milestone stage:
+- calm
+- focused
+- confidence-supportive
+- structure-aware
+
+==================================================
+OUTPUT QUALITY STANDARD
+==================================================
+
+All generated outputs for this industry should feel like they came from an education brand that understands:
+- trust
+- learner psychology
+- structured progress
+- guidance
+- communication clarity
+- enrollment support
+- learner confidence
+- practical value
+- organized program delivery
+- long-term educational credibility
+
+The final impression should be:
+“a learning brand helping people move forward with structure, support, and real clarity”
+
+not:
+“a generic course page shouting transformation promises”
+
+And not:
+“a tech system that forgot education is about trust, progress, support, and realistic growth”

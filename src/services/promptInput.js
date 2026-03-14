@@ -1,14 +1,17 @@
 // src/services/promptInput.js
-// FINAL v1.1 — normalize runtime prompt inputs for all AI HQ prompt usecases
+// FINAL v2.0 — normalize runtime prompt inputs for all AI HQ prompt usecases
 //
-// ✅ stable event-based prompt input normalization
-// ✅ draft / revise / publish / comment / trend support
+// ✅ stable event/usecase-based prompt input normalization
+// ✅ draft / revise / publish / comment / trend / analyze / fix_plan support
 // ✅ safe defaults
 // ✅ language / format normalization
 // ✅ keeps prompt payload predictable for LLM calls
-// ✅ publish flow now also accepts contentPack as approved draft source
+// ✅ publish flow also accepts contentPack as approved draft source
+// ✅ profile/brand/root-aware tenant language fallback
+// ✅ safer structured normalization
 
 import { deepFix, fixText } from "../utils/textFix.js";
+import { normalizeIndustryKey } from "../prompts/industries/index.js";
 
 function s(v) {
   return String(v ?? "").trim();
@@ -20,6 +23,20 @@ function arr(v) {
 
 function obj(v) {
   return v && typeof v === "object" && !Array.isArray(v) ? v : {};
+}
+
+function uniqStrings(list = []) {
+  const seen = new Set();
+  const out = [];
+  for (const item of list) {
+    const val = s(item);
+    if (!val) continue;
+    const key = val.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(val);
+  }
+  return out;
 }
 
 function normalizeLang(v, fallback = "az") {
@@ -40,6 +57,12 @@ function normalizeFormat(v, fallback = "image") {
   return fallback;
 }
 
+function normalizeGoal(v, fallback = "") {
+  const x = s(v).toLowerCase();
+  if (["lead", "awareness", "trust", "offer"].includes(x)) return x;
+  return fallback;
+}
+
 function safeJsonString(value) {
   try {
     if (value === null || value === undefined) return "";
@@ -51,16 +74,66 @@ function safeJsonString(value) {
 }
 
 function normalizeAssetUrls(input) {
-  return arr(input)
-    .map((x) => s(x))
-    .filter(Boolean);
+  return uniqStrings(
+    arr(input)
+      .map((x) => s(x))
+      .filter(Boolean)
+  );
 }
 
 function normalizeHashtags(input) {
-  return arr(input)
-    .map((x) => s(x))
-    .filter(Boolean)
-    .map((x) => (x.startsWith("#") ? x : `#${x}`));
+  return uniqStrings(
+    arr(input)
+      .map((x) => s(x))
+      .filter(Boolean)
+      .map((x) => (x.startsWith("#") ? x : `#${x}`))
+  );
+}
+
+function normalizeNeededAssets(input) {
+  return uniqStrings(
+    arr(input)
+      .map((x) => s(x).toLowerCase())
+      .filter(Boolean)
+  );
+}
+
+function getTenantDefaults(tenant = null) {
+  const t = obj(tenant);
+  const profile = obj(t.profile);
+  const brand = obj(t.brand);
+
+  const defaultLanguage = normalizeLang(
+    brand.defaultLanguage ||
+      brand.outputLanguage ||
+      profile.defaultLanguage ||
+      profile.outputLanguage ||
+      t.defaultLanguage ||
+      t.outputLanguage ||
+      t.language ||
+      "az"
+  );
+
+  return {
+    tenantKey: s(t.tenantKey || t.tenantId || t.id || "default") || "default",
+    companyName:
+      s(
+        brand.displayName ||
+          brand.name ||
+          profile.displayName ||
+          profile.companyName ||
+          t.companyName ||
+          t.brandName ||
+          t.name
+      ) || "This company",
+    industryKey: normalizeIndustryKey(
+      t.industryKey ||
+        profile.industryKey ||
+        brand.industryKey ||
+        "generic_business"
+    ),
+    defaultLanguage,
+  };
 }
 
 function normalizeDraftLike(raw = {}, fallbackFormat = "image", fallbackLang = "az") {
@@ -78,10 +151,11 @@ function normalizeDraftLike(raw = {}, fallbackFormat = "image", fallbackLang = "
 
   return deepFix({
     type: s(d.type || "content_draft"),
+    tenantKey: s(d.tenantKey || d.tenantId || ""),
     language,
     format,
     topic: s(d.topic),
-    goal: s(d.goal),
+    goal: normalizeGoal(d.goal),
     targetAudience: s(d.targetAudience),
     hook: s(d.hook),
     caption: s(d.caption),
@@ -94,7 +168,7 @@ function normalizeDraftLike(raw = {}, fallbackFormat = "image", fallbackLang = "
     videoPrompt: s(d.videoPrompt),
     voiceoverText: s(d.voiceoverText),
     aspectRatio: s(d.aspectRatio),
-    neededAssets: arr(d.neededAssets),
+    neededAssets: normalizeNeededAssets(d.neededAssets),
     reelMeta: obj(d.reelMeta),
     complianceNotes: arr(d.complianceNotes),
     reviewQuestionsForCEO: arr(d.reviewQuestionsForCEO),
@@ -124,7 +198,7 @@ function normalizeCommentContext(raw = {}) {
       s(x.author) ||
       "",
     platform:
-      s(x.platform).toLowerCase() ||
+      s(x.platform || x.channel).toLowerCase() ||
       "instagram",
     postTopic:
       s(x.postTopic) ||
@@ -151,10 +225,44 @@ function normalizeTrendContext(raw = {}, fallbackLang = "az") {
     region: s(x.region),
     audienceFocus: s(x.audienceFocus),
     categoryFocus: s(x.categoryFocus),
-    competitors: arr(x.competitors).map((v) => s(v)).filter(Boolean),
+    competitors: uniqStrings(arr(x.competitors).map((v) => s(v)).filter(Boolean)),
     sourceNotes: s(x.sourceNotes),
     timeWindow: s(x.timeWindow),
-    goals: arr(x.goals).map((v) => s(v)).filter(Boolean),
+    goals: uniqStrings(arr(x.goals).map((v) => s(v)).filter(Boolean)),
+    raw: x,
+    rawJson: safeJsonString(x),
+  });
+}
+
+function normalizeAnalyzeContext(raw = {}, fallbackLang = "az") {
+  const x = obj(raw);
+
+  return deepFix({
+    language: normalizeLang(x.language || x.lang, fallbackLang),
+    approvedDraft: normalizeDraftLike(
+      x.approvedDraft || x.draft || x.content || x.contentPack,
+      "image",
+      fallbackLang
+    ),
+    notes: s(x.notes),
+    raw: x,
+    rawJson: safeJsonString(x),
+  });
+}
+
+function normalizeFixPlanContext(raw = {}, fallbackLang = "az") {
+  const x = obj(raw);
+
+  return deepFix({
+    language: normalizeLang(x.language || x.lang, fallbackLang),
+    analyzedDraft: normalizeDraftLike(
+      x.analyzedDraft || x.draft || x.content || x.contentPack,
+      "image",
+      fallbackLang
+    ),
+    analysis: obj(x.analysis),
+    qa: obj(x.qa),
+    notes: s(x.notes),
     raw: x,
     rawJson: safeJsonString(x),
   });
@@ -173,17 +281,13 @@ export function normalizePromptInput(
   const x = obj(extra);
 
   const tenantObj = obj(tenant);
-  const defaultLanguage = normalizeLang(
-    tenantObj?.brand?.defaultLanguage ||
-      tenantObj?.brand?.outputLanguage ||
-      tenantObj?.defaultLanguage ||
-      tenantObj?.language ||
-      "az"
-  );
+  const tenantDefaults = getTenantDefaults(tenantObj);
+
+  const defaultLanguage = tenantDefaults.defaultLanguage;
 
   const normalizedFormat = normalizeFormat(
     format || x.format || x.postType,
-    "image"
+    e === "content.publish" || e === "content.approved" ? "image" : "image"
   );
 
   const base = {
@@ -197,7 +301,7 @@ export function normalizePromptInput(
     tenant: tenantObj,
   };
 
-  if (e === "proposal.approved") {
+  if (e === "proposal.approved" || e === "content.draft" || e === "draft") {
     return deepFix({
       ...base,
       extra: {
@@ -208,7 +312,7 @@ export function normalizePromptInput(
         ),
         format: normalizedFormat,
         topicHint: s(x.topicHint || x.topic),
-        goalHint: s(x.goalHint || x.goal),
+        goalHint: normalizeGoal(x.goalHint || x.goal),
         campaignNote: s(x.campaignNote),
         approvedProposal: obj(x.approvedProposal || x.proposal),
         approvedProposalJson: safeJsonString(x.approvedProposal || x.proposal),
@@ -216,7 +320,7 @@ export function normalizePromptInput(
     });
   }
 
-  if (e === "content.revise") {
+  if (e === "content.revise" || e === "revise") {
     const previousDraft = normalizeDraftLike(
       x.previousDraft || x.draft,
       normalizedFormat,
@@ -238,7 +342,7 @@ export function normalizePromptInput(
     });
   }
 
-  if (e === "content.publish" || e === "content.approved") {
+  if (e === "content.publish" || e === "content.approved" || e === "publish") {
     const approvedDraft = normalizeDraftLike(
       x.approvedDraft || x.draft || x.content || x.contentPack,
       normalizedFormat,
@@ -265,7 +369,7 @@ export function normalizePromptInput(
     });
   }
 
-  if (e === "meta.comment_reply") {
+  if (e === "meta.comment_reply" || e === "comment") {
     const comment = normalizeCommentContext(x);
 
     return deepFix({
@@ -278,7 +382,7 @@ export function normalizePromptInput(
     });
   }
 
-  if (e === "trend.research") {
+  if (e === "trend.research" || e === "trend") {
     const trend = normalizeTrendContext(x, defaultLanguage);
 
     return deepFix({
@@ -287,6 +391,32 @@ export function normalizePromptInput(
       extra: {
         ...x,
         ...trend,
+      },
+    });
+  }
+
+  if (e === "content.analyze" || e === "analyze") {
+    const analyze = normalizeAnalyzeContext(x, defaultLanguage);
+
+    return deepFix({
+      ...base,
+      language: analyze.language || base.language,
+      extra: {
+        ...x,
+        ...analyze,
+      },
+    });
+  }
+
+  if (e === "content.fix_plan" || e === "fix_plan") {
+    const fixPlan = normalizeFixPlanContext(x, defaultLanguage);
+
+    return deepFix({
+      ...base,
+      language: fixPlan.language || base.language,
+      extra: {
+        ...x,
+        ...fixPlan,
       },
     });
   }

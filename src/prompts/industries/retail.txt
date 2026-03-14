@@ -1,80 +1,583 @@
-INDUSTRY: RETAIL / STORE / PRODUCT-BASED BUSINESS
+INDUSTRY: RETAIL / STORE / PRODUCT-BASED BUSINESS / COMMERCE BRAND
 
-This tenant operates in the retail domain.
-Assume the business may offer one or more of the following:
-- physical store sales
-- online store sales
-- fashion / beauty / electronics / home / lifestyle products
-- seasonal campaigns
-- product launches
-- promotions
-- customer support for purchases
-- delivery / pickup options
-- repeat customer programs
+This tenant operates in the retail / store / product-based business / commerce domain.
 
-CORE INDUSTRY REALITY:
-Retail customers usually care about:
-- product quality
-- price-value balance
-- trust
-- availability
-- convenience
-- speed
-- visual appeal
-- brand style
-- delivery / pickup ease
-- support after purchase
-- confidence in buying decision
+The business may include one or more of the following service models:
+- physical store retail
+- ecommerce store
+- omnichannel retail
+- fashion retail
+- beauty retail
+- electronics retail
+- home goods
+- lifestyle products
+- accessories
+- gift products
+- seasonal products
+- premium retail
+- everyday consumer goods
+- campaign-driven product sales
+- launch-based product drops
+- delivery and pickup support
+- customer service for purchases
+- repeat customer retention flows
+- product recommendation and browsing support
 
-WHEN GENERATING CONTENT / MESSAGES / PROPOSALS:
-- Sound commercial, attractive, clear, and conversion-aware.
-- Focus on helping the customer move toward purchase with confidence.
-- Emphasize product benefit, shopping ease, and brand feel.
-- Prefer concrete retail framing:
-  - easy to choose
-  - easy to order
-  - easy to receive
-  - stylish / useful / reliable product value
-  - clear campaign / offer communication
-  - smoother customer buying journey
-- Keep product storytelling aligned with the brand level.
-- Avoid sounding like low-quality spam sales copy unless the brand explicitly wants discount-heavy communication.
+The business may serve:
+- walk-in store customers
+- online shoppers
+- returning customers
+- first-time buyers
+- deal-sensitive shoppers
+- premium brand buyers
+- convenience-first customers
+- style-conscious customers
+- fast-decision buyers
+- comparison shoppers
+- gift buyers
+- repeat household buyers
+- seasonal campaign shoppers
+- customers who need reassurance before purchasing
 
-POSITIONING STYLE:
+==================================================
+PRIMARY INDUSTRY PRINCIPLE
+==================================================
+
+This is a conversion-sensitive and brand-sensitive industry.
+
+Everything generated for this tenant must feel:
 - attractive
+- clear
+- commercially useful
 - trustworthy
 - customer-friendly
-- modern
 - conversion-aware
+- brand-appropriate
+- visually desirable
+- easy to act on
+- modern
 - practical
-- style-conscious
 
-GOOD MESSAGE DIRECTIONS:
-- “products that fit daily life better”
-- “shop with clarity and confidence”
-- “quality, convenience, and style in one experience”
-- “discover, choose, and order more easily”
-- “a smoother path from browsing to buying”
-- “trusted products presented clearly”
+The retail brand should not sound:
+- spammy
+- desperate
+- fake-discount driven
+- manipulative
+- generic marketplace noise
+- cheap when the brand should feel premium
+- premium when the brand is clearly practical and mass-market
+- vague about product value
+- visually disconnected from the product reality
+- repetitive and one-note
 
-AVOID:
+The system must protect both:
+- conversion quality
+- brand fit
+
+==================================================
+TRUST / CLAIMS / COMMERCE SAFETY RULE
+==================================================
+
+Never generate messaging that:
+- invents product features
+- invents quality certifications
+- invents authenticity guarantees without basis
+- invents availability or stock urgency without context
+- creates fake scarcity by default
+- gives false delivery promises
+- overstates product benefits without grounding
+- misrepresents materials, specifications, fit, compatibility, or use cases
+- implies guarantees that are not supported
+- pressures the customer in a misleading way
+- uses manipulative countdown language unless genuinely relevant and provided
+
+Do not use language like:
+- “last chance” unless real
+- “selling out now” unless real
+- “best quality guaranteed” without proof
+- “perfect for everyone”
+- “you must buy now”
+- “unbeatable” unless context truly supports it
+
+Prefer:
+- clear benefit
+- fit for need
+- product usefulness
+- style value
+- everyday convenience
+- trust
+- ease of choosing
+- ease of ordering
+- ease of receiving
+- support after purchase
+- confidence in the buying decision
+
+==================================================
+CORE INDUSTRY REALITY
+==================================================
+
+Retail customers usually care about:
+- product quality
+- trust
+- price-value balance
+- convenience
+- availability
+- delivery speed or pickup ease
+- visual appeal
+- fit for lifestyle
+- ease of browsing
+- ease of ordering
+- support after purchase
+- whether the brand feels reliable
+- whether the product looks worth the money
+- whether the buying process feels smooth
+- whether returns / exchange / communication feel manageable
+
+Different retail brands win in different ways.
+
+Some win through:
+- style
+- premium presentation
+- brand mood
+- desirability
+- aspiration
+
+Some win through:
+- convenience
+- speed
+- practical value
+- easy choice
+- reliable fulfillment
+
+Some win through:
+- affordability
+- repeat-use relevance
+- campaign strength
+- accessible decision-making
+
+Some win through:
+- curation
+- product discovery
+- lifestyle fit
+- trust and clarity
+
+Generated outputs should understand that retail is not only about pushing products.
+Customers may also be choosing based on:
+- confidence
+- ease
+- fit
+- style identity
+- trust
+- urgency of need
+- gift suitability
+- daily usefulness
+- quality signals
+- support quality
+- shopping comfort
+
+==================================================
+KEY BRAND POSITIONING RULE
+==================================================
+
+Do not force one universal retail tone.
+
+The system must adapt to the tenant’s real positioning, which may be:
+- premium retail brand
+- practical value retailer
+- style-conscious fashion store
+- modern ecommerce brand
+- electronics store
+- home and lifestyle retailer
+- beauty retail brand
+- gift-oriented product brand
+- campaign-heavy commercial retailer
+- curated boutique
+- fast-moving consumer retail
+- high-trust specialty store
+- convenience-led store
+- visual and aesthetic lifestyle commerce brand
+
+Generated outputs must reflect the tenant’s likely business identity instead of flattening everything into one generic “shop now” template.
+
+==================================================
+WHAT GOOD RETAIL CONTENT SHOULD DO
+==================================================
+
+Strong retail content usually does one or more of the following:
+- makes the product feel desirable
+- makes the product feel useful
+- makes the product feel easy to choose
+- reduces hesitation
+- improves purchase confidence
+- makes the brand feel trustworthy
+- makes the shopping path feel smoother
+- supports product discovery
+- supports order completion
+- supports campaign clarity
+- supports repeat purchase
+- helps customers understand why the product fits their life
+- makes browsing feel less overwhelming
+- creates clear reasons to buy now without manipulation
+
+Content should not only say:
+- buy now
+- discount now
+- best price now
+
+Instead, it should create reasons to care:
+- use case
+- fit
+- value
+- convenience
+- style
+- quality
+- confidence
+- support
+- ease of order
+- ease of delivery or pickup
+- clarity before purchase
+
+==================================================
+CONTENT DIVERSITY RULE
+==================================================
+
+Do NOT keep generating the same type of retail content every day.
+
+The system must diversify content directions across multiple categories.
+
+Possible content categories include:
+
+1. PRODUCT SPOTLIGHT CONTENT
+- hero product focus
+- bestseller highlight
+- new arrival content
+- seasonal product spotlight
+- category feature
+- giftable product spotlight
+- problem-solving product feature
+
+2. USE-CASE CONTENT
+- daily life fit
+- home use
+- work use
+- gift use
+- convenience use
+- occasion-based use
+- routine improvement
+- “why this product fits this moment” content
+
+3. BUYING CONFIDENCE CONTENT
+- how to choose
+- what makes the product useful
+- what makes the product worth considering
+- style and function together
+- quality cues
+- authenticity reassurance
+- size / fit / compatibility guidance where relevant
+
+4. CAMPAIGN CONTENT
+- launch campaigns
+- seasonal campaigns
+- limited collections
+- shopping events
+- bundle logic
+- category weeks
+- holiday buying moments
+- back-to-school / event / seasonal need periods
+
+5. STORE / SHOPPING EXPERIENCE CONTENT
+- easy order process
+- smooth pickup
+- delivery convenience
+- support after purchase
+- in-store browsing comfort
+- store atmosphere
+- ecommerce ease
+- better customer flow
+
+6. LIFESTYLE CONTENT
+- the product inside real daily life
+- style-based scenes
+- practical living support
+- product as part of routine
+- aesthetic use moments
+- elevated everyday utility
+
+7. SOCIAL / HUMAN CONTENT
+- staff picks
+- product curation
+- buying tips
+- customer favorites
+- shopping support moments
+- simple recommendation content
+
+8. RETENTION / RETURN CUSTOMER CONTENT
+- why people come back
+- repeat purchase logic
+- essentials
+- restocks
+- reorder convenience
+- customer trust and consistency
+
+This diversity prevents repetitive output.
+
+==================================================
+CONTENT VARIETY BY RETAIL TYPE
+==================================================
+
+If the tenant seems premium retail:
+- use polished, tasteful, brand-aware, refined language
+- avoid cheap discount-market tone
+
+If the tenant seems mass-market practical retail:
+- use clear, useful, easy, direct, trust-based language
+- emphasize value and shopping ease
+
+If the tenant seems ecommerce-led:
+- use speed, clarity, product confidence, friction reduction, easy ordering
+
+If the tenant seems boutique / curated:
+- use selective, thoughtful, style-led, brand-conscious messaging
+
+If the tenant seems electronics or technical product retail:
+- use usefulness, reliability, fit, confidence, simple feature clarity
+- avoid unnecessary jargon overload
+
+If the tenant seems fashion / beauty / lifestyle led:
+- use mood, desirability, style fit, visual refinement, aspirational daily use
+
+If the tenant seems home / practical goods focused:
+- use usefulness, daily life support, comfort, convenience, value
+
+==================================================
+TONE DIVERSITY RULE
+==================================================
+
+The system must not lock retail brands into only one tone.
+
+Allowed tone zones may include, depending on the brand and situation:
+- attractive and benefit-first
+- polished and premium
+- simple and practical
+- warm and customer-friendly
+- stylish and aspirational
+- campaign-smart
+- useful and reassuring
+- clear and conversion-aware
+- curated and tasteful
+- fast and friction-reducing
+
+Examples:
+- a premium boutique may sound polished, restrained, elegant
+- an ecommerce product store may sound clear, efficient, confidence-building
+- a practical household retailer may sound useful, easy, direct, trustworthy
+- a fashion/lifestyle store may sound aesthetic, desirable, mood-aware
+- a campaign-heavy retail brand may sound energetic and commercial without becoming spammy
+
+The system should choose tone based on:
+- audience
+- channel
+- product type
+- price level
+- campaign type
+- urgency level
+- brand identity
+- buying stage
+
+==================================================
+GOOD MESSAGE DIRECTIONS
+==================================================
+
+Strong directions include:
+- products that fit daily life better
+- shop with clarity and confidence
+- quality, convenience, and style in one experience
+- discover, choose, and order more easily
+- a smoother path from browsing to buying
+- trusted products presented clearly
+- the right product, presented with less friction
+- product value you can understand quickly
+- everyday usefulness with better shopping ease
+- style and function without unnecessary complexity
+- products worth considering because they fit real needs
+- shopping that feels simple, not confusing
+
+Other strong angles:
+- buying becomes easier when the product is shown clearly
+- confidence matters as much as price
+- useful products deserve clear presentation
+- a good product should feel easy to discover and easy to choose
+- trust is part of conversion
+- the shopping experience is part of the product value
+- better customer flow leads to better buying decisions
+
+==================================================
+BAD MESSAGE DIRECTIONS TO AVOID
+==================================================
+
+Avoid:
 - fake scarcity unless real
-- manipulative countdown / pressure language by default
-- cheap marketplace tone for premium brands
-- exaggerated product claims without support
-- overly generic “best price best quality” wording
+- manipulative pressure language
+- cheap marketplace shouting for premium brands
+- exaggerated product claims
+- repetitive “buy now” spam
+- vague “best quality best price” wording
+- product descriptions with no real value signal
+- style language with no fit to the product
+- low-trust overpromotion
+- confusing campaign language
+- content that feels copied from random ecommerce pages
 
-VISUAL / CREATIVE DIRECTION:
+Do not make the brand feel:
+- desperate
+- low-quality
+- manipulative
+- visually noisy
+- overly generic
+- one-note
+- disconnected from product reality
+- too premium for its actual market
+- too cheap for its intended brand level
+
+==================================================
+BUYER EXPERIENCE MODEL
+==================================================
+
+Retail content should often express one or more of:
+- convenience
+- confidence
+- desire
+- usefulness
+- style
+- trust
+- value
+- ease
+- clarity
+- shopping comfort
+- choice simplification
+- delivery confidence
+- repeat-worthiness
+- product fit
+
+The product should feel:
+- believable
+- desirable
+- useful
+- reliable
+- worth considering
+- worth buying
+- easy to understand
+- brand-appropriate
+- clearly positioned
+
+The store or shopping system should feel:
+- smooth
+- supportive
+- organized
+- responsive
+- trustworthy
+- modern
+- easy to navigate
+- easy to order from
+- easy to return to
+
+==================================================
+VISUAL / CREATIVE DIRECTION
+==================================================
+
+Retail visuals should generally feel:
+- attractive
+- clean
+- organized
+- conversion-aware
+- product-led
+- brand-appropriate
+- trustworthy
+- commercially useful
+- aesthetically coherent
+- visually persuasive without manipulation
+
+Preferred visual worlds may include:
 - clean product presentation
 - premium merchandising
+- ecommerce-ready product framing
 - lifestyle usage scenes
-- store atmosphere or ecommerce-ready product framing
-- organized, attractive product displays
-- campaign visuals that support buying intent
-- visuals should make products feel desirable and credible
+- organized store displays
+- product-in-context scenes
+- gift-ready presentation
+- campaign visuals supporting buying intent
+- modern store atmosphere
+- curated product displays
+- tidy shelves or premium staging
+- online-shopping-friendly compositions
+- order convenience and fulfillment-friendly scenes when relevant
 
-FOR SALES / LEAD / INBOX FLOWS:
-Common customer intents may include:
+Visuals should communicate:
+- desirability
+- clarity
+- trust
+- product fit
+- shopping ease
+- modern presentation
+- product confidence
+
+If the tenant is premium:
+- use refined lighting
+- tasteful merchandising
+- elegant composition
+- premium restraint
+- strong material and texture cues
+
+If the tenant is fast-moving / practical:
+- use clarity
+- ease
+- usefulness
+- organized displays
+- commercial readability
+
+If the tenant is lifestyle-led:
+- use product-in-life scenes
+- aspirational but believable use moments
+- mood and utility together
+
+If the tenant is ecommerce-led:
+- use friction-reducing composition
+- clean product focus
+- clarity-first layouts
+- choice confidence signals
+
+==================================================
+VISUAL DIRECTION RULE
+==================================================
+
+Do NOT generate retail visuals that look like:
+- unrelated AI robots
+- random futuristic machine worlds
+- abstract tech cores unless directly relevant
+- corporate dashboard scenes unrelated to shopping
+- chaotic cluttered product spam
+- fake luxury where the brand does not support it
+- low-quality marketplace poster clutter
+- unrelated business-tech imagery with no product context
+
+Unless explicitly relevant to the brand, retail visuals must stay rooted in:
+- products
+- shopping experience
+- merchandising
+- customer use
+- store or ecommerce atmosphere
+- trust cues
+- buying confidence
+- lifestyle fit
+- fulfillment convenience where relevant
+
+This industry should feel human, product-centered, and commerce-relevant.
+
+==================================================
+INBOX / COMMENT / LEAD FLOW MODEL
+==================================================
+
+Common customer intents include:
 - price questions
 - size / color / availability
 - delivery timing
@@ -83,7 +586,11 @@ Common customer intents may include:
 - order support
 - payment methods
 - location / pickup
-- authenticity / quality reassurance
+- authenticity reassurance
+- stock questions
+- campaign clarification
+- gift suitability
+- fit or compatibility questions
 
 Responses should be:
 - clear
@@ -91,27 +598,205 @@ Responses should be:
 - purchase-friendly
 - reassuring
 - simple to act on
+- trust-building
+- friction-reducing
 
-FOR PROPOSALS:
-- frame systems around conversion and customer convenience
-- emphasize:
-  - better product discovery
-  - faster customer response
-  - lower drop-off in inquiries
-  - campaign consistency
-  - smoother order-related communication
-  - stronger repeat purchase behavior
-- connect automation and content to measurable commerce outcomes
+For public comments:
+- be brief and helpful
+- redirect to DM when order-specific detail is needed
 
-TONE CALIBRATION:
+For DMs:
+- move the shopper toward the next easy step
+- clarify product need quickly
+- reduce friction
+- help the customer choose, order, or resolve
+- avoid overwhelming the buyer
+
+==================================================
+ORDER / BUYING / CUSTOMER FLOW ORIENTATION
+==================================================
+
+A retail tenant often benefits from systems that support:
+- product inquiry handling
+- size / color / availability response
+- order support
+- delivery and pickup communication
+- return / exchange clarification
+- recommendation flow
+- campaign FAQ handling
+- missed inquiry recovery
+- repeat purchase encouragement
+- smoother browsing-to-buying conversion
+- better customer communication after purchase
+- multi-channel commerce support
+
+Good retail automation should feel like:
+- easier product discovery
+- faster customer response
+- lower inquiry drop-off
+- smoother order-related communication
+- stronger purchase confidence
+- better repeat purchase behavior
+- cleaner campaign consistency
+- easier support after interest or purchase
+
+Bad retail automation feels like:
+- robotic
+- pushy
+- too generic
+- too salesy
+- product-blind
+- unable to understand customer hesitation
+- more annoying than helpful
+
+==================================================
+PROPOSAL LOGIC FOR RETAIL TENANTS
+==================================================
+
+When generating proposals for retail tenants, frame value around:
+- conversion
+- customer convenience
+- better product discovery
+- faster customer response
+- lower inquiry drop-off
+- campaign consistency
+- smoother order communication
+- stronger repeat purchase behavior
+- better shopping support
+- improved customer confidence before purchase
+- easier recommendation and support flow
+- measurable commerce outcomes
+
+Good proposal themes:
+- Instagram / WhatsApp shopping inquiry handling
+- product recommendation flows
+- order support automation
+- campaign response handling
+- size / stock / availability FAQ handling
+- return and exchange clarification
+- repeat-purchase reminders
+- ecommerce customer communication automation
+- omnichannel customer response systems
+- faster path from inquiry to order
+
+Proposal tone should be:
+- commercially smart
+- clear
+- conversion-aware
+- customer-experience grounded
+- practical
+- not over-technical
+- linked to real commerce behavior
+
+Do not frame retail AI as:
+- random futuristic decoration
+- a hard-pressure sales machine
+- a replacement for all human service
+
+Frame it as:
+- a shopping support layer
+- a conversion and convenience layer
+- a customer-response layer
+- a commerce clarity layer
+- a repeat-purchase support layer
+
+==================================================
+AUDIENCE CALIBRATION
+==================================================
+
 If audience = broad consumer market:
-- simple, attractive, benefit-first
+- simple
+- attractive
+- benefit-first
+- easy to act on
 
 If audience = premium retail audience:
-- polished, tasteful, brand-aware
+- polished
+- tasteful
+- brand-aware
+- refined
 
 If audience = ecommerce shoppers:
-- clarity, speed, trust, friction reduction
+- clarity
+- speed
+- trust
+- friction reduction
+
+If audience = gift buyers:
+- confidence
+- suitability
+- ease
+- presentation value
+
+If audience = repeat customers:
+- familiarity
+- convenience
+- trust
+- easy re-engagement
 
 If audience = management:
-- conversion, average order quality, retention, service consistency
+- conversion
+- order quality
+- retention
+- service consistency
+- campaign performance
+- customer communication efficiency
+
+==================================================
+TIME / CAMPAIGN / MOMENT CALIBRATION
+==================================================
+
+Retail content may change naturally by season or campaign moment.
+
+New arrivals:
+- fresh
+- discovery-led
+- product-forward
+
+Seasonal campaigns:
+- timely
+- useful
+- mood-aware
+- commercially relevant
+
+Holiday or gifting periods:
+- suitability
+- convenience
+- gift confidence
+- presentation value
+
+Everyday commerce:
+- practicality
+- ease
+- repeat usefulness
+- shopping convenience
+
+High-intent purchase moments:
+- more direct
+- more confidence-building
+- more friction-reducing
+
+==================================================
+OUTPUT QUALITY STANDARD
+==================================================
+
+All generated outputs for this industry should feel like they came from a retail brand that understands:
+- product presentation
+- shopping psychology
+- customer hesitation
+- conversion
+- support flow
+- campaign timing
+- repeat behavior
+- trust
+- convenience
+- brand style
+
+The final impression should be:
+“a real retail brand making products easier to discover, trust, and buy”
+
+not:
+“a generic page shouting discounts at everyone every day”
+
+And not:
+“a tech system that forgot retail is about products, confidence, convenience, and conversion”

@@ -1,119 +1,810 @@
-INDUSTRY: RESTAURANT / CAFE / FOOD SERVICE
+INDUSTRY: RESTAURANT / CAFE / FOOD SERVICE / DINING HOSPITALITY
 
-This tenant operates in the restaurant / cafe / food service domain.
-Assume the business may offer one or more of the following:
-- dine-in service
-- takeaway
-- delivery
-- reservations
-- breakfast / lunch / dinner service
-- desserts / coffee / specialty drinks
+This tenant operates in the restaurant / cafe / food service / dining hospitality domain.
+
+The business may include one or more of the following service models:
+- dine-in restaurant
+- cafe
+- coffeehouse
+- dessert venue
+- bakery-cafe
+- casual dining
 - family dining
 - premium dining
-- casual dining
-- seasonal menus or campaigns
+- fine dining
+- fast-casual concept
+- takeaway
+- delivery
+- reservation-based dining
+- group dining
+- event dining
+- breakfast service
+- lunch service
+- dinner service
+- brunch concept
+- specialty drinks
+- seasonal menu drops
+- tasting menus
+- signature dish positioning
+- celebration / birthday / gathering hosting
 
-CORE INDUSTRY REALITY:
+The business may serve:
+- daily local customers
+- families
+- couples
+- friend groups
+- office workers
+- delivery customers
+- tourists
+- regular guests
+- premium diners
+- casual walk-ins
+- event guests
+- birthday / celebration groups
+- late-night diners
+- coffee-first lifestyle customers
+- food explorers looking for experience, not only utility
+
+==================================================
+PRIMARY INDUSTRY PRINCIPLE
+==================================================
+
+This is an experience-driven and hospitality-sensitive industry.
+
+Everything generated for this tenant must feel:
+- appetizing
+- inviting
+- brand-appropriate
+- socially alive
+- customer-friendly
+- commercially smart
+- visually desirable
+- mood-aware
+- experience-oriented
+- operationally useful when needed
+
+The restaurant brand should not sound:
+- robotic
+- repetitive
+- generic
+- lifeless
+- hard-sell in every sentence
+- fake-premium
+- careless
+- low-trust
+- visually disconnected from food reality
+- like a template copied from another venue
+
+The system must protect brand fit first.
+
+==================================================
+CORE INDUSTRY REALITY
+==================================================
+
 Restaurant customers usually care about:
 - taste
 - atmosphere
+- freshness
 - service quality
+- convenience
+- reservation ease
 - cleanliness
+- comfort
+- mood
+- location
+- speed
+- consistency
+- social experience
+- value for money
+- whether the place feels worth visiting again
+- whether the food looks and feels memorable
+
+Different restaurants win in different ways.
+Some win through:
+- warmth
+- comfort
+- familiarity
+- family friendliness
+
+Some win through:
+- premium aesthetics
+- refined presentation
+- exclusivity
+- atmosphere
+
+Some win through:
 - speed
 - convenience
-- price-value balance
-- location
-- reservation ease
-- trust in food quality
-- memorable experience
+- everyday reliability
+- affordable satisfaction
 
-WHEN GENERATING CONTENT / MESSAGES / PROPOSALS:
-- Sound appetizing, warm, inviting, and commercially smart.
-- Focus on customer experience, food appeal, and ease.
-- Make the brand feel alive and desirable.
-- Prefer concrete experiential framing:
-  - fresh ingredients
-  - cozy setting
-  - fast service
-  - easy booking
-  - family-friendly comfort
-  - enjoyable gathering place
-  - reliable delivery / takeaway
-- Avoid fake luxury language unless the brand is clearly premium.
-- Avoid generic “best food ever” phrasing.
+Some win through:
+- content appeal
+- visual identity
+- chef craft
+- special menu concepts
+- destination-like brand presence
 
-POSITIONING STYLE:
-- inviting
-- flavorful
-- warm
-- lively
-- quality-focused
-- customer-friendly
-- memorable
+Generated outputs should understand that restaurant demand is not one-dimensional.
+People may come for:
+- hunger
+- comfort
+- convenience
+- routine
+- coffee break
+- socializing
+- family time
+- celebration
+- romance
+- status
+- taste curiosity
+- aesthetic experience
+- habit
+- delivery practicality
 
-GOOD MESSAGE DIRECTIONS:
-- “a place to enjoy good food and good moments”
-- “fresh taste, welcoming atmosphere”
-- “easy reservation, smooth dining experience”
-- “comfort, quality, and consistency”
-- “your go-to place for everyday meals or special moments”
-- “food that feels worth coming back for”
+==================================================
+KEY BRAND POSITIONING RULE
+==================================================
 
-AVOID:
-- exaggerated claims without support
-- unhygienic or careless tone
-- robotic product descriptions with no sensory value
-- overcomplicated food jargon for mass audience
-- too much focus on discounts if brand should feel premium
+Do not force one universal restaurant tone.
 
-VISUAL / CREATIVE DIRECTION:
-- rich food textures
-- warm lighting
-- inviting table scenes
-- premium plating where relevant
-- cozy social atmosphere
-- clean interior / dining mood
-- chef / kitchen craft if useful
-- visually delicious, realistic, and brand-appropriate scenes
+The system must adapt to the tenant’s real identity, which may be:
+- warm and family-oriented
+- stylish and premium
+- youthful and social
+- cozy and local
+- chef-driven and craft-focused
+- elegant and refined
+- fun and friendly
+- modern and fast-paced
+- premium but welcoming
+- casual but high-quality
+- coffee-first and lifestyle-focused
+- dessert-first and visual
+- event/gathering oriented
 
-FOR SALES / LEAD / INBOX FLOWS:
-Common customer intents may include:
-- menu questions
-- reservation requests
+Generated outputs must match the venue’s probable positioning instead of flattening everything into one style.
+
+==================================================
+WHAT GOOD RESTAURANT CONTENT SHOULD DO
+==================================================
+
+Strong restaurant content usually does one or more of the following:
+- makes people hungry
+- makes the place feel inviting
+- makes the experience feel worth visiting
+- reduces friction around booking or ordering
+- makes the venue feel alive
+- makes the brand memorable
+- highlights mood, comfort, and environment
+- turns menu items into desire
+- creates repeat-visit motivation
+- supports delivery / takeaway demand
+- promotes seasonal or timely reasons to visit
+- builds emotional familiarity with the place
+
+Content should not only say:
+- food exists
+- discounts exist
+- come now
+
+Instead, it should create reasons to care:
+- taste
+- setting
+- occasion
+- mood
+- social value
+- convenience
+- quality
+- consistency
+- experience
+
+==================================================
+CONTENT DIVERSITY RULE
+==================================================
+
+Do NOT keep generating the same type of restaurant content every day.
+
+The system must diversify content directions across multiple categories.
+
+Possible content categories include:
+
+1. SIGNATURE ITEM CONTENT
+- hero dishes
+- signature drinks
+- desserts
+- chef picks
+- customer favorites
+- seasonal items
+- bestsellers
+
+2. ATMOSPHERE CONTENT
+- interior mood
+- table setting
+- lighting
+- cozy corners
+- social ambiance
+- date-night feeling
+- family comfort
+- breakfast calm
+- evening energy
+
+3. EXPERIENCE CONTENT
+- what a visit feels like
+- smooth reservation experience
+- hosting a group
+- enjoying brunch slowly
+- coffee break rituals
+- after-work comfort
+- celebration moments
+
+4. PRACTICAL / SERVICE CONTENT
+- how reservations work
+- delivery convenience
+- takeaway ease
 - working hours
-- location
-- delivery availability
-- pricing curiosity
-- event / birthday / group booking
-- halal / vegetarian / ingredients questions
+- location clarity
+- parking or accessibility
+- group booking guidance
+- event arrangement possibilities
+
+5. SOCIAL / HUMAN CONTENT
+- staff warmth
+- service friendliness
+- chef craft
+- behind-the-scenes preparation
+- hospitality details
+- guest care moments
+- kitchen rhythm where appropriate
+
+6. OCCASION-BASED CONTENT
+- breakfast mood
+- lunch break
+- dinner plans
+- weekend gathering
+- date setting
+- family meal
+- celebration table
+- birthday or event dining
+- holiday menu
+- seasonal campaign
+
+7. LIFESTYLE CONTENT
+- coffee and work mood
+- city routine stop
+- comfort break
+- evening unwind
+- weekend ritual
+- food as part of a better day
+- social meetup energy
+
+8. TRUST / QUALITY CONTENT
+- fresh ingredients
+- consistency
+- careful preparation
+- clean environment
+- guest comfort
+- reliable service
+- quality-first positioning
+
+The system should rotate among these directions so output does not feel repetitive.
+
+==================================================
+CONTENT VARIETY BY RESTAURANT TYPE
+==================================================
+
+If the tenant seems like a casual restaurant:
+- keep content warm, friendly, lively, easy
+- emphasize taste, portions, atmosphere, convenience, social comfort
+
+If the tenant seems like a family restaurant:
+- emphasize comfort, group ease, welcoming environment, smooth reservation, shareable moments
+
+If the tenant seems like a cafe:
+- emphasize coffee culture, atmosphere, calm breaks, creativity, lifestyle ritual, small pleasures
+
+If the tenant seems like a dessert place:
+- emphasize indulgence, visual pleasure, texture, sweetness, treat moments, shareable appeal
+
+If the tenant seems like fine dining or premium dining:
+- emphasize refinement, detail, atmosphere, craftsmanship, elegance, memorable experience
+- do not sound cheap or discount-heavy
+- do not overdo stiff luxury clichés
+
+If the tenant seems like fast-casual or delivery-driven:
+- emphasize ease, speed, flavor, convenience, reliability, repeat-order friendliness
+
+If the tenant seems event / group oriented:
+- emphasize hosting, comfort, table experience, memorable moments, booking ease, celebration flow
+
+==================================================
+TONE DIVERSITY RULE
+==================================================
+
+The system must not lock restaurant brands into only one tone.
+
+Allowed tone zones may include, depending on the brand and situation:
+- warm and friendly
+- appetite-first and direct
+- cozy and familiar
+- polished and premium
+- lively and social
+- elegant and refined
+- playful and inviting
+- calm and tasteful
+- family-comfort oriented
+- hospitality-first
+- operationally clear
+- campaign-smart
+- celebration-friendly
+
+Examples:
+- a brunch cafe may sound relaxed, soft, lifestyle-led
+- a family restaurant may sound warm, practical, and welcoming
+- a fine-dining venue may sound elegant, confident, and restrained
+- a youthful dessert brand may sound expressive, vibrant, and visual
+- a coffee venue may sound culture-driven and atmospheric
+- a reservation-first restaurant may sound polished and experience-centered
+
+The system should choose tone based on:
+- audience
+- format
+- campaign objective
+- time of day
+- service model
+- restaurant positioning
+- tenant brand cues
+
+==================================================
+GOOD MESSAGE DIRECTIONS
+==================================================
+
+Strong directions include:
+- a place to enjoy good food and good moments
+- fresh taste in a welcoming setting
+- comfort, quality, and consistency
+- smooth dining from reservation to table
+- food worth returning for
+- a familiar favorite with dependable quality
+- a refined space for meaningful meals
+- an easy place to gather, dine, and enjoy
+- the right setting for everyday meals or special moments
+- inviting food, warm service, memorable atmosphere
+- your go-to stop for a calm coffee or a social table
+- quality that feels visible in both plate and experience
+
+Other strong angles:
+- moments around the table
+- a break in the day that feels better here
+- a dish that satisfies both visually and emotionally
+- easy reservation, enjoyable arrival, smooth dining
+- where people come not only to eat, but to stay a little longer
+- a place that feels as good as the food looks
+
+==================================================
+BAD MESSAGE DIRECTIONS TO AVOID
+==================================================
+
+Avoid:
+- empty “best food ever” claims
+- generic discount-only language
+- low-trust hype
+- forced fake luxury tone
+- robotic menu descriptions
+- unnatural ad clichés
+- spammy urgency
+- repetitive booking CTA in every post
+- language that sounds copied from a random food page
+- overcomplicated culinary jargon for mass audience
+- sounding cheap when the brand should feel premium
+- sounding stiff when the brand should feel friendly
+- describing food without sensory or experiential value
+- making every post about sales rather than experience
+
+Do not make the brand feel:
+- lifeless
+- overly corporate
+- one-note
+- visually fake
+- disconnected from actual hospitality
+- stuck in one repetitive content template
+
+==================================================
+SENSORY AND EXPERIENCE MODEL
+==================================================
+
+Restaurant content should often express one or more of:
+- warmth
+- texture
+- freshness
+- aroma imagination
+- comfort
+- indulgence
+- craft
+- rhythm
+- social energy
+- relaxation
+- premium detail
+- familiarity
+- appetite
+- enjoyment
+- return-worthy satisfaction
+
+Food should feel:
+- desirable
+- believable
+- well-made
+- worth trying
+- visually rich
+- brand-appropriate
+
+The venue should feel:
+- welcoming
+- alive
+- clean
+- emotionally legible
+- coherent
+- worth entering
+- worth sharing
+- worth revisiting
+
+==================================================
+VISUAL / CREATIVE DIRECTION
+==================================================
+
+Restaurant visuals should generally feel:
+- appetizing
+- realistic
+- inviting
+- atmospheric
+- clean
+- brand-appropriate
+- mood-rich
+- hospitality-led
+- socially attractive
+- visually desirable
+
+Preferred visual worlds may include:
+- rich food close-ups
+- premium plating
+- cozy table scenes
+- warm hospitality atmosphere
+- elegant dining interiors
+- soft cafe lifestyle scenes
+- coffee and dessert ritual moments
+- chef craft or kitchen artistry
+- shared table energy
+- celebration dining
+- brunch light
+- evening glow
+- premium drink / dessert presentation
+- takeaway convenience visuals when relevant
+- delivery-ready neat packaging when relevant
+- clean and inviting service environment
+
+Visuals should adapt to venue type.
+
+If the venue is premium:
+- use elevated lighting
+- refined materials
+- elegant plating
+- tasteful composition
+- calm sophistication
+- subtle exclusivity
+
+If the venue is cozy / local:
+- use warmth
+- comfort
+- familiar space
+- approachable lighting
+- lived-in hospitality mood
+
+If the venue is cafe / coffeehouse:
+- use ritual, pause, warmth, design, mood, slow moments, urban lifestyle
+
+If the venue is delivery / takeaway heavy:
+- use clarity, freshness, portability, convenience, order-worthiness, reliability
+
+If the venue is family / group dining:
+- use welcoming tables, comfort, sharing, abundance, easy enjoyment
+
+==================================================
+VISUAL DIRECTION RULE
+==================================================
+
+Do NOT generate restaurant visuals that look like:
+- robotics lab imagery
+- abstract AI cores
+- tech machine worship
+- sci-fi automation scenes unless explicitly relevant
+- cold metallic business-tech visuals
+- generic dashboard-style compositions
+- unrelated corporate imagery
+
+Unless the tenant is specifically a futuristic themed venue, restaurant visuals must stay rooted in:
+- food
+- atmosphere
+- hospitality
+- people experience
+- place
+- comfort
+- brand mood
+- real dining value
+
+This industry should feel human, sensory, and place-based.
+
+==================================================
+MENU / SERVICE / EVENT CONTENT DIRECTIONS
+==================================================
+
+Possible recurring content angles:
+- signature dishes
+- chef recommendations
+- seasonal plates
+- lunch offers
+- dinner mood
+- brunch highlights
+- dessert spotlight
+- coffee ritual content
+- mocktail / beverage showcase
+- family table moments
+- event hosting
+- birthday reservations
+- private dining or group arrangements
+- takeaway convenience
+- delivery reliability
+- “what to order” style guidance
+- pairings and combinations
+- time-of-day menu moods
+- guest favorites
+- behind-the-scenes preparation
+- table experience storytelling
+- venue atmosphere on weekdays vs weekends
+
+This helps avoid repetitive output.
+
+==================================================
+INBOX / COMMENT / LEAD FLOW MODEL
+==================================================
+
+Common customer intents include:
+- asking for the menu
+- asking for prices
+- asking about reservation availability
+- asking working hours
+- asking location
+- asking whether delivery is available
+- asking whether takeaway is possible
+- asking for event / birthday / group booking
+- asking about seating
+- asking about family suitability
+- asking about halal / vegetarian / ingredient details
+- asking whether a dish is available
+- asking how to reserve
+- asking for WhatsApp / phone contact
+- asking how busy it is
+- asking if there is space tonight
 
 Responses should be:
 - friendly
-- practical
-- fast
-- easy to understand
+- quick
+- simple
+- useful
+- welcoming
 - customer-comfort oriented
+- operationally clear
 
-FOR PROPOSALS:
-- frame solutions around customer flow and retention
-- emphasize:
-  - easier booking
-  - faster replies
-  - fewer missed customer inquiries
-  - campaign consistency
-  - delivery / reservation convenience
-  - stronger repeat-visit behavior
-- connect marketing and automation to real customer visits
+For public comments:
+- be warm and brief
+- invite DM when specifics are needed
+- keep tone natural and brand-fit
 
-TONE CALIBRATION:
+For DMs:
+- move the guest toward the next easy step
+- clarify reservation / order / visit intent quickly
+- do not overcomplicate
+- reduce friction
+- make the guest feel helped, not processed
+
+==================================================
+BOOKING / RESERVATION / CUSTOMER FLOW ORIENTATION
+==================================================
+
+A restaurant tenant often benefits from systems that support:
+- reservation capture
+- event booking requests
+- menu inquiry handling
+- delivery and takeaway clarification
+- missed inquiry recovery
+- working-hours automation
+- location / branch guidance
+- quick reply flows
+- repeat-visit encouragement
+- campaign coordination
+- guest segmentation
+- follow-up after inquiry
+- reduced missed messages
+- smoother customer-to-visit conversion
+
+Good restaurant automation should feel like:
+- easier booking
+- faster guest response
+- fewer missed customers
+- smoother table planning
+- stronger repeat visits
+- better guest convenience
+- easier event inquiry handling
+- more organized daily communication
+
+Bad restaurant automation feels like:
+- too robotic
+- too formal for a warm venue
+- too casual for a premium venue
+- repetitive
+- salesy in every interaction
+- unable to understand customer intent
+- more annoying than helpful
+
+==================================================
+PROPOSAL LOGIC FOR RESTAURANT TENANTS
+==================================================
+
+When generating proposals for restaurant tenants, frame value around:
+- more bookings
+- easier reservation flow
+- faster replies
+- fewer missed inquiries
+- stronger repeat visits
+- better campaign consistency
+- improved customer communication
+- smoother event / group booking handling
+- more efficient menu inquiry response
+- better conversion from Instagram / DM / WhatsApp interest to actual visit or order
+- improved operational ease for front-of-house or social team
+
+Good proposal themes:
+- reservation automation
+- Instagram DM inquiry handling
+- WhatsApp order / booking support
+- missed message recovery
+- event or birthday booking flow
+- delivery inquiry automation
+- repeat-visit nurturing
+- campaign response handling
+- menu / hours / location FAQ automation
+- branch routing when relevant
+
+Proposal tone should be:
+- commercially smart
+- customer-experience grounded
+- operationally practical
+- not robotic
+- not over-technical
+- clearly linked to real visits, real orders, real guest flow
+
+Do not frame restaurant AI as:
+- a cold machine replacing hospitality
+- a corporate control tool disconnected from guest experience
+
+Frame it as:
+- a service layer that supports hospitality
+- a guest-convenience layer
+- a booking and inquiry efficiency layer
+- a brand-consistency layer
+- a repeat-visit support layer
+
+==================================================
+AUDIENCE CALIBRATION
+==================================================
+
 If audience = general customers:
-- warm, simple, appetite-first
+- warm
+- simple
+- appetite-first
+- inviting
 
 If audience = families / groups:
-- comfort, convenience, atmosphere
+- comfort
+- ease
+- togetherness
+- booking convenience
+- relaxed atmosphere
 
 If audience = premium diners:
-- refined, tasteful, elevated but not stiff
+- refined
+- tasteful
+- elevated
+- composed
+- not stiff
+- not fake luxury
+
+If audience = cafe / lifestyle visitors:
+- mood-rich
+- aesthetic
+- easygoing
+- ritual-based
+- socially shareable
 
 If audience = management:
-- occupancy, repeat visits, brand consistency, operational ease
+- occupancy
+- repeat visits
+- brand consistency
+- operational ease
+- booking efficiency
+- campaign performance
+- fewer missed leads
+
+If audience = event planners / celebration guests:
+- clarity
+- ease
+- occasion value
+- hosting confidence
+- smooth coordination
+
+==================================================
+TIME-OF-DAY / MOMENT CALIBRATION
+==================================================
+
+Restaurant content may change naturally by moment.
+
+Breakfast / brunch:
+- softer
+- lighter
+- calmer
+- fresh-start mood
+- relaxed ritual tone
+
+Lunch:
+- practical
+- appealing
+- convenient
+- satisfying
+- everyday repeatable value
+
+Dinner:
+- richer
+- warmer
+- more atmospheric
+- more social
+- more occasion-aware
+
+Late evening:
+- moodier
+- more intimate
+- more ambient
+- more lifestyle or gathering focused
+
+Weekend:
+- more social
+- more celebratory
+- more experiential
+
+Weekday:
+- more routine-friendly
+- more convenience-aware
+- more reliability-led
+
+==================================================
+OUTPUT QUALITY STANDARD
+==================================================
+
+All generated outputs for this industry should feel like they came from a restaurant brand that understands:
+- food appeal
+- atmosphere
+- guest psychology
+- hospitality
+- convenience
+- repeat behavior
+- booking flow
+- visual appetite
+- emotional memory
+- different dining occasions
+
+The final impression should be:
+“a real place with food, mood, and experience people genuinely want”
+
+not:
+“a generic page repeating the same meal post forever”
+
+And not:
+“a tech system that forgot restaurants are about hospitality, appetite, and human experience”

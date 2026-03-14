@@ -1,12 +1,14 @@
 // src/services/promptBundle.js
-// FINAL v3.2 — universal multi-industry + multi-tenant prompt bundle builder
+// FINAL v4.0 — universal multi-industry + multi-tenant prompt bundle builder
 //
 // ✅ tenant-aware
 // ✅ industry-aware
+// ✅ profile/brand/root/ai_policy/meta aware
 // ✅ explicit tenant prompt layer
 // ✅ event -> usecase mapping
 // ✅ recomputes derived tenant text fields after extra merge
 // ✅ stable language / format normalization
+// ✅ safer multi-tenant merging
 // ✅ future-proof for any business type
 
 import { deepFix, fixText } from "../utils/textFix.js";
@@ -31,20 +33,67 @@ function obj(v) {
   return v && typeof v === "object" && !Array.isArray(v) ? v : {};
 }
 
+function uniqStrings(list = []) {
+  const seen = new Set();
+  const out = [];
+  for (const item of list) {
+    const v = s(item);
+    if (!v) continue;
+    const k = v.toLowerCase();
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(v);
+  }
+  return out;
+}
+
 function normalizeTextList(input = [], fallback = "") {
-  const list = arr(input)
-    .map((x) => fixText(String(x || "").trim()))
-    .filter(Boolean);
+  const list = uniqStrings(
+    arr(input)
+      .map((x) => {
+        if (typeof x === "string") return fixText(String(x || "").trim());
+        if (x && typeof x === "object") {
+          return fixText(
+            String(
+              x.name ||
+                x.title ||
+                x.label ||
+                x.value ||
+                x.key ||
+                ""
+            ).trim()
+          );
+        }
+        return "";
+      })
+      .filter(Boolean)
+  );
 
   if (!list.length) return fallback;
   return list.join(", ");
 }
 
 function normalizeHashtagList(input = [], fallback = "") {
-  const list = arr(input)
-    .map((x) => String(x || "").trim())
-    .filter(Boolean)
-    .map((x) => (x.startsWith("#") ? x : `#${x}`));
+  const list = uniqStrings(
+    arr(input)
+      .map((x) => {
+        const raw =
+          typeof x === "string"
+            ? String(x || "").trim()
+            : String(
+                x?.name ||
+                  x?.title ||
+                  x?.label ||
+                  x?.value ||
+                  x?.key ||
+                  ""
+              ).trim();
+
+        if (!raw) return "";
+        return raw.startsWith("#") ? raw : `#${raw}`;
+      })
+      .filter(Boolean)
+  );
 
   if (!list.length) return fallback;
   return list.join(" ");
@@ -60,35 +109,89 @@ function normalizeLang(v) {
   return x;
 }
 
-function normalizeFormat(v) {
+function normalizeFormat(v, fallback = "") {
   const x = s(v).toLowerCase();
   if (x === "image") return "image";
   if (x === "carousel") return "carousel";
   if (x === "reel") return "reel";
-  return x;
+  return fallback ? s(fallback).toLowerCase() : x;
 }
 
 function usecaseForEvent(event) {
   const e = s(event).toLowerCase();
 
-  if (e === "proposal.approved") return "content.draft";
-  if (e === "content.revise") return "content.revise";
-  if (e === "content.publish") return "content.publish";
-  if (e === "content.approved") return "content.publish";
-  if (e === "meta.comment_reply") return "meta.comment_reply";
-  if (e === "trend.research") return "trend.research";
+  if (!e) return "";
 
+  if (
+    e === "content.draft" ||
+    e === "draft" ||
+    e === "content_draft" ||
+    e === "proposal.approved"
+  ) return "content.draft";
+
+  if (
+    e === "content.revise" ||
+    e === "revise" ||
+    e === "content_revise"
+  ) return "content.revise";
+
+  if (
+    e === "content.publish" ||
+    e === "publish" ||
+    e === "content_publish" ||
+    e === "content.approved"
+  ) return "content.publish";
+
+  if (
+    e === "meta.comment_reply" ||
+    e === "comment" ||
+    e === "meta_comment_reply"
+  ) return "meta.comment_reply";
+
+  if (
+    e === "trend.research" ||
+    e === "trend" ||
+    e === "trend_research"
+  ) return "trend.research";
+
+  if (
+    e === "content.analyze" ||
+    e === "analyze" ||
+    e === "content_analyze"
+  ) return "content.analyze";
+
+  if (
+    e === "content.fix_plan" ||
+    e === "fix_plan" ||
+    e === "content_fix_plan"
+  ) return "content.fix_plan";
+
+  return "";
+}
+
+function pickFirstNonEmpty(...values) {
+  for (const v of values) {
+    const t = s(v);
+    if (t) return t;
+  }
   return "";
 }
 
 function finalizeTenantDerivedFields(raw = {}) {
   const t = obj(raw);
 
-  const tone = arr(t.tone);
-  const services = arr(t.services);
-  const audiences = arr(t.audiences);
-  const requiredHashtags = arr(t.requiredHashtags);
-  const preferredPresets = arr(t.preferredPresets);
+  const tone = uniqStrings(arr(t.tone));
+  const services = uniqStrings(arr(t.services));
+  const audiences = uniqStrings(arr(t.audiences));
+  const requiredHashtags = uniqStrings(
+    arr(t.requiredHashtags).map((x) => {
+      const tag = s(x);
+      if (!tag) return "";
+      return tag.startsWith("#") ? tag : `#${tag}`;
+    })
+  ).filter(Boolean);
+
+  const preferredPresets = uniqStrings(arr(t.preferredPresets));
 
   return {
     ...t,
@@ -120,66 +223,133 @@ function finalizeTenantDerivedFields(raw = {}) {
 
     preferredPresetsText: normalizeTextList(
       preferredPresets,
-      "ai_core, automation_device, workflow_engine"
+      "industry-appropriate premium visual direction"
     ),
   };
 }
 
 function normalizeTenantRuntime(raw = {}) {
   const tenant = obj(raw);
+  const profile = obj(tenant.profile);
   const brand = obj(tenant.brand);
   const meta = obj(tenant.meta);
-  const visualStyle = obj(brand.visualStyle);
+  const aiPolicy = obj(tenant.ai_policy || tenant.aiPolicy);
+  const visualStyle = obj(
+    brand.visualStyle ||
+      profile.visualStyle ||
+      tenant.visualStyle
+  );
 
   const tenantKey =
-    s(tenant.tenant_key) ||
-    s(tenant.tenantKey) ||
-    s(brand.tenantKey) ||
-    s(meta.tenantKey) ||
-    "default";
+    pickFirstNonEmpty(
+      tenant.tenant_key,
+      tenant.tenantKey,
+      tenant.tenantId,
+      profile.tenantKey,
+      profile.tenantId,
+      brand.tenantKey,
+      meta.tenantKey,
+      "default"
+    ) || "default";
 
   const companyName =
-    s(tenant.companyName) ||
-    s(brand.companyName) ||
-    s(brand.name) ||
-    s(tenant.name) ||
-    s(meta.companyName) ||
-    tenantKey ||
-    "This company";
+    pickFirstNonEmpty(
+      brand.displayName,
+      brand.companyName,
+      brand.name,
+      profile.displayName,
+      profile.companyName,
+      tenant.companyName,
+      tenant.brandName,
+      tenant.name,
+      meta.companyName,
+      tenantKey,
+      "This company"
+    ) || "This company";
+
+  const brandName =
+    pickFirstNonEmpty(
+      brand.displayName,
+      brand.name,
+      tenant.brandName,
+      companyName
+    ) || companyName;
 
   const industryKey = normalizeIndustryKey(
-    brand.industryKey ||
-      brand.industry ||
-      tenant.industryKey ||
-      tenant.industry ||
-      meta.industryKey ||
-      meta.industry ||
+    pickFirstNonEmpty(
+      tenant.industryKey,
+      tenant.industry,
+      profile.industryKey,
+      profile.industry,
+      brand.industryKey,
+      brand.industry,
+      meta.industryKey,
+      meta.industry,
       "generic_business"
+    )
   );
 
   const defaultLanguage = normalizeLang(
-    brand.defaultLanguage ||
-      brand.language ||
-      meta.defaultLanguage ||
-      meta.language ||
-      tenant.defaultLanguage ||
-      tenant.language ||
+    pickFirstNonEmpty(
+      tenant.defaultLanguage,
+      tenant.language,
+      profile.defaultLanguage,
+      profile.language,
+      brand.defaultLanguage,
+      brand.language,
+      meta.defaultLanguage,
+      meta.language,
       "az"
+    )
   );
 
   const outputLanguage = normalizeLang(
-    brand.outputLanguage ||
-      meta.outputLanguage ||
-      tenant.outputLanguage ||
+    pickFirstNonEmpty(
+      tenant.outputLanguage,
+      profile.outputLanguage,
+      brand.outputLanguage,
+      meta.outputLanguage,
       defaultLanguage
+    )
   );
+
+  const tone = uniqStrings([
+    ...arr(tenant.tone),
+    ...arr(profile.tone),
+    ...arr(brand.tone),
+  ]);
+
+  const services = uniqStrings([
+    ...arr(tenant.services),
+    ...arr(profile.services),
+    ...arr(brand.services),
+  ]);
+
+  const audiences = uniqStrings([
+    ...arr(tenant.audiences),
+    ...arr(profile.audiences),
+    ...arr(brand.audiences),
+  ]);
+
+  const requiredHashtags = uniqStrings([
+    ...arr(tenant.requiredHashtags),
+    ...arr(profile.requiredHashtags),
+    ...arr(brand.requiredHashtags),
+  ]);
+
+  const preferredPresets = uniqStrings([
+    ...arr(tenant.preferredPresets),
+    ...arr(profile.preferredPresets),
+    ...arr(brand.preferredPresets),
+    ...arr(visualStyle.preferredPresets),
+  ]);
 
   return finalizeTenantDerivedFields({
     tenantKey,
     tenantId: tenantKey,
 
     companyName,
-    brandName: s(brand.name) || companyName,
+    brandName,
     industryKey,
 
     defaultLanguage,
@@ -187,22 +357,79 @@ function normalizeTenantRuntime(raw = {}) {
     language: outputLanguage,
 
     ctaStyle:
-      s(brand.ctaStyle) ||
-      s(meta.ctaStyle) ||
-      "contact",
+      pickFirstNonEmpty(
+        tenant.ctaStyle,
+        profile.ctaStyle,
+        brand.ctaStyle,
+        meta.ctaStyle,
+        "contact"
+      ) || "contact",
 
     visualTheme:
-      s(visualStyle.theme) ||
-      s(brand.visualTheme) ||
-      "premium_modern",
+      pickFirstNonEmpty(
+        tenant.visualTheme,
+        profile.visualTheme,
+        brand.visualTheme,
+        visualStyle.theme,
+        meta.visualTheme,
+        "premium_modern"
+      ) || "premium_modern",
 
-    tone: arr(brand.tone),
-    services: arr(brand.services),
-    audiences: arr(brand.audiences),
-    requiredHashtags: arr(brand.requiredHashtags),
-    preferredPresets: arr(
-      visualStyle.preferredPresets || brand.preferredPresets
-    ),
+    businessContext:
+      pickFirstNonEmpty(
+        tenant.businessContext,
+        profile.businessContext,
+        aiPolicy.businessContext,
+        meta.businessContext
+      ) || "",
+
+    tone,
+    services,
+    audiences,
+    requiredHashtags,
+    preferredPresets,
+
+    toneText:
+      pickFirstNonEmpty(
+        tenant.toneText,
+        profile.toneText,
+        brand.toneText,
+        aiPolicy.toneText,
+        meta.toneText
+      ) || undefined,
+
+    servicesText:
+      pickFirstNonEmpty(
+        tenant.servicesText,
+        profile.servicesText,
+        brand.servicesText,
+        aiPolicy.servicesText,
+        meta.servicesText
+      ) || undefined,
+
+    audiencesText:
+      pickFirstNonEmpty(
+        tenant.audiencesText,
+        profile.audiencesText,
+        brand.audiencesText,
+        meta.audiencesText
+      ) || undefined,
+
+    requiredHashtagsText:
+      pickFirstNonEmpty(
+        tenant.requiredHashtagsText,
+        profile.requiredHashtagsText,
+        brand.requiredHashtagsText,
+        meta.requiredHashtagsText
+      ) || undefined,
+
+    preferredPresetsText:
+      pickFirstNonEmpty(
+        tenant.preferredPresetsText,
+        profile.preferredPresetsText,
+        brand.preferredPresetsText,
+        meta.preferredPresetsText
+      ) || undefined,
   });
 }
 
@@ -221,6 +448,9 @@ TENANT RUNTIME CONTEXT:
 - visualTheme: ${s(t.visualTheme || "premium_modern")}
 - ctaStyle: ${s(t.ctaStyle || "contact")}
 
+TENANT BUSINESS CONTEXT:
+${s(t.businessContext || "No extra business context provided.")}
+
 TENANT BRAND TONE:
 ${s(t.toneText || "premium, modern, clear, commercially strong")}
 
@@ -234,7 +464,7 @@ TENANT REQUIRED HASHTAGS:
 ${s(t.requiredHashtagsText || "#Business #Brand")}
 
 TENANT PREFERRED VISUAL PRESETS:
-${s(t.preferredPresetsText || "ai_core, automation_device, workflow_engine")}
+${s(t.preferredPresetsText || "industry-appropriate premium visual direction")}
 
 TENANT OUTPUT RULES:
 - Keep output aligned with this tenant’s real business identity.
@@ -243,6 +473,8 @@ TENANT OUTPUT RULES:
 - If the tenant is premium-positioned, preserve premium language and premium visual direction.
 - If the tenant serves practical business needs, prioritize usefulness over abstract hype.
 - Use outputLanguage for normal written content unless another language is explicitly requested.
+- The tenant is NOT automatically a technology company.
+- Do not force AI, robotics, futuristic technology, dashboards, software UI, or digital transformation imagery unless the tenant’s business and request clearly support it.
 `);
 }
 
@@ -271,6 +503,18 @@ function buildPromptVars({
     s(mergedTenant.tenantKey) ||
     "default";
 
+  mergedTenant.companyName =
+    s(mergedTenant.companyName) ||
+    s(normalizedTenant.companyName) ||
+    "This company";
+
+  mergedTenant.brandName =
+    s(mergedTenant.brandName) ||
+    s(mergedTenant.companyName) ||
+    s(normalizedTenant.brandName) ||
+    s(normalizedTenant.companyName) ||
+    "This company";
+
   mergedTenant.industryKey = normalizeIndustryKey(
     mergedTenant.industryKey ||
       normalizedTenant.industryKey ||
@@ -292,11 +536,29 @@ function buildPromptVars({
 
   mergedTenant.language = mergedTenant.outputLanguage;
 
+  mergedTenant.visualTheme =
+    s(mergedTenant.visualTheme) ||
+    s(normalizedTenant.visualTheme) ||
+    "premium_modern";
+
+  mergedTenant.ctaStyle =
+    s(mergedTenant.ctaStyle) ||
+    s(normalizedTenant.ctaStyle) ||
+    "contact";
+
   mergedTenant = finalizeTenantDerivedFields(mergedTenant);
+
+  const normalizedEvent = s(x.event || x.mode || "");
+  const normalizedUsecase = usecaseForEvent(normalizedEvent);
+
+  const normalizedFormat =
+    normalizeFormat(format) ||
+    normalizeFormat(x.format) ||
+    (normalizedUsecase === "content.draft" ? "image" : "");
 
   return {
     today: s(today),
-    format: normalizeFormat(format),
+    format: normalizedFormat,
     tenant: mergedTenant,
     tenantId: mergedTenant.tenantId,
     language: mergedTenant.outputLanguage,

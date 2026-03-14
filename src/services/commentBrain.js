@@ -1,5 +1,5 @@
 // src/services/commentBrain.js
-// FINAL v2.0 — tenant-safe public comment classifier
+// FINAL v3.0 — tenant-aware public comment classifier with DM redirect strategy
 
 import OpenAI from "openai";
 import { cfg } from "../config.js";
@@ -152,16 +152,31 @@ function getTenantBrandName(tenant, tenantKey) {
   const brandName =
     tenant?.brand?.displayName ||
     tenant?.brand?.name ||
+    tenant?.profile?.displayName ||
+    tenant?.profile?.companyName ||
     tenant?.name ||
     getResolvedTenantKey(tenantKey);
 
   return s(brandName || "Brand");
 }
 
+function getTenantBusinessContext(tenant) {
+  return s(
+    tenant?.ai_policy?.businessContext ||
+      tenant?.profile?.businessContext ||
+      tenant?.businessContext ||
+      ""
+  ).slice(0, 1200);
+}
+
 let openaiSingleton = null;
 
 function ensureOpenAI() {
-  const key = s(cfg.OPENAI_API_KEY || "");
+  const key =
+    s(cfg?.openai?.apiKey) ||
+    s(cfg?.OPENAI_API_KEY) ||
+    "";
+
   if (!key) return null;
 
   if (!openaiSingleton) {
@@ -169,6 +184,18 @@ function ensureOpenAI() {
   }
 
   return openaiSingleton;
+}
+
+function makeDmReply(brandName, kind) {
+  if (kind === "sales") {
+    return `Təşəkkürlər. Sizə daha dəqiq kömək etmək üçün zəhmət olmasa bizə DM yazın. ${brandName} komandası sizə ətraflı məlumat göndərəcək.`;
+  }
+
+  if (kind === "support") {
+    return `Yazdığınız üçün təşəkkürlər. Məsələni daha rahat yoxlaya bilməyimiz üçün zəhmət olmasa bizə DM yazın. ${brandName} komandası dəstək olacaq.`;
+  }
+
+  return "";
 }
 
 function fallbackClassification(text, { tenantKey, tenant } = {}) {
@@ -208,8 +235,6 @@ function fallbackClassification(text, { tenantKey, tenant } = {}) {
     "sayt",
     "chatbot",
     "bot",
-    "instagram automation",
-    "whatsapp automation",
     "automation",
     "avtomat",
     "crm",
@@ -231,6 +256,12 @@ function fallbackClassification(text, { tenantKey, tenant } = {}) {
     "bizə də lazımdır",
     "bize de lazimdir",
     "want this",
+    "ətraflı",
+    "etraflı",
+    "details",
+    "info",
+    "melumat",
+    "məlumat",
   ];
 
   const supportPatterns = [
@@ -252,6 +283,9 @@ function fallbackClassification(text, { tenantKey, tenant } = {}) {
     "acilmir",
     "girilmir",
     "login olmur",
+    "işləmir?",
+    "niyə işləmir",
+    "niye islemir",
   ];
 
   const spamPatterns = [
@@ -333,6 +367,8 @@ function fallbackClassification(text, { tenantKey, tenant } = {}) {
     priority = "medium";
     sentiment = "negative";
     requiresHuman = true;
+    shouldReply = true;
+    replySuggestion = makeDmReply(brandName, "support");
     reason = "support_request";
   } else if (hasAny(salesPatterns)) {
     category = "sales";
@@ -347,6 +383,8 @@ function fallbackClassification(text, { tenantKey, tenant } = {}) {
         ? "high"
         : "medium";
     shouldCreateLead = true;
+    shouldReply = true;
+    replySuggestion = makeDmReply(brandName, "sales");
     reason =
       priority === "high" ? "pricing_or_contact_interest" : "service_interest";
   }
@@ -378,15 +416,45 @@ function normalizeOutput(parsed, { tenantKey, tenant } = {}) {
   const resolvedTenantKey = getResolvedTenantKey(tenantKey);
   const brandName = getTenantBrandName(tenant, resolvedTenantKey);
 
+  let category = normalizeCategory(parsed?.category);
+  let priority = normalizePriority(parsed?.priority);
+  let sentiment = normalizeSentiment(parsed?.sentiment);
+  let requiresHuman = Boolean(parsed?.requiresHuman);
+  let shouldCreateLead = Boolean(parsed?.shouldCreateLead);
+  let shouldReply = Boolean(parsed?.shouldReply);
+  let replySuggestion = cleanReplySuggestion(parsed?.replySuggestion || "");
+  let reason = cleanReason(parsed?.reason || "ai_classified");
+
+  if ((category === "sales" || category === "support") && !shouldReply) {
+    shouldReply = true;
+  }
+
+  if ((category === "sales" || category === "support") && !replySuggestion) {
+    replySuggestion = makeDmReply(brandName, category);
+  }
+
+  if (category === "sales") {
+    shouldCreateLead = shouldCreateLead || true;
+  }
+
+  if (category === "spam" || category === "toxic") {
+    shouldReply = false;
+    replySuggestion = "";
+  }
+
+  if (category === "toxic" && !requiresHuman) {
+    requiresHuman = true;
+  }
+
   return {
-    category: normalizeCategory(parsed?.category),
-    priority: normalizePriority(parsed?.priority),
-    sentiment: normalizeSentiment(parsed?.sentiment),
-    requiresHuman: Boolean(parsed?.requiresHuman),
-    shouldCreateLead: Boolean(parsed?.shouldCreateLead),
-    shouldReply: false,
-    replySuggestion: cleanReplySuggestion(parsed?.replySuggestion || ""),
-    reason: cleanReason(parsed?.reason || "ai_classified"),
+    category,
+    priority,
+    sentiment,
+    requiresHuman,
+    shouldCreateLead,
+    shouldReply,
+    replySuggestion,
+    reason,
     engine: "ai",
     meta: {
       tenantKey: resolvedTenantKey,
@@ -407,6 +475,7 @@ export async function classifyComment({
   const cleanText = fixMojibake(s(text || ""));
   const resolvedTenantKey = getResolvedTenantKey(tenantKey);
   const brandName = getTenantBrandName(tenant, resolvedTenantKey);
+  const businessContext = getTenantBusinessContext(tenant);
 
   if (!cleanText) {
     return {
@@ -434,17 +503,27 @@ export async function classifyComment({
     });
   }
 
-  const model = s(cfg.OPENAI_MODEL || "gpt-5") || "gpt-5";
-  const max_output_tokens = Number(cfg.OPENAI_MAX_OUTPUT_TOKENS || 500);
+  const model =
+    s(cfg?.openai?.model) ||
+    s(cfg?.OPENAI_MODEL, "gpt-5") ||
+    "gpt-5";
+
+  const max_output_tokens =
+    Number(cfg?.openai?.maxOutputTokens) ||
+    Number(cfg?.OPENAI_MAX_OUTPUT_TOKENS) ||
+    500;
 
   const prompt = `
-You are a strict JSON classifier for PUBLIC social media comments for ${brandName}.
+You are a strict JSON classifier for PUBLIC social media comments for a tenant brand.
 
-Business context:
-- This brand provides digital services such as website development, AI automation, chatbot systems, WhatsApp/Instagram/Messenger automation, and related business automation solutions.
-- This input is a PUBLIC COMMENT, not a DM.
-- Be conservative and avoid aggressive lead tagging.
-- We are only classifying, not executing actions.
+Important:
+- This is PUBLIC COMMENT classification, not DM classification.
+- Be tenant-aware and avoid assuming a specific company or industry.
+- Use the provided business context if available.
+- Be conservative with lead creation.
+- For clear sales or support intent in public comments, prefer a polite public reply that redirects the person to DM.
+- Never suggest public discussion of sensitive details.
+- Do not over-classify praise or generic reactions as leads.
 
 Return ONLY valid JSON with this exact shape:
 {
@@ -467,20 +546,25 @@ Allowed priority:
 Allowed sentiment:
 ["positive","neutral","negative","mixed"]
 
-Rules:
-- sales => asks about service, pricing, order, contact, demo, offer, package, automation, chatbot, website, etc.
-- support => has issue/problem/question needing human follow-up
-- spam => obvious irrelevant promo/scam/garbage
-- toxic => abusive/insulting/profane
-- normal => generic engagement, praise, neutral reaction
-- shouldCreateLead=true only for reasonably clear sales/commercial intent
-- shouldReply=false by default because this is public-comment phase
-- replySuggestion may be empty
+Classification rules:
+- sales => clear commercial intent, asks about service, pricing, package, demo, contact, order, availability, quote, proposal
+- support => issue/problem/help request needing follow-up or operational support
+- spam => irrelevant promotion, scam, garbage, obvious bot-like promotion
+- toxic => abusive, insulting, profane, hostile
+- normal => praise, reaction, generic engagement, non-actionable comment
+- unknown => not enough signal
+
+Action rules:
+- shouldCreateLead=true only when there is reasonably clear sales/commercial intent
+- shouldReply=true mainly for sales/support comments when a polite public DM redirect is appropriate
+- for sales/support public comments, replySuggestion should usually be a short polite DM redirect
+- for spam/toxic, shouldReply=false and replySuggestion=""
 - reason must be short snake_case
 
-Context:
+Tenant context:
 brandName=${JSON.stringify(brandName)}
 tenantKey=${JSON.stringify(resolvedTenantKey)}
+businessContext=${JSON.stringify(businessContext)}
 channel=${JSON.stringify(s(channel || "instagram"))}
 externalUserId=${JSON.stringify(s(externalUserId || ""))}
 externalUsername=${JSON.stringify(s(externalUsername || ""))}
@@ -498,7 +582,8 @@ ${JSON.stringify(cleanText)}
       input: [
         {
           role: "system",
-          content: "Return only valid JSON. No markdown. No explanations.",
+          content:
+            "Return only valid JSON. No markdown. No explanations. No extra text.",
         },
         {
           role: "user",

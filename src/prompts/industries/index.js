@@ -1,13 +1,5 @@
 // src/prompts/industries/index.js
-// FINAL v1.1 — industry prompt registry + normalization (Node ESM safe)
-//
-// ✅ central industry registry
-// ✅ alias normalization
-// ✅ safe fallback to generic_business
-// ✅ vars passthrough into template renderer
-// ✅ future-proof for many industries
-// ✅ FIX: Node backend cannot import .txt directly
-// ✅ Reads .txt prompts from filesystem safely
+// FINAL v2.0 — industry prompt registry + schema-aware tenant vars
 
 import fs from "node:fs";
 import path from "node:path";
@@ -20,44 +12,199 @@ function s(v) {
   return String(v ?? "").trim();
 }
 
+function asObj(v) {
+  return v && typeof v === "object" && !Array.isArray(v) ? v : {};
+}
+
+function asArr(v) {
+  return Array.isArray(v) ? v : [];
+}
+
+function joinText(arr = [], fallback = "") {
+  const out = asArr(arr)
+    .map((x) => {
+      if (typeof x === "string") return s(x);
+      if (x && typeof x === "object") {
+        return s(x.name || x.title || x.label || x.value || "");
+      }
+      return "";
+    })
+    .filter(Boolean);
+
+  return out.length ? out.join(", ") : fallback;
+}
+
 function readTextFile(filename) {
   try {
     return fs.readFileSync(path.join(__dirname, filename), "utf8");
   } catch (err) {
-    console.error(`[prompts/industries] failed to read ${filename}:`, err?.message || err);
+    console.error(
+      `[prompts/industries] failed to read ${filename}:`,
+      err?.message || err
+    );
     return "";
   }
+}
+
+function getTenantView(vars = {}) {
+  const tenant = asObj(vars?.tenant);
+  const profile = asObj(tenant.profile);
+  const brand = asObj(tenant.brand);
+  const aiPolicy = asObj(tenant.ai_policy || tenant.aiPolicy);
+  const extra = asObj(vars?.extra);
+
+  const companyName =
+    s(
+      brand.displayName ||
+        brand.name ||
+        profile.displayName ||
+        profile.companyName ||
+        tenant.companyName ||
+        tenant.brandName ||
+        tenant.name
+    ) || "This company";
+
+  const brandName =
+    s(
+      brand.displayName ||
+        brand.name ||
+        tenant.brandName ||
+        profile.displayName ||
+        profile.companyName ||
+        tenant.companyName ||
+        tenant.name
+    ) || companyName;
+
+  const industryKey =
+    s(
+      tenant.industryKey ||
+        profile.industryKey ||
+        tenant.industry ||
+        profile.industry ||
+        extra.industryKey
+    ) || "generic_business";
+
+  const outputLanguage =
+    s(
+      vars?.outputLanguage ||
+        vars?.language ||
+        tenant.outputLanguage ||
+        profile.outputLanguage ||
+        tenant.defaultLanguage ||
+        profile.defaultLanguage
+    ) || "az";
+
+  const defaultLanguage =
+    s(tenant.defaultLanguage || profile.defaultLanguage || outputLanguage) || "az";
+
+  const visualTheme =
+    s(
+      tenant.visualTheme ||
+        brand.visualTheme ||
+        profile.visualTheme ||
+        extra.visualTheme
+    ) || "premium_modern";
+
+  const ctaStyle =
+    s(tenant.ctaStyle || profile.ctaStyle || extra.ctaStyle) || "contact";
+
+  const toneText =
+    s(
+      tenant.toneText ||
+        profile.toneText ||
+        aiPolicy.toneText ||
+        extra.toneText
+    ) || "";
+
+  const businessContext =
+    s(
+      tenant.businessContext ||
+        profile.businessContext ||
+        aiPolicy.businessContext ||
+        extra.businessContext
+    ) || "";
+
+  const servicesText =
+    s(tenant.servicesText || profile.servicesText || extra.servicesText) ||
+    joinText(tenant.services, "");
+
+  const audiencesText =
+    s(tenant.audiencesText || profile.audiencesText || extra.audiencesText) ||
+    joinText(tenant.audiences, "");
+
+  const requiredHashtagsText =
+    s(
+      tenant.requiredHashtagsText ||
+        profile.requiredHashtagsText ||
+        extra.requiredHashtagsText
+    ) || joinText(tenant.requiredHashtags, "");
+
+  const preferredPresetsText =
+    s(
+      tenant.preferredPresetsText ||
+        profile.preferredPresetsText ||
+        extra.preferredPresetsText
+    ) || joinText(tenant.preferredPresets, "");
+
+  return {
+    tenant,
+    profile,
+    brand,
+    aiPolicy,
+    extra,
+    companyName,
+    brandName,
+    industryKey,
+    outputLanguage,
+    defaultLanguage,
+    visualTheme,
+    ctaStyle,
+    toneText,
+    businessContext,
+    servicesText,
+    audiencesText,
+    requiredHashtagsText,
+    preferredPresetsText,
+  };
 }
 
 function applyVars(template, vars = {}) {
   const text = String(template || "");
   if (!text) return "";
 
-  const tenant = vars?.tenant || {};
-  const extra = vars?.extra || {};
+  const view = getTenantView(vars);
+  const tenant = view.tenant;
+  const extra = view.extra;
 
   const map = {
     today: vars?.today || "",
     format: vars?.format || "",
-    language: vars?.language || vars?.outputLanguage || tenant?.outputLanguage || "az",
-    outputLanguage: vars?.outputLanguage || tenant?.outputLanguage || "az",
+    language: view.outputLanguage,
+    outputLanguage: view.outputLanguage,
 
-    tenantId: vars?.tenantId || tenant?.tenantId || tenant?.tenantKey || "default",
-    tenantKey: tenant?.tenantKey || tenant?.tenantId || "default",
+    tenantId:
+      vars?.tenantId ||
+      tenant?.tenantId ||
+      tenant?.tenantKey ||
+      tenant?.id ||
+      "default",
 
-    companyName: tenant?.companyName || "This company",
-    brandName: tenant?.brandName || tenant?.companyName || "This company",
-    industryKey: tenant?.industryKey || "generic_business",
+    tenantKey: tenant?.tenantKey || tenant?.tenantId || tenant?.id || "default",
 
-    defaultLanguage: tenant?.defaultLanguage || "az",
-    visualTheme: tenant?.visualTheme || "premium_modern",
-    ctaStyle: tenant?.ctaStyle || "contact",
+    companyName: view.companyName,
+    brandName: view.brandName,
+    industryKey: view.industryKey,
 
-    toneText: tenant?.toneText || "",
-    servicesText: tenant?.servicesText || "",
-    audiencesText: tenant?.audiencesText || "",
-    requiredHashtagsText: tenant?.requiredHashtagsText || "",
-    preferredPresetsText: tenant?.preferredPresetsText || "",
+    defaultLanguage: view.defaultLanguage,
+    visualTheme: view.visualTheme,
+    ctaStyle: view.ctaStyle,
+
+    toneText: view.toneText,
+    businessContext: view.businessContext,
+    servicesText: view.servicesText,
+    audiencesText: view.audiencesText,
+    requiredHashtagsText: view.requiredHashtagsText,
+    preferredPresetsText: view.preferredPresetsText,
 
     ...extra,
   };
@@ -76,6 +223,10 @@ function applyVars(template, vars = {}) {
       tenant,
       extra,
       map,
+      view,
+      profile: view.profile,
+      brand: view.brand,
+      aiPolicy: view.aiPolicy,
     };
 
     for (const part of parts) {
@@ -247,4 +398,4 @@ export default {
   hasIndustryPrompt,
   getRawIndustryPrompt,
   getIndustryPrompt,
-}; 
+};

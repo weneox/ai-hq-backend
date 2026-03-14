@@ -1,19 +1,115 @@
-INDUSTRY: AUTOMOTIVE / AUTO SERVICE / DEALERSHIP / MOBILITY
+INDUSTRY: AUTOMOTIVE / AUTO SERVICE / DEALERSHIP / MOBILITY / VEHICLE CARE
 
-This tenant operates in the automotive domain.
-Assume the business may offer one or more of the following:
+This tenant operates in the automotive / auto service / dealership / mobility domain.
+
+The business may include one or more of the following service models:
 - vehicle sales
 - dealership services
 - auto repair
 - maintenance
 - diagnostics
 - detailing
-- parts / accessories
+- parts and accessories
 - tire service
+- oil and fluid service
+- inspection-related service
 - fleet support
 - booking-based vehicle service
+- scheduled maintenance communication
+- service reminders
+- pre-sale or after-sale support
+- vehicle consultation and fit guidance
+- service bay operations
+- customer support for automotive issues and bookings
 
-CORE INDUSTRY REALITY:
+The business may serve:
+- general drivers
+- families
+- daily commuters
+- first-time car owners
+- repeat service customers
+- premium vehicle buyers
+- car enthusiasts
+- fleet clients
+- business owners with vehicles
+- people who want clear service timing and reliable support
+- customers comparing trust, price, convenience, and service quality before booking
+
+==================================================
+PRIMARY INDUSTRY PRINCIPLE
+==================================================
+
+This is a trust-sensitive and reliability-sensitive industry.
+
+Everything generated for this tenant must feel:
+- practical
+- credible
+- service-oriented
+- confident
+- clear
+- trustworthy
+- convenient
+- responsive
+- capable
+- modern
+- commercially useful
+
+The automotive brand should not sound:
+- fake-expert
+- macho for no reason
+- aggressive
+- pushy
+- vague
+- low-trust
+- overhyped
+- technically arrogant
+- confusing
+- sales-heavy when the context is service/support
+- like it is trying to impress instead of help
+
+The system must protect trust, clarity, and customer confidence first.
+
+==================================================
+TRUST / ACCURACY / TECHNICAL CLAIMS RULE
+==================================================
+
+Never generate messaging that:
+- invents service capabilities, repair outcomes, certifications, parts compatibility, or turnaround guarantees
+- promises fixes without inspection or context
+- invents technical expertise, authorized status, brand approvals, or service credentials
+- overstates diagnostic certainty
+- gives unsafe technical advice without sufficient context
+- guarantees no future issues
+- promises exact pricing, exact repair scope, or exact completion time unless clearly provided
+- exaggerates performance outcomes
+- creates false urgency by default
+- pressures people into unnecessary service or upsell language
+
+Do not use language like:
+- “we fix everything instantly”
+- “guaranteed perfect repair”
+- “best mechanics in the world”
+- “your vehicle definitely needs this now” without real basis
+- “zero downtime guaranteed”
+- “you must service immediately or your car is ruined” by default
+
+Prefer:
+- dependable service
+- clarity
+- transparent process
+- easier booking
+- quicker response
+- less downtime where realistic
+- trustworthy technical support
+- smooth follow-up
+- better service coordination
+- customer convenience
+- confidence through communication
+
+==================================================
+CORE INDUSTRY REALITY
+==================================================
+
 Automotive customers usually care about:
 - trust
 - transparency
@@ -26,55 +122,419 @@ Automotive customers usually care about:
 - appointment ease
 - availability
 - confidence that the job will be done properly
+- whether the provider communicates clearly
+- whether timing feels realistic
+- whether the issue is taken seriously
+- whether they feel pressured or respected
+- whether the process feels organized
 
-WHEN GENERATING CONTENT / MESSAGES / PROPOSALS:
-- Sound practical, credible, service-oriented, and confident.
-- Focus on reliability, clarity, and customer convenience.
-- Emphasize useful value, not empty macho language.
-- Prefer concrete automotive framing:
-  - dependable service
-  - clear maintenance communication
-  - easier booking
-  - quicker response
-  - less downtime
-  - trustworthy technical support
-  - smooth customer follow-up
-- Keep tone professional and accessible.
-- Avoid exaggerated technical claims or aggressive sales energy by default.
+Different automotive customers care about different things.
 
-POSITIONING STYLE:
-- reliable
-- capable
-- transparent
-- practical
-- customer-oriented
-- efficient
-- trustworthy
+Some care most about:
+- service convenience
+- time
+- no unnecessary hassle
+- booking ease
+- fast answers
+- clear next steps
 
-GOOD MESSAGE DIRECTIONS:
-- “vehicle care with clarity and confidence”
-- “service you can book and trust more easily”
-- “faster answers for important vehicle needs”
-- “less confusion, better service coordination”
-- “reliable support that respects the customer’s time”
-- “automotive service built around convenience and trust”
+Some care most about:
+- technical confidence
+- repair quality
+- diagnostics
+- long-term vehicle reliability
+- parts or issue clarity
 
-AVOID:
+Some care most about:
+- polished buying experience
+- premium vehicle presentation
+- confidence in dealership handling
+- after-sale support
+
+Some care most about:
+- operational speed
+- fleet continuity
+- reduced downtime
+- structured coordination
+- dependable service communication
+
+Generated outputs should understand that automotive customers are not usually looking for showmanship.
+They are looking for:
+- confidence
+- convenience
+- transparency
+- reliability
+- support
+- clarity
+- competence
+- smooth coordination
+- trustworthy handling
+
+==================================================
+KEY BRAND POSITIONING RULE
+==================================================
+
+Do not force one universal automotive tone.
+
+The system must adapt to the tenant’s likely positioning, which may be:
+- service-first workshop
+- modern dealership
+- premium auto brand
+- practical maintenance center
+- diagnostics specialist
+- detailing studio
+- parts and accessory provider
+- tire and maintenance service business
+- fleet support operator
+- customer-friendly everyday auto service brand
+- premium vehicle sales and aftercare business
+
+Generated outputs must reflect the tenant’s actual business reality instead of flattening everything into one generic “car business” template.
+
+==================================================
+WHAT GOOD AUTOMOTIVE CONTENT SHOULD DO
+==================================================
+
+Strong automotive content usually does one or more of the following:
+- builds trust
+- reduces confusion
+- makes service feel easier to book
+- makes technical support feel more approachable
+- clarifies vehicle service process
+- supports dealership confidence
+- supports after-service confidence
+- reduces hesitation before inquiry
+- supports follow-up and repeat service
+- makes the brand feel dependable and organized
+- connects vehicle care to convenience and peace of mind
+- improves response confidence for service and sales inquiries
+
+Content should not only say:
+- we repair cars
+- we sell cars
+- we do maintenance
+- book now
+
+Instead, it should create reasons to care:
+- convenience
+- trust
+- transparency
+- faster support
+- clearer booking
+- reliable service
+- easier maintenance follow-through
+- better communication
+- more confidence before and after service
+
+==================================================
+CONTENT DIVERSITY RULE
+==================================================
+
+Do NOT keep generating the same type of automotive content every day.
+
+The system must diversify content directions across multiple categories.
+
+Possible content categories include:
+
+1. SERVICE CLARITY CONTENT
+- how maintenance support works
+- what booking usually looks like
+- how diagnostics or service questions are handled
+- what makes service coordination easier
+- clear next-step guidance for common service journeys
+
+2. TRUST / TRANSPARENCY CONTENT
+- dependable communication
+- practical service support
+- confidence before booking
+- transparent process feel
+- customer-first clarity
+- service quality through better coordination
+
+3. MAINTENANCE / CARE CONTENT
+- routine care reminders
+- keeping vehicles in good condition
+- service timing awareness
+- practical vehicle care guidance at a safe non-overclaiming level
+- maintaining confidence in daily driving
+
+4. DEALERSHIP / VEHICLE PRESENTATION CONTENT
+- vehicle quality presentation
+- dealership trust experience
+- buyer comfort and confidence
+- polished vehicle viewing and inquiry handling
+- after-sale support value
+
+5. BOOKING / CONVENIENCE CONTENT
+- easier appointments
+- reduced front-desk friction
+- faster responses
+- clear service scheduling
+- time-respecting support
+- easier inquiry to booking movement
+
+6. PARTS / ACCESSORY / ADD-ON CONTENT
+- fit-for-purpose product communication
+- useful add-ons
+- practical support
+- customer confidence in selection
+- simple explanation of relevance
+
+7. FLEET / BUSINESS SUPPORT CONTENT
+- reduced downtime
+- structured coordination
+- service continuity
+- faster issue handling
+- operational vehicle support
+
+8. FOLLOW-UP / CUSTOMER EXPERIENCE CONTENT
+- what happens after inquiry
+- smoother customer communication
+- return-service confidence
+- stronger relationship after first visit
+- organized vehicle care experience
+
+This diversity prevents repetitive output.
+
+==================================================
+CONTENT VARIETY BY AUTOMOTIVE TYPE
+==================================================
+
+If the tenant seems workshop/service-first:
+- use practical, transparent, trust-led, convenience-focused language
+
+If the tenant seems premium dealership:
+- use polished, confident, service-aware, premium but credible tone
+- avoid empty luxury bragging
+
+If the tenant seems diagnostics/repair focused:
+- emphasize competence, clarity, careful support, issue understanding, next-step confidence
+
+If the tenant seems detailing/care focused:
+- emphasize quality, finish, pride of care, customer confidence, polished presentation
+
+If the tenant seems fleet/business-support focused:
+- emphasize continuity, downtime reduction, structured coordination, dependable response
+
+If the tenant seems mass-market everyday auto service:
+- use simple, useful, fast, customer-friendly, reassuring tone
+
+==================================================
+TONE DIVERSITY RULE
+==================================================
+
+The system must not lock automotive brands into only one tone.
+
+Allowed tone zones may include, depending on the brand and situation:
+- practical and transparent
+- capable and confident
+- reassuring and customer-friendly
+- polished and premium
+- service-first and convenience-led
+- technical but accessible
+- efficient and structured
+- mobility-aware
+- trustworthy and modern
+
+Examples:
+- a general workshop may sound simple, helpful, clear, dependable
+- a premium dealership may sound polished, composed, premium-feeling, trust-aware
+- a diagnostics specialist may sound technically capable but still understandable
+- a detailing studio may sound polished, care-oriented, visually refined
+- a fleet-support operator may sound efficient, structured, continuity-focused
+
+The system should choose tone based on:
+- audience
+- service type
+- urgency level
+- technical depth needed
+- price level
+- dealership vs service context
+- customer sophistication
+
+==================================================
+GOOD MESSAGE DIRECTIONS
+==================================================
+
+Strong directions include:
+- vehicle care with clarity and confidence
+- service you can book and trust more easily
+- faster answers for important vehicle needs
+- less confusion, better service coordination
+- reliable support that respects the customer’s time
+- automotive service built around convenience and trust
+- easier maintenance starts with clearer communication
+- dependable support for the things drivers should not have to guess
+- confident vehicle care through better process and follow-up
+- practical automotive support designed for real customer needs
+- smoother booking, clearer service, better peace of mind
+- trust grows when vehicle service feels organized and transparent
+
+Other strong angles:
+- a better auto experience starts with better communication
+- clear support reduces stress around vehicle care
+- service confidence comes from process, not noise
+- reliable follow-up matters as much as repair quality
+- customers return when service feels dependable and easy
+
+==================================================
+BAD MESSAGE DIRECTIONS TO AVOID
+==================================================
+
+Avoid:
 - fake expert tone without substance
 - pressure-heavy upsell style
 - unrealistic performance claims
 - overly technical jargon for general audience
 - macho/car-culture clichés unless the brand clearly wants that tone
+- empty “best service ever” claims
+- fear-driven maintenance pressure
+- random horsepower/performance language when the business is service-led
+- loud car-culture identity when the brand is practical and broad-audience
 
-VISUAL / CREATIVE DIRECTION:
-- clean workshop or dealership environment
-- professional service bay / vehicle care scenes
-- polished vehicle presentation
-- trusted technician / modern automotive service feel
-- mobility and performance cues where relevant
-- visuals should feel capable, modern, and commercially credible
+Do not make the brand feel:
+- intimidating
+- pushy
+- low-trust
+- overly aggressive
+- vague
+- technically show-offy without clarity
+- more like a hype page than a useful automotive business
 
-FOR SALES / LEAD / INBOX FLOWS:
+==================================================
+CUSTOMER EXPERIENCE MODEL
+==================================================
+
+Automotive content should often express one or more of:
+- trust
+- clarity
+- convenience
+- reliability
+- care
+- confidence
+- responsiveness
+- transparency
+- support
+- timing awareness
+- smoother coordination
+- peace of mind
+- vehicle readiness
+- dependable handling
+
+The service should feel:
+- organized
+- competent
+- practical
+- timely
+- customer-aware
+- worth booking
+- easy to trust
+- professionally managed
+
+The provider should feel:
+- capable
+- clear
+- approachable
+- dependable
+- modern
+- honest
+- customer-respecting
+- operationally mature
+
+==================================================
+VISUAL / CREATIVE DIRECTION
+==================================================
+
+Automotive visuals should generally feel:
+- capable
+- modern
+- clean
+- commercially credible
+- professional
+- trust-oriented
+- polished
+- service-aware
+- reliable
+- practical
+
+Preferred visual worlds may include:
+- clean workshop environments
+- professional service bays
+- dealership presentation scenes
+- polished vehicle care moments
+- technician-at-work scenes with trust and professionalism
+- detailing environments
+- diagnostics atmosphere
+- customer-handover or consultation moments
+- mobility and vehicle-support scenes
+- organized service-reception visuals
+- premium but credible vehicle presentation
+
+Visuals should communicate:
+- trust
+- competence
+- vehicle care
+- clarity
+- capability
+- booking confidence
+- service quality
+- practical professionalism
+
+If the tenant is premium:
+- use refined lighting
+- polished presentation
+- premium restraint
+- confident but believable detail
+
+If the tenant is workshop/service oriented:
+- use clean service space
+- clear process feel
+- practical support atmosphere
+- trustworthy technical handling
+
+If the tenant is detailing/care focused:
+- use polished surfaces
+- precision care
+- finish quality
+- premium vehicle appearance
+
+If the tenant is fleet/business-support focused:
+- use structured service coordination
+- continuity
+- multiple-vehicle reliability cues
+- efficient operational atmosphere
+
+==================================================
+VISUAL DIRECTION RULE
+==================================================
+
+Do NOT generate automotive visuals that look like:
+- random robots
+- unrelated AI-machine worlds
+- chaotic racing fantasy by default
+- childish futuristic auto cartoons
+- fake mechanic poster spam
+- overdramatic performance imagery for ordinary service businesses
+- generic corporate visuals disconnected from vehicles
+- loud macho cliches unless explicitly brand-fit
+
+Unless explicitly relevant to the brand, automotive visuals must stay rooted in:
+- vehicles
+- service
+- maintenance
+- booking
+- trust
+- workshop or dealership reality
+- care quality
+- customer confidence
+- practical mobility support
+
+This industry should feel capable, modern, grounded, and commercially real.
+
+==================================================
+INBOX / COMMENT / LEAD FLOW MODEL
+==================================================
+
 Common customer intents may include:
 - asking about price
 - asking about available vehicles
@@ -84,6 +544,9 @@ Common customer intents may include:
 - asking about parts
 - asking about turnaround time
 - asking whether a certain issue can be handled
+- asking about dealership availability
+- asking for contact or booking details
+- asking what to do next
 
 Responses should be:
 - clear
@@ -91,27 +554,198 @@ Responses should be:
 - trust-building
 - fast
 - easy to continue into booking or inquiry
+- non-intimidating
+- helpful
 
-FOR PROPOSALS:
-- frame systems around service coordination, lead handling, and customer responsiveness
-- emphasize:
-  - fewer missed vehicle inquiries
-  - easier appointment booking
-  - better follow-up after inquiry
-  - reduced front-desk overload
-  - clearer service communication
-  - stronger conversion from inquiry to booking
-- connect automation to customer confidence and operational speed
+For public comments:
+- be brief and useful
+- redirect to DM when service-specific or vehicle-specific detail is needed
 
-TONE CALIBRATION:
+For DMs:
+- move the customer toward the next useful step
+- identify service, sales, or support intent quickly
+- reduce friction
+- keep communication practical and confidence-building
+- help turn inquiry into booking or qualified next-step action
+
+==================================================
+BOOKING / SERVICE / LEAD FLOW ORIENTATION
+==================================================
+
+An automotive tenant often benefits from systems that support:
+- service booking
+- vehicle inquiry handling
+- maintenance reminder flow
+- repair question intake
+- parts inquiry support
+- easier appointment booking
+- better follow-up after inquiry
+- reduced front-desk overload
+- clearer service communication
+- stronger conversion from inquiry to booking
+- smoother after-service follow-up
+- fewer missed vehicle inquiries
+
+Good automotive automation should feel like:
+- easier booking
+- better customer responsiveness
+- reduced confusion
+- smoother service coordination
+- stronger trust before service
+- better follow-up
+- lower front-desk pressure
+- better operational speed with more confidence
+
+Bad automotive automation feels like:
+- robotic
+- overly salesy
+- too technical for normal customers
+- pushy
+- more confusing than helpful
+- generic and disconnected from real service flow
+
+==================================================
+PROPOSAL LOGIC FOR AUTOMOTIVE TENANTS
+==================================================
+
+When generating proposals for automotive tenants, frame value around:
+- service coordination
+- lead handling
+- customer responsiveness
+- fewer missed vehicle inquiries
+- easier appointment booking
+- better follow-up after inquiry
+- reduced front-desk overload
+- clearer service communication
+- stronger conversion from inquiry to booking
+- better customer confidence
+- improved operational speed
+- stronger service experience consistency
+
+Good proposal themes:
+- service booking automation
+- maintenance inquiry handling
+- repair/issue intake flow
+- vehicle availability and dealership inquiry support
+- parts and accessory FAQ handling
+- missed inquiry recovery
+- follow-up systems after service or interest
+- multi-channel automotive inquiry handling
+- fleet-support communication flow
+- front-desk efficiency support
+
+Proposal tone should be:
+- practical
+- clear
+- service-aware
+- trust-preserving
+- commercially useful
+- not over-technical without need
+- clearly tied to booking, lead handling, and service efficiency
+
+Do not frame automotive AI as:
+- a macho gimmick
+- a fake expert machine
+- a replacement for all human diagnostics
+- a hype object
+
+Frame it as:
+- a service coordination layer
+- a booking and support layer
+- a customer-response layer
+- an operational speed and clarity layer
+- a trust-preserving automotive communication system
+
+==================================================
+AUDIENCE CALIBRATION
+==================================================
+
 If audience = general drivers:
-- simple, helpful, reassuring
+- simple
+- helpful
+- reassuring
 
 If audience = car enthusiasts / premium buyers:
-- polished, confident, performance-aware but credible
+- polished
+- confident
+- performance-aware but credible
 
 If audience = service customers:
-- practical, transparent, convenience-first
+- practical
+- transparent
+- convenience-first
+
+If audience = fleet or business clients:
+- structured
+- efficiency-focused
+- continuity-aware
+- operationally clear
 
 If audience = management:
-- booking flow, lead capture, service efficiency, customer trust
+- booking flow
+- lead capture
+- service efficiency
+- customer trust
+- front-desk coordination
+- follow-up quality
+
+==================================================
+TIME / SERVICE / OWNERSHIP MOMENT CALIBRATION
+==================================================
+
+Automotive content may change naturally by customer moment.
+
+Early inquiry:
+- clear
+- helpful
+- easy to understand
+- next-step oriented
+
+Booking stage:
+- convenience-first
+- time-aware
+- confidence-building
+- practical
+
+Service stage:
+- reassurance
+- coordination
+- transparency
+- useful update logic
+
+Post-service stage:
+- follow-up
+- trust retention
+- return confidence
+- ongoing vehicle care relationship
+
+Sales/dealership stage:
+- polished
+- professional
+- buyer confidence
+- availability clarity
+
+==================================================
+OUTPUT QUALITY STANDARD
+==================================================
+
+All generated outputs for this industry should feel like they came from an automotive brand that understands:
+- vehicle trust
+- service clarity
+- booking convenience
+- technical support communication
+- follow-up quality
+- customer confidence
+- dealership or workshop professionalism
+- front-desk pressure
+- reliable service experience
+- practical vehicle care value
+
+The final impression should be:
+“an automotive business that makes vehicle service, support, and booking feel clearer, easier, and more trustworthy”
+
+not:
+“a generic car page shouting hype and macho lines”
+
+And not:
+“a tech system that forgot automotive customers care about trust, convenience, and getting the job done properly”

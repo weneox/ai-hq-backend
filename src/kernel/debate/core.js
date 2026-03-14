@@ -4,6 +4,7 @@ import OpenAI from "openai";
 import { cfg } from "../../config.js";
 import { normalizePromptInput } from "../../services/promptInput.js";
 import { buildPromptBundle } from "../../services/promptBundle.js";
+import { normalizeIndustryKey } from "../../prompts/industries/index.js";
 import {
   clamp,
   extractJsonFromText,
@@ -14,7 +15,7 @@ import {
 } from "./utils.js";
 import { normalizeDraftProposalObject } from "./contentDraft.normalize.js";
 
-export const DEBATE_ENGINE_VERSION = "final-v9.0-multitenant";
+export const DEBATE_ENGINE_VERSION = "final-v10.0-multitenant-industry-aware";
 console.log(`[debateEngine] LOADED ${DEBATE_ENGINE_VERSION}`);
 
 const DEFAULT_AGENTS = ["orion", "nova", "atlas", "echo"];
@@ -31,6 +32,58 @@ function s(v) {
 
 function obj(v) {
   return v && typeof v === "object" && !Array.isArray(v) ? v : {};
+}
+
+function arr(v) {
+  return Array.isArray(v) ? v : [];
+}
+
+function uniqStrings(input = []) {
+  const seen = new Set();
+  const out = [];
+  for (const item of input) {
+    const val = s(item);
+    if (!val) continue;
+    const key = val.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(val);
+  }
+  return out;
+}
+
+function joinText(arrInput = [], fallback = "") {
+  const out = arr(arrInput)
+    .map((x) => {
+      if (typeof x === "string") return s(x);
+      if (x && typeof x === "object") {
+        return s(x.name || x.title || x.label || x.value || "");
+      }
+      return "";
+    })
+    .filter(Boolean);
+
+  return out.length ? out.join(", ") : fallback;
+}
+
+function todayInBaku() {
+  try {
+    const parts = new Intl.DateTimeFormat("en-CA", {
+      timeZone: "Asia/Baku",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).formatToParts(new Date());
+
+    const map = {};
+    for (const p of parts) {
+      if (p.type !== "literal") map[p.type] = p.value;
+    }
+
+    return `${map.year}-${map.month}-${map.day}`;
+  } catch {
+    return new Date().toISOString().slice(0, 10);
+  }
 }
 
 function normalizeMode(mode) {
@@ -71,53 +124,266 @@ function modeExpectsJson(mode) {
   return ["proposal", "draft", "trend", "publish", "revise"].includes(m0);
 }
 
+function normalizeHashtagTag(tag) {
+  const t = s(tag);
+  if (!t) return "";
+  return t.startsWith("#") ? t : `#${t}`;
+}
+
 function buildTenantRuntime(tenantInput, tenantId) {
   const t = obj(tenantInput);
+  const profile = obj(t.profile);
   const brand = obj(t.brand);
   const meta = obj(t.meta);
+  const aiPolicy = obj(t.ai_policy || t.aiPolicy);
 
   const resolvedTenantId =
-    s(tenantId || t.tenantId || t.tenantKey || t.tenant_key) || "default";
+    s(tenantId || t.tenantId || t.tenantKey || t.tenant_key || t.id) || "default";
 
-  return {
+  const companyName =
+    s(
+      brand.displayName ||
+        brand.name ||
+        profile.displayName ||
+        profile.companyName ||
+        t.companyName ||
+        t.brandName ||
+        t.name ||
+        meta.companyName
+    ) || resolvedTenantId;
+
+  const industryKey = normalizeIndustryKey(
+    t.industryKey ||
+      t.industry ||
+      profile.industryKey ||
+      profile.industry ||
+      brand.industryKey ||
+      brand.industry ||
+      meta.industryKey ||
+      "generic_business"
+  );
+
+  const defaultLanguage = s(
+    t.defaultLanguage ||
+      t.language ||
+      profile.defaultLanguage ||
+      profile.language ||
+      brand.defaultLanguage ||
+      brand.language ||
+      "az"
+  ) || "az";
+
+  const outputLanguage =
+    s(
+      t.outputLanguage ||
+        profile.outputLanguage ||
+        brand.outputLanguage ||
+        t.language ||
+        profile.language ||
+        brand.language
+    ) || defaultLanguage;
+
+  const requiredHashtags = uniqStrings(
+    arr(
+      t.requiredHashtags ||
+        brand.requiredHashtags ||
+        profile.requiredHashtags ||
+        []
+    )
+      .map(normalizeHashtagTag)
+      .filter(Boolean)
+  ).slice(0, 18);
+
+  const preferredPresets = uniqStrings(
+    arr(
+      t.preferredPresets ||
+        brand.preferredPresets ||
+        profile.preferredPresets ||
+        []
+    )
+      .map((x) => {
+        if (typeof x === "string") return s(x);
+        if (x && typeof x === "object") {
+          return s(x.name || x.key || x.value || x.label);
+        }
+        return "";
+      })
+      .filter(Boolean)
+  ).slice(0, 12);
+
+  const audiences = uniqStrings(
+    arr(t.audiences || brand.audiences || profile.audiences || [])
+      .map((x) => {
+        if (typeof x === "string") return s(x);
+        if (x && typeof x === "object") {
+          return s(x.name || x.title || x.label || x.value);
+        }
+        return "";
+      })
+      .filter(Boolean)
+  ).slice(0, 12);
+
+  const services = uniqStrings(
+    arr(t.services || brand.services || profile.services || [])
+      .map((x) => {
+        if (typeof x === "string") return s(x);
+        if (x && typeof x === "object") {
+          return s(x.name || x.title || x.label || x.value);
+        }
+        return "";
+      })
+      .filter(Boolean)
+  ).slice(0, 24);
+
+  const tone = uniqStrings(
+    arr(t.tone || brand.tone || profile.tone || [])
+      .map((x) => {
+        if (typeof x === "string") return s(x);
+        if (x && typeof x === "object") {
+          return s(x.name || x.title || x.label || x.value);
+        }
+        return "";
+      })
+      .filter(Boolean)
+  ).slice(0, 16);
+
+  const servicesText =
+    s(
+      t.servicesText ||
+        profile.servicesText ||
+        brand.servicesText ||
+        aiPolicy.servicesText ||
+        meta.servicesText
+    ) || joinText(services);
+
+  const audiencesText =
+    s(
+      t.audiencesText ||
+        profile.audiencesText ||
+        brand.audiencesText ||
+        meta.audiencesText
+    ) || joinText(audiences);
+
+  const toneText =
+    s(
+      t.toneText ||
+        profile.toneText ||
+        brand.toneText ||
+        aiPolicy.toneText ||
+        meta.toneText
+    ) || joinText(tone);
+
+  const preferredPresetsText =
+    s(
+      t.preferredPresetsText ||
+        profile.preferredPresetsText ||
+        brand.preferredPresetsText ||
+        meta.preferredPresetsText
+    ) || joinText(preferredPresets);
+
+  const requiredHashtagsText =
+    s(
+      t.requiredHashtagsText ||
+        profile.requiredHashtagsText ||
+        brand.requiredHashtagsText ||
+        meta.requiredHashtagsText
+    ) || joinText(requiredHashtags);
+
+  const visualTheme =
+    s(
+      t.visualTheme ||
+        profile.visualTheme ||
+        brand.visualTheme ||
+        meta.visualTheme
+    ) || "premium_modern";
+
+  const ctaStyle =
+    s(
+      t.ctaStyle ||
+        profile.ctaStyle ||
+        brand.ctaStyle ||
+        meta.ctaStyle
+    ) || "contact";
+
+  const businessContext =
+    s(
+      t.businessContext ||
+        profile.businessContext ||
+        aiPolicy.businessContext ||
+        meta.businessContext
+    ) || "";
+
+  const runtime = {
     tenantId: resolvedTenantId,
     tenantKey: resolvedTenantId,
-    companyName:
-      s(t.companyName || t.name || brand.companyName || brand.name || meta.companyName) ||
-      resolvedTenantId,
-    industryKey:
-      s(t.industryKey || t.industry || brand.industryKey || brand.industry || meta.industryKey) ||
-      "generic_business",
-    defaultLanguage:
-      s(t.defaultLanguage || t.language || brand.defaultLanguage || brand.language) || "az",
-    outputLanguage:
-      s(t.outputLanguage || brand.outputLanguage || t.language || brand.language) || "",
-    ctaStyle:
-      s(t.ctaStyle || brand.ctaStyle || meta.ctaStyle) || "contact",
-    visualTheme:
-      s(t.visualTheme || brand.visualTheme) || "premium_modern",
+    companyName,
+    brandName: companyName,
+    industryKey,
+    defaultLanguage,
+    outputLanguage,
+    ctaStyle,
+    visualTheme,
+    businessContext,
+
+    tone,
+    services,
+    audiences,
+    requiredHashtags,
+    preferredPresets,
+
+    toneText,
+    servicesText,
+    audiencesText,
+    requiredHashtagsText,
+    preferredPresetsText,
+
+    profile: {
+      displayName: s(profile.displayName),
+      companyName: s(profile.companyName),
+      industryKey: normalizeIndustryKey(profile.industryKey || profile.industry || industryKey),
+      defaultLanguage: s(profile.defaultLanguage || profile.language || defaultLanguage),
+      outputLanguage: s(profile.outputLanguage || profile.language || outputLanguage),
+      visualTheme: s(profile.visualTheme || visualTheme),
+      businessContext: s(profile.businessContext),
+      servicesText: s(profile.servicesText),
+      audiencesText: s(profile.audiencesText),
+      toneText: s(profile.toneText),
+      preferredPresetsText: s(profile.preferredPresetsText),
+      requiredHashtagsText: s(profile.requiredHashtagsText),
+    },
+
     brand: {
+      displayName: s(brand.displayName),
       name: s(brand.name),
       companyName: s(brand.companyName),
-      industryKey: s(brand.industryKey),
-      defaultLanguage: s(brand.defaultLanguage || brand.language),
-      outputLanguage: s(brand.outputLanguage),
-      ctaStyle: s(brand.ctaStyle),
-      visualTheme: s(brand.visualTheme),
-      tone: Array.isArray(brand.tone) ? brand.tone : [],
-      services: Array.isArray(brand.services) ? brand.services : [],
-      audiences: Array.isArray(brand.audiences) ? brand.audiences : [],
-      requiredHashtags: Array.isArray(brand.requiredHashtags) ? brand.requiredHashtags : [],
-      preferredPresets: Array.isArray(brand.preferredPresets) ? brand.preferredPresets : [],
+      industryKey: normalizeIndustryKey(brand.industryKey || brand.industry || industryKey),
+      defaultLanguage: s(brand.defaultLanguage || brand.language || defaultLanguage),
+      outputLanguage: s(brand.outputLanguage || brand.language || outputLanguage),
+      ctaStyle: s(brand.ctaStyle || ctaStyle),
+      visualTheme: s(brand.visualTheme || visualTheme),
+      tone: tone,
+      services: services,
+      audiences: audiences,
+      requiredHashtags: requiredHashtags,
+      preferredPresets: preferredPresets,
+      toneText: s(brand.toneText || toneText),
+      servicesText: s(brand.servicesText || servicesText),
+      audiencesText: s(brand.audiencesText || audiencesText),
+      requiredHashtagsText: s(brand.requiredHashtagsText || requiredHashtagsText),
+      preferredPresetsText: s(brand.preferredPresetsText || preferredPresetsText),
       visualStyle: obj(brand.visualStyle),
     },
-    tone: Array.isArray(t.tone) ? t.tone : [],
-    services: Array.isArray(t.services) ? t.services : [],
-    audiences: Array.isArray(t.audiences) ? t.audiences : [],
-    requiredHashtags: Array.isArray(t.requiredHashtags) ? t.requiredHashtags : [],
-    preferredPresets: Array.isArray(t.preferredPresets) ? t.preferredPresets : [],
+
+    ai_policy: {
+      toneText: s(aiPolicy.toneText),
+      servicesText: s(aiPolicy.servicesText),
+      businessContext: s(aiPolicy.businessContext),
+    },
+
     meta,
   };
+
+  return runtime;
 }
 
 function buildDebateExtra({
@@ -550,13 +816,17 @@ export async function runDebate({
     extra,
   });
 
+  const normalizedMode = normalizeMode(mode);
+  const resolvedFormat =
+    s(formatHint || debateExtra.format) || (normalizedMode === "draft" ? "image" : "auto");
+
   const vars = {
     tenantId: tenantRuntime.tenantId,
     tenant: tenantRuntime,
-    threadId: String(threadId || ""),
-    format: String(formatHint || debateExtra.format || "").trim() || "auto",
-    today: new Date().toISOString().slice(0, 10),
-    mode: normalizeMode(mode),
+    threadId: s(threadId),
+    format: resolvedFormat,
+    today: todayInBaku(),
+    mode: normalizedMode,
     extra: debateExtra,
   };
 
@@ -564,7 +834,7 @@ export async function runDebate({
     openai,
     message,
     agentNotes,
-    mode: normalizeMode(mode),
+    mode: normalizedMode,
     timeoutMs,
     vars,
   });
