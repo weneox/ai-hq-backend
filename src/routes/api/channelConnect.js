@@ -1,11 +1,12 @@
-// src/routes/api/channelConnect.js
-
 import express from "express";
 import crypto from "crypto";
 
 import { cfg } from "../../config.js";
 import { requireUserSession } from "../../utils/adminAuth.js";
-import { dbGetTenantByKey, dbUpsertTenantChannel } from "../../db/helpers/settings.js";
+import {
+  dbGetTenantByKey,
+  dbUpsertTenantChannel,
+} from "../../db/helpers/settings.js";
 import {
   dbUpsertTenantSecret,
   dbDeleteTenantSecret,
@@ -44,7 +45,9 @@ function serverErr(res, error, extra = {}) {
 
 function stateSecret() {
   return s(
-    cfg.USER_SESSION_SECRET || cfg.ADMIN_SESSION_SECRET || cfg.META_APP_SECRET,
+    cfg.auth.userSessionSecret ||
+      cfg.auth.adminSessionSecret ||
+      cfg.meta.appSecret,
     ""
   );
 }
@@ -88,10 +91,10 @@ function verifyState(raw) {
 }
 
 function redirectBase() {
-  const x = s(cfg.CHANNELS_RETURN_URL);
+  const x = s(cfg.urls.channelsReturnUrl);
   if (x) return x;
 
-  const firstCors = s(cfg.CORS_ORIGIN)
+  const firstCors = s(cfg.urls.corsOrigin)
     .split(",")
     .map((v) => v.trim())
     .filter(Boolean)[0];
@@ -112,7 +115,7 @@ function buildRedirectUrl(params = {}) {
 }
 
 function metaGraphBase() {
-  return `https://graph.facebook.com/${s(cfg.META_API_VERSION, "v23.0")}`;
+  return `https://graph.facebook.com/${s(cfg.meta.apiVersion, "v23.0")}`;
 }
 
 async function readJsonSafe(res) {
@@ -139,9 +142,9 @@ async function fetchJson(url, opts = {}) {
 
 async function exchangeCodeForUserToken(code) {
   const url = new URL("https://graph.facebook.com/oauth/access_token");
-  url.searchParams.set("client_id", s(cfg.META_APP_ID));
-  url.searchParams.set("client_secret", s(cfg.META_APP_SECRET));
-  url.searchParams.set("redirect_uri", s(cfg.META_REDIRECT_URI));
+  url.searchParams.set("client_id", s(cfg.meta.appId));
+  url.searchParams.set("client_secret", s(cfg.meta.appSecret));
+  url.searchParams.set("redirect_uri", s(cfg.meta.redirectUri));
   url.searchParams.set("code", s(code));
   return fetchJson(url.toString());
 }
@@ -179,20 +182,21 @@ function pickBestInstagramPage(pages = []) {
   return null;
 }
 
-async function auditSafe(db, actor, tenant, action, objectType, objectId, meta = {}) {
+async function auditSafe(
+  db,
+  actor,
+  tenant,
+  action,
+  objectType,
+  objectId,
+  meta = {}
+) {
   try {
-    await dbAudit(
-      db,
-      s(actor, "system"),
-      action,
-      objectType,
-      objectId,
-      {
-        tenantId: tenant?.id || null,
-        tenantKey: tenant?.tenant_key || null,
-        ...meta,
-      }
-    );
+    await dbAudit(db, s(actor, "system"), action, objectType, objectId, {
+      tenantId: tenant?.id || null,
+      tenantKey: tenant?.tenant_key || null,
+      ...meta,
+    });
   } catch {}
 }
 
@@ -212,7 +216,11 @@ async function buildMetaOAuthUrl({ db, req }) {
     throw err;
   }
 
-  if (!s(cfg.META_APP_ID) || !s(cfg.META_APP_SECRET) || !s(cfg.META_REDIRECT_URI)) {
+  if (
+    !s(cfg.meta.appId) ||
+    !s(cfg.meta.appSecret) ||
+    !s(cfg.meta.redirectUri)
+  ) {
     const err = new Error("Meta OAuth env missing");
     err.status = 400;
     throw err;
@@ -232,8 +240,8 @@ async function buildMetaOAuthUrl({ db, req }) {
   });
 
   const url = new URL("https://www.facebook.com/v23.0/dialog/oauth");
-  url.searchParams.set("client_id", s(cfg.META_APP_ID));
-  url.searchParams.set("redirect_uri", s(cfg.META_REDIRECT_URI));
+  url.searchParams.set("client_id", s(cfg.meta.appId));
+  url.searchParams.set("redirect_uri", s(cfg.meta.redirectUri));
   url.searchParams.set("state", state);
   url.searchParams.set("response_type", "code");
   url.searchParams.set(
@@ -260,7 +268,10 @@ export function channelConnectRoutes({ db }) {
       const status = Number(err?.status || 500);
       if (status === 401) return unauth(res, err?.message || "Unauthorized");
       if (status === 400) return bad(res, err?.message || "Bad request");
-      return serverErr(res, err?.message || "Failed to build Meta connect URL");
+      return serverErr(
+        res,
+        err?.message || "Failed to build Meta connect URL"
+      );
     }
   });
 
@@ -310,8 +321,14 @@ export function channelConnectRoutes({ db }) {
       const pages = await getPagesForUserToken(userAccessToken);
       const selected = pickBestInstagramPage(pages);
 
-      if (!selected?.pageAccessToken || !selected?.pageId || !selected?.igUserId) {
-        throw new Error("No Instagram Business page found on connected Meta account");
+      if (
+        !selected?.pageAccessToken ||
+        !selected?.pageId ||
+        !selected?.igUserId
+      ) {
+        throw new Error(
+          "No Instagram Business page found on connected Meta account"
+        );
       }
 
       await dbUpsertTenantSecret(

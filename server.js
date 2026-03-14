@@ -7,6 +7,8 @@ import helmet from "helmet";
 import path from "path";
 
 import { cfg } from "./src/config.js";
+import { assertConfigValid } from "./src/config/validate.js";
+import { printFeatureReport } from "./src/config/featureReport.js";
 import { initDb, getDb, migrate } from "./src/db/index.js";
 import { createWsHub } from "./src/wsHub.js";
 import { apiRouter } from "./src/routes/api.js";
@@ -21,7 +23,7 @@ function s(v, d = "") {
 }
 
 function buildAllowedOrigins() {
-  const raw = s(cfg.CORS_ORIGIN, "");
+  const raw = s(cfg.urls.corsOrigin, "");
   if (!raw) return [];
   if (raw === "*") return ["*"];
 
@@ -76,9 +78,12 @@ function createAuditLogger(db) {
 }
 
 async function main() {
+  assertConfigValid(console);
+  printFeatureReport(console);
+
   const app = express();
 
-  if (cfg.TRUST_PROXY) {
+  if (cfg.app.trustProxy) {
     app.set("trust proxy", 1);
   }
 
@@ -128,16 +133,16 @@ async function main() {
   app.use(express.json({ limit: "8mb" }));
   app.use(express.urlencoded({ extended: false }));
 
-  const UPLOADS_DIR = path.resolve(process.cwd(), "uploads");
-  app.use("/assets", express.static(UPLOADS_DIR, { maxAge: "1h" }));
+  const uploadsDir = path.resolve(process.cwd(), "uploads");
+  app.use("/assets", express.static(uploadsDir, { maxAge: "1h" }));
 
   app.get("/", (_req, res) => {
     res.setHeader("Content-Type", "application/json; charset=utf-8");
     return res.status(200).json({
       ok: true,
       service: "ai-hq-backend",
-      env: cfg.APP_ENV,
-      marker: "ROOT_BUILD_V2_MEDIA",
+      env: cfg.app.env,
+      marker: "ROOT_BUILD_V4_FEATURES",
       endpoints: [
         "GET /health",
         "GET /__whoami",
@@ -159,25 +164,23 @@ async function main() {
     return res.status(200).json({
       ok: true,
       service: "ai-hq-backend",
-      env: cfg.APP_ENV,
-      port: cfg.PORT,
-      hasDatabaseUrl: Boolean(s(cfg.DATABASE_URL)),
-      hasOpenAI: Boolean(s(cfg.OPENAI_API_KEY)),
-      hasRunway: Boolean(s(cfg.RUNWAY_API_KEY)),
-      hasElevenLabs: Boolean(s(cfg.ELEVENLABS_API_KEY)),
-      hasCreatomate: Boolean(s(cfg.CREATOMATE_API_KEY)),
-      adminPanelEnabled: !!cfg.ADMIN_PANEL_ENABLED,
-      hasAdminPasscodeHash: Boolean(s(cfg.ADMIN_PANEL_PASSCODE_HASH)),
-      hasAdminSessionSecret: Boolean(s(cfg.ADMIN_SESSION_SECRET)),
-      hasUserSessionSecret: Boolean(s(cfg.USER_SESSION_SECRET)),
-      hasScheduleWebhook: Boolean(
-        s(process.env.N8N_WEBHOOK_SCHEDULE_DRAFT_URL)
-      ),
-      hasWsAuthToken: Boolean(s(cfg.WS_AUTH_TOKEN)),
+      env: cfg.app.env,
+      port: cfg.app.port,
+      hasDatabaseUrl: Boolean(s(cfg.db.url)),
+      hasOpenAI: Boolean(s(cfg.ai.openaiApiKey)),
+      hasRunway: Boolean(s(cfg.media.runwayApiKey)),
+      hasElevenLabs: Boolean(s(cfg.media.elevenlabsApiKey)),
+      hasCreatomate: Boolean(s(cfg.media.creatomateApiKey)),
+      adminPanelEnabled: !!cfg.auth.adminPanelEnabled,
+      hasAdminPasscodeHash: Boolean(s(cfg.auth.adminPasscodeHash)),
+      hasAdminSessionSecret: Boolean(s(cfg.auth.adminSessionSecret)),
+      hasUserSessionSecret: Boolean(s(cfg.auth.userSessionSecret)),
+      hasScheduleWebhook: Boolean(s(cfg.n8n.scheduleDraftUrl)),
+      hasWsAuthToken: Boolean(s(cfg.ws.authToken)),
       now: new Date().toISOString(),
-      corsOrigin: s(cfg.CORS_ORIGIN),
+      corsOrigin: s(cfg.urls.corsOrigin),
       allowedOrigins,
-      marker: "WHOAMI_BUILD_V2_MEDIA",
+      marker: "WHOAMI_BUILD_V4_FEATURES",
     });
   });
 
@@ -186,40 +189,39 @@ async function main() {
     return res.status(200).json({
       ok: true,
       service: "ai-hq-backend",
-      marker: "BUILD_CHECK_V2_MEDIA",
-      env: cfg.APP_ENV,
-      port: cfg.PORT,
+      marker: "BUILD_CHECK_V4_FEATURES",
+      env: cfg.app.env,
+      port: cfg.app.port,
       time: new Date().toISOString(),
-      publicBaseUrl: s(cfg.PUBLIC_BASE_URL),
-      userSessionCookieName: s(cfg.USER_SESSION_COOKIE_NAME),
-      hasUserSessionSecret: Boolean(s(cfg.USER_SESSION_SECRET)),
+      publicBaseUrl: s(cfg.urls.publicBaseUrl),
+      userSessionCookieName: s(cfg.auth.userSessionCookieName),
+      hasUserSessionSecret: Boolean(s(cfg.auth.userSessionSecret)),
     });
   });
 
   app.get("/health", async (_req, res) => {
-    const hasDbUrl = Boolean(s(cfg.DATABASE_URL));
+    const hasDbUrl = Boolean(s(cfg.db.url));
     const db = getDb();
 
     const out = {
       ok: true,
       service: "ai-hq-backend",
-      env: cfg.APP_ENV,
-      marker: "HEALTH_BUILD_V2_MEDIA",
+      env: cfg.app.env,
+      marker: "HEALTH_BUILD_V4_FEATURES",
       db: {
         enabled: hasDbUrl,
         ok: false,
       },
       providers: {
-        openai: !!cfg.OPENAI_API_KEY,
-        runway: !!cfg.RUNWAY_API_KEY,
-        elevenlabs: !!cfg.ELEVENLABS_API_KEY,
-        creatomate: !!cfg.CREATOMATE_API_KEY,
+        openai: !!cfg.ai.openaiApiKey,
+        runway: !!cfg.media.runwayApiKey,
+        elevenlabs: !!cfg.media.elevenlabsApiKey,
+        creatomate: !!cfg.media.creatomateApiKey,
       },
       workers: {
-        outboundRetryEnabled: !!cfg.OUTBOUND_RETRY_ENABLED,
-        draftScheduleEnabled:
-          s(process.env.DRAFT_SCHEDULE_WORKER_ENABLED, "1") !== "0",
-        mediaJobWorkerEnabled: !!cfg.MEDIA_JOB_WORKER_ENABLED,
+        outboundRetryEnabled: !!cfg.workers.outboundRetryEnabled,
+        draftScheduleEnabled: !!cfg.workers.draftScheduleWorkerEnabled,
+        mediaJobWorkerEnabled: !!cfg.workers.mediaJobWorkerEnabled,
       },
     };
 
@@ -259,7 +261,7 @@ async function main() {
   const server = http.createServer(app);
   const wsHub = createWsHub({
     server,
-    token: cfg.WS_AUTH_TOKEN,
+    token: cfg.ws.authToken,
   });
 
   app.post("/api/__voice-test", (req, res) => {
@@ -272,7 +274,7 @@ async function main() {
     return res.status(200).json({
       ok: true,
       route: "__voice-test",
-      marker: "VOICE_TEST_BUILD_V2_MEDIA",
+      marker: "VOICE_TEST_BUILD_V4_FEATURES",
       body: req.body || null,
       hasInternalToken: !!req.headers["x-internal-token"],
       hasWebhookToken: !!req.headers["x-webhook-token"],
@@ -284,13 +286,13 @@ async function main() {
     return res.status(200).json({
       ok: true,
       service: "ai-hq-backend",
-      marker: "API_BUILD_CHECK_V2_MEDIA",
-      env: cfg.APP_ENV,
-      port: cfg.PORT,
+      marker: "API_BUILD_CHECK_V4_FEATURES",
+      env: cfg.app.env,
+      port: cfg.app.port,
       time: new Date().toISOString(),
-      publicBaseUrl: s(cfg.PUBLIC_BASE_URL),
-      userSessionCookieName: s(cfg.USER_SESSION_COOKIE_NAME),
-      hasUserSessionSecret: Boolean(s(cfg.USER_SESSION_SECRET)),
+      publicBaseUrl: s(cfg.urls.publicBaseUrl),
+      userSessionCookieName: s(cfg.auth.userSessionCookieName),
+      hasUserSessionSecret: Boolean(s(cfg.auth.userSessionSecret)),
     });
   });
 
@@ -319,8 +321,13 @@ async function main() {
     db,
   });
 
-  draftScheduleWorker.start();
-  mediaJobWorker.start();
+  if (cfg.workers.draftScheduleWorkerEnabled) {
+    draftScheduleWorker.start();
+  }
+
+  if (cfg.workers.mediaJobWorkerEnabled) {
+    mediaJobWorker.start();
+  }
 
   app.use((req, res) => {
     res.setHeader("Content-Type", "application/json; charset=utf-8");
@@ -348,54 +355,48 @@ async function main() {
     return res.status(500).json({
       ok: false,
       error: "Server error",
-      details: s(process.env.NODE_ENV) !== "production" ? msg : undefined,
+      details: cfg.app.env !== "production" ? msg : undefined,
     });
   });
 
-  server.listen(cfg.PORT, () => {
+  server.listen(cfg.app.port, () => {
     const hasDb = Boolean(db);
 
-    console.log(`[ai-hq] listening on :${cfg.PORT} env=${cfg.APP_ENV}`);
-    console.log(`[ai-hq] CORS_ORIGIN=${cfg.CORS_ORIGIN}`);
+    console.log(`[ai-hq] listening on :${cfg.app.port} env=${cfg.app.env}`);
+    console.log(`[ai-hq] CORS_ORIGIN=${cfg.urls.corsOrigin}`);
     console.log(
       `[ai-hq] allowedOrigins=${allowedOrigins.join(",") || "(empty)"}`
     );
     console.log(`[ai-hq] DB=${hasDb ? "ON" : "OFF"}`);
     console.log(
-      `[ai-hq] OpenAI=${cfg.OPENAI_API_KEY ? "ON" : "OFF"} model=${cfg.OPENAI_MODEL}`
+      `[ai-hq] OpenAI=${cfg.ai.openaiApiKey ? "ON" : "OFF"} model=${cfg.ai.openaiModel}`
     );
     console.log(
-      `[ai-hq] Runway=${cfg.RUNWAY_API_KEY ? "ON" : "OFF"} model=${cfg.RUNWAY_VIDEO_MODEL}`
+      `[ai-hq] Runway=${cfg.media.runwayApiKey ? "ON" : "OFF"} model=${cfg.media.runwayVideoModel}`
     );
     console.log(
-      `[ai-hq] ElevenLabs=${cfg.ELEVENLABS_API_KEY ? "ON" : "OFF"} voice=${cfg.ELEVENLABS_VOICE_ID ? "SET" : "MISSING"}`
+      `[ai-hq] ElevenLabs=${cfg.media.elevenlabsApiKey ? "ON" : "OFF"} voice=${cfg.media.elevenlabsVoiceId ? "SET" : "MISSING"}`
     );
     console.log(
-      `[ai-hq] Creatomate=${cfg.CREATOMATE_API_KEY ? "ON" : "OFF"} templateReel=${cfg.CREATOMATE_TEMPLATE_ID_REEL ? "SET" : "MISSING"}`
+      `[ai-hq] Creatomate=${cfg.media.creatomateApiKey ? "ON" : "OFF"} templateReel=${cfg.media.creatomateTemplateIdReel ? "SET" : "MISSING"}`
     );
     console.log(
-      `[ai-hq] mediaJobWorker=${cfg.MEDIA_JOB_WORKER_ENABLED ? "ON" : "OFF"} interval=${Number(cfg.MEDIA_JOB_WORKER_INTERVAL_MS || 15000)}ms batch=${Number(cfg.MEDIA_JOB_WORKER_BATCH_SIZE || 10)}`
-    );
-    console.log(`[ai-hq] WS_AUTH_TOKEN=${cfg.WS_AUTH_TOKEN ? "ON" : "OFF"}`);
-    console.log(
-      `[ai-hq] META_GATEWAY=${cfg.META_GATEWAY_BASE_URL ? "ON" : "OFF"} retryWorker=${
-        cfg.OUTBOUND_RETRY_ENABLED ? "ON" : "OFF"
-      }`
+      `[ai-hq] mediaJobWorker=${cfg.workers.mediaJobWorkerEnabled ? "ON" : "OFF"} interval=${Number(cfg.workers.mediaJobWorkerIntervalMs || 15000)}ms batch=${Number(cfg.workers.mediaJobWorkerBatchSize || 10)}`
     );
     console.log(
-      `[ai-hq] draftScheduleWorker=${
-        s(process.env.DRAFT_SCHEDULE_WORKER_ENABLED, "1") !== "0" ? "ON" : "OFF"
-      } interval=${Number(process.env.DRAFT_SCHEDULE_WORKER_INTERVAL_MS || 60000)}ms webhook=${
-        s(process.env.N8N_WEBHOOK_SCHEDULE_DRAFT_URL) ? "ON" : "OFF"
-      }`
+      `[ai-hq] WS_AUTH_TOKEN=${cfg.ws.authToken ? "ON" : "OFF"}`
     );
     console.log(
-      `[ai-hq] adminAuth enabled=${cfg.ADMIN_PANEL_ENABLED ? "ON" : "OFF"} passcodeHash=${
-        cfg.ADMIN_PANEL_PASSCODE_HASH ? "ON" : "OFF"
-      } sessionSecret=${cfg.ADMIN_SESSION_SECRET ? "ON" : "OFF"}`
+      `[ai-hq] META_GATEWAY=${cfg.gateway.metaGatewayBaseUrl ? "ON" : "OFF"} retryWorker=${cfg.workers.outboundRetryEnabled ? "ON" : "OFF"}`
     );
     console.log(
-      `[ai-hq] build markers: ROOT_BUILD_V2_MEDIA / WHOAMI_BUILD_V2_MEDIA / BUILD_CHECK_V2_MEDIA / API_BUILD_CHECK_V2_MEDIA`
+      `[ai-hq] draftScheduleWorker=${cfg.workers.draftScheduleWorkerEnabled ? "ON" : "OFF"} interval=${Number(cfg.workers.draftScheduleWorkerIntervalMs || 60000)}ms webhook=${cfg.n8n.scheduleDraftUrl ? "ON" : "OFF"}`
+    );
+    console.log(
+      `[ai-hq] adminAuth enabled=${cfg.auth.adminPanelEnabled ? "ON" : "OFF"} passcodeHash=${cfg.auth.adminPasscodeHash ? "ON" : "OFF"} sessionSecret=${cfg.auth.adminSessionSecret ? "ON" : "OFF"}`
+    );
+    console.log(
+      "[ai-hq] build markers: ROOT_BUILD_V4_FEATURES / WHOAMI_BUILD_V4_FEATURES / BUILD_CHECK_V4_FEATURES / API_BUILD_CHECK_V4_FEATURES"
     );
   });
 

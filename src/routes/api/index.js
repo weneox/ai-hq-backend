@@ -3,6 +3,7 @@ import {
   requireUserSession,
   readUserSessionFromRequest,
 } from "../../utils/adminAuth.js";
+import { hasFeature } from "../../config/features.js";
 
 import { healthRoutes } from "./health.js";
 import { modeRoutes } from "./mode.js";
@@ -35,15 +36,15 @@ function s(v, d = "") {
 export function apiRouter({ db, wsHub, audit, dbDisabled = false }) {
   const r = express.Router();
 
-  // -----------------------------
-  // PUBLIC / DEBUG BEFORE GUARD
-  // -----------------------------
+  // ---------------------------------
+  // PUBLIC / PRE-AUTH DEBUG
+  // ---------------------------------
   r.get("/__guard-before", (req, res) => {
     const session = readUserSessionFromRequest(req);
 
     return res.status(200).json({
       ok: true,
-      marker: "API_GUARD_BEFORE_V1",
+      marker: "API_GUARD_BEFORE_V2",
       hasCookieHeader: Boolean(s(req.headers.cookie)),
       cookieHeaderLength: s(req.headers.cookie).length,
       verify: {
@@ -54,53 +55,87 @@ export function apiRouter({ db, wsHub, audit, dbDisabled = false }) {
     });
   });
 
-  // public / infra
+  // ---------------------------------
+  // PUBLIC / INFRA
+  // ---------------------------------
   r.use("/", healthRoutes({ db }));
 
-  // internal / helper routes
+  // internal/helper routes
   r.use("/", voiceInternalRoutes({ db }));
   r.use("/", tenantsRoutes({ db }));
 
-  // public oauth / connect callback flow
+  // public oauth/connect callback flow
   r.use("/", channelConnectRoutes({ db }));
 
-  // -----------------------------
-  // REQUIRE USER SESSION
-  // -----------------------------
+  // ---------------------------------
+  // AUTH GUARD
+  // ---------------------------------
   r.use(requireUserSession);
 
-  // -----------------------------
-  // DEBUG AFTER GUARD
-  // -----------------------------
+  // ---------------------------------
+  // POST-AUTH DEBUG
+  // ---------------------------------
   r.get("/__guard-after", (req, res) => {
     return res.status(200).json({
       ok: true,
-      marker: "API_GUARD_AFTER_V1",
+      marker: "API_GUARD_AFTER_V2",
       auth: req.auth || null,
       user: req.user || null,
     });
   });
 
-  // authenticated app routes
+  // ---------------------------------
+  // AUTHENTICATED APP ROUTES
+  // ---------------------------------
+
+  // core
   r.use("/", modeRoutes({ db, wsHub }));
   r.use("/", agentsRoutes());
-  r.use("/", renderRoutes());
-  r.use("/", mediaRoutes({ db }));
-  r.use("/", pushRoutes({ db, wsHub }));
-  r.use("/", notificationsRoutes({ db, wsHub }));
-  r.use("/", contentRoutes({ db, wsHub }));
-  r.use("/", proposalsRoutes({ db, wsHub }));
-  r.use("/", executionsRoutes({ db, wsHub }));
-  r.use("/", threadsRoutes({ db }));
-  r.use("/", chatRoutes({ db, wsHub }));
-  r.use("/", debateRoutes({ db, wsHub }));
-  r.use("/", inboxRoutes({ db, wsHub }));
-  r.use("/", leadsRoutes({ db, wsHub }));
-  r.use("/", commentsRoutes({ db, wsHub }));
   r.use("/", settingsRoutes({ db }));
-  r.use("/", debugRoutes());
   r.use("/", teamRoutes({ db }));
+  r.use("/", debugRoutes());
 
+  // render/media/push/notifications
+  if (hasFeature("media.render")) {
+    r.use("/", renderRoutes());
+  }
+
+  r.use("/", mediaRoutes({ db }));
+
+  if (hasFeature("channels.push")) {
+    r.use("/", pushRoutes({ db, wsHub }));
+  }
+
+  r.use("/", notificationsRoutes({ db, wsHub }));
+
+  // content/proposals/executions/chat/debate
+  if (hasFeature("content.content")) {
+    r.use("/", contentRoutes({ db, wsHub }));
+    r.use("/", proposalsRoutes({ db, wsHub }));
+    r.use("/", executionsRoutes({ db, wsHub }));
+    r.use("/", chatRoutes({ db, wsHub }));
+  }
+
+  if (hasFeature("content.debate")) {
+    r.use("/", debateRoutes({ db, wsHub }));
+  }
+
+  // threads/inbox/leads/comments
+  r.use("/", threadsRoutes({ db }));
+
+  if (hasFeature("inbox.inbox")) {
+    r.use("/", inboxRoutes({ db, wsHub }));
+  }
+
+  if (hasFeature("inbox.leads")) {
+    r.use("/", leadsRoutes({ db, wsHub }));
+  }
+
+  if (hasFeature("inbox.comments")) {
+    r.use("/", commentsRoutes({ db, wsHub }));
+  }
+
+  // voice
   r.use(
     "/",
     voiceRoutes({

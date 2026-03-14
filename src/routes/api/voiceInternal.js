@@ -1,5 +1,6 @@
 import express from "express";
 import crypto from "crypto";
+import { cfg } from "../../config.js";
 import {
   getVoiceCallByProviderSid,
   createVoiceCall,
@@ -61,11 +62,15 @@ function readInternalToken(req) {
   );
 }
 
+function getExpectedInternalToken() {
+  return (
+    s(cfg.security.aihqInternalToken) ||
+    s(cfg.n8n.webhookToken)
+  );
+}
+
 function requireInternalToken(req, res, next) {
-  const expected =
-    s(process.env.AIHQ_INTERNAL_TOKEN) ||
-    s(process.env.INTERNAL_API_TOKEN) ||
-    s(process.env.N8N_WEBHOOK_TOKEN);
+  const expected = getExpectedInternalToken();
 
   if (!expected) {
     return res.status(500).json({
@@ -164,11 +169,13 @@ function normalizeDepartmentMap(input) {
 }
 
 function buildOperatorRouting(meta = {}, operator = {}, voiceProfile = {}) {
-  const routing =
-    isObj(operator.routing) ? operator.routing :
-    isObj(meta.operatorRouting) ? meta.operatorRouting :
-    isObj(meta.operator_routing) ? meta.operator_routing :
-    {};
+  const routing = isObj(operator.routing)
+    ? operator.routing
+    : isObj(meta.operatorRouting)
+      ? meta.operatorRouting
+      : isObj(meta.operator_routing)
+        ? meta.operator_routing
+        : {};
 
   const departments = normalizeDepartmentMap(
     routing.departments ||
@@ -187,10 +194,7 @@ function buildOperatorRouting(meta = {}, operator = {}, voiceProfile = {}) {
   ).toLowerCase();
 
   const mode = s(
-    routing.mode ||
-      operator.mode ||
-      voiceProfile.transferMode ||
-      "manual"
+    routing.mode || operator.mode || voiceProfile.transferMode || "manual"
   ).toLowerCase();
 
   return {
@@ -207,10 +211,9 @@ function buildVoiceConfigFromTenantRow(row, { tenantKey, toNumber }) {
   const operator = isObj(meta.operator) ? meta.operator : {};
   const realtime = isObj(meta.realtime) ? meta.realtime : {};
 
-  const voiceProfile =
-    isObj(voice.voiceProfile)
-      ? voice.voiceProfile
-      : isObj(meta.voiceProfile)
+  const voiceProfile = isObj(voice.voiceProfile)
+    ? voice.voiceProfile
+    : isObj(meta.voiceProfile)
       ? meta.voiceProfile
       : {};
 
@@ -270,14 +273,13 @@ function buildVoiceConfigFromTenantRow(row, { tenantKey, toNumber }) {
       forbiddenTopics: toArray(voiceProfile.forbiddenTopics),
       leadCaptureMode: s(voiceProfile.leadCaptureMode || "none"),
       transferMode: s(voiceProfile.transferMode || operatorRouting.mode || "manual"),
-      contactPolicy:
-        isObj(voiceProfile.contactPolicy)
-          ? voiceProfile.contactPolicy
-          : {
-              sharePhone: false,
-              shareEmail: false,
-              shareWebsite: false,
-            },
+      contactPolicy: isObj(voiceProfile.contactPolicy)
+        ? voiceProfile.contactPolicy
+        : {
+            sharePhone: false,
+            shareEmail: false,
+            shareWebsite: false,
+          },
       texts: isObj(voiceProfile.texts) ? voiceProfile.texts : {},
     },
   };
@@ -338,7 +340,8 @@ async function upsertCallAndSession(db, body = {}) {
     call = await updateVoiceCall(db, call.id, {
       tenantId: s(body.tenantId) || call.tenantId || null,
       tenantKey: s(body.tenantKey || call.tenantKey),
-      providerStreamSid: s(body.providerStreamSid || body.streamSid) || call.providerStreamSid || null,
+      providerStreamSid:
+        s(body.providerStreamSid || body.streamSid) || call.providerStreamSid || null,
       status: s(body.callStatus || body.status || call.status),
       fromNumber: s(body.fromNumber || body.from || call.fromNumber) || null,
       toNumber: s(body.toNumber || body.to || call.toNumber) || null,
@@ -348,19 +351,10 @@ async function upsertCallAndSession(db, body = {}) {
       durationSeconds: n(body.durationSeconds, call.durationSeconds || 0),
       language: s(body.language || call.language, "en"),
       agentMode: s(body.agentMode || call.agentMode, "assistant"),
-      handoffRequested: b(
-        body.handoffRequested,
-        call.handoffRequested
-      ),
-      handoffCompleted: b(
-        body.handoffCompleted,
-        call.handoffCompleted
-      ),
+      handoffRequested: b(body.handoffRequested, call.handoffRequested),
+      handoffCompleted: b(body.handoffCompleted, call.handoffCompleted),
       handoffTarget: s(body.handoffTarget || call.handoffTarget) || null,
-      callbackRequested: b(
-        body.callbackRequested,
-        call.callbackRequested
-      ),
+      callbackRequested: b(body.callbackRequested, call.callbackRequested),
       callbackPhone: s(body.callbackPhone || call.callbackPhone) || null,
       leadId: s(body.leadId || call.leadId) || null,
       inboxThreadId: s(body.inboxThreadId || call.inboxThreadId) || null,
@@ -386,7 +380,8 @@ async function upsertCallAndSession(db, body = {}) {
       providerCallSid,
       providerConferenceSid: s(body.providerConferenceSid || body.conferenceSid) || null,
       conferenceName:
-        s(body.conferenceName) || buildConferenceName({ tenantKey: body.tenantKey, providerCallSid }),
+        s(body.conferenceName) ||
+        buildConferenceName({ tenantKey: body.tenantKey, providerCallSid }),
       customerNumber: s(body.customerNumber || body.fromNumber || body.from) || null,
       customerName: s(body.customerName || body.callerName) || null,
       direction: s(body.sessionDirection || "outbound_callback"),
@@ -416,12 +411,17 @@ async function upsertCallAndSession(db, body = {}) {
       tenantKey: s(body.tenantKey || session.tenantKey),
       voiceCallId: call.id,
       providerConferenceSid:
-        s(body.providerConferenceSid || body.conferenceSid || session.providerConferenceSid) || null,
+        s(body.providerConferenceSid || body.conferenceSid || session.providerConferenceSid) ||
+        null,
       conferenceName:
         s(body.conferenceName || session.conferenceName) ||
-        buildConferenceName({ tenantKey: body.tenantKey || session.tenantKey, providerCallSid }),
+        buildConferenceName({
+          tenantKey: body.tenantKey || session.tenantKey,
+          providerCallSid,
+        }),
       customerNumber:
-        s(body.customerNumber || body.fromNumber || body.from || session.customerNumber) || null,
+        s(body.customerNumber || body.fromNumber || body.from || session.customerNumber) ||
+        null,
       customerName: s(body.customerName || body.callerName || session.customerName) || null,
       direction: s(body.sessionDirection || session.direction || "outbound_callback"),
       status: s(body.sessionStatus || session.status || "bot_active"),
@@ -436,7 +436,9 @@ async function upsertCallAndSession(db, body = {}) {
       whisperActive: b(body.whisperActive, session.whisperActive),
       takeoverActive: b(body.takeoverActive, session.takeoverActive),
       leadPayload: isObj(body.leadPayload) ? body.leadPayload : session.leadPayload,
-      transcriptLive: Array.isArray(body.transcriptLive) ? body.transcriptLive : session.transcriptLive,
+      transcriptLive: Array.isArray(body.transcriptLive)
+        ? body.transcriptLive
+        : session.transcriptLive,
       summary: s(body.summary || session.summary),
       meta: isObj(body.sessionMeta) ? body.sessionMeta : session.meta,
       operatorRequestedAt: body.operatorRequestedAt || session.operatorRequestedAt || null,
@@ -446,6 +448,12 @@ async function upsertCallAndSession(db, body = {}) {
   }
 
   return { call, session };
+}
+
+async function appendEventSafe(db, payload) {
+  try {
+    await appendVoiceCallEvent(db, payload);
+  } catch {}
 }
 
 export function voiceInternalRoutes({ db }) {
@@ -507,7 +515,7 @@ export function voiceInternalRoutes({ db }) {
 
       const { call, session } = await upsertCallAndSession(db, body);
 
-      await appendVoiceCallEvent(db, {
+      await appendEventSafe(db, {
         callId: call.id,
         tenantId: call.tenantId,
         tenantKey: call.tenantKey,
@@ -518,7 +526,7 @@ export function voiceInternalRoutes({ db }) {
           sessionStatus: session.status,
           conferenceName: session.conferenceName,
         },
-      }).catch(() => {});
+      });
 
       return res.status(200).json({
         ok: true,
@@ -592,14 +600,14 @@ export function voiceInternalRoutes({ db }) {
           transcript: nextTranscript.slice(-30000),
         });
 
-        await appendVoiceCallEvent(db, {
+        await appendEventSafe(db, {
           callId: call.id,
           tenantId: call.tenantId,
           tenantKey: call.tenantKey,
           eventType: "transcript_appended",
           actor: "voice_backend",
           payload: { role, text, ts },
-        }).catch(() => {});
+        });
       }
 
       return res.status(200).json({
@@ -643,13 +651,21 @@ export function voiceInternalRoutes({ db }) {
 
       const patch = {
         status: s(req.body?.status || session.status),
-        requestedDepartment: s(req.body?.requestedDepartment || session.requestedDepartment) || null,
-        resolvedDepartment: s(req.body?.resolvedDepartment || session.resolvedDepartment) || null,
-        operatorUserId: s(req.body?.operatorUserId || session.operatorUserId) || null,
+        requestedDepartment:
+          s(req.body?.requestedDepartment || session.requestedDepartment) || null,
+        resolvedDepartment:
+          s(req.body?.resolvedDepartment || session.resolvedDepartment) || null,
+        operatorUserId:
+          s(req.body?.operatorUserId || session.operatorUserId) || null,
         operatorName: s(req.body?.operatorName || session.operatorName) || null,
-        operatorJoinMode: s(req.body?.operatorJoinMode || session.operatorJoinMode || "live"),
+        operatorJoinMode: s(
+          req.body?.operatorJoinMode || session.operatorJoinMode || "live"
+        ),
         botActive: b(req.body?.botActive, session.botActive),
-        operatorJoinRequested: b(req.body?.operatorJoinRequested, session.operatorJoinRequested),
+        operatorJoinRequested: b(
+          req.body?.operatorJoinRequested,
+          session.operatorJoinRequested
+        ),
         operatorJoined: b(req.body?.operatorJoined, session.operatorJoined),
         whisperActive: b(req.body?.whisperActive, session.whisperActive),
         takeoverActive: b(req.body?.takeoverActive, session.takeoverActive),
@@ -657,10 +673,18 @@ export function voiceInternalRoutes({ db }) {
         endedAt: req.body?.endedAt || session.endedAt || null,
       };
 
-      if (req.body?.operatorRequestedAt) patch.operatorRequestedAt = req.body.operatorRequestedAt;
-      if (req.body?.operatorJoinedAt) patch.operatorJoinedAt = req.body.operatorJoinedAt;
-      if (isObj(req.body?.leadPayload)) patch.leadPayload = req.body.leadPayload;
-      if (isObj(req.body?.meta)) patch.meta = req.body.meta;
+      if (req.body?.operatorRequestedAt) {
+        patch.operatorRequestedAt = req.body.operatorRequestedAt;
+      }
+      if (req.body?.operatorJoinedAt) {
+        patch.operatorJoinedAt = req.body.operatorJoinedAt;
+      }
+      if (isObj(req.body?.leadPayload)) {
+        patch.leadPayload = req.body.leadPayload;
+      }
+      if (isObj(req.body?.meta)) {
+        patch.meta = req.body.meta;
+      }
 
       const updatedSession = await updateVoiceCallSession(db, session.id, patch);
 
@@ -673,8 +697,8 @@ export function voiceInternalRoutes({ db }) {
             patch.status === "completed"
               ? "completed"
               : patch.status === "failed"
-              ? "failed"
-              : call.status,
+                ? "failed"
+                : call.status,
           handoffRequested: patch.operatorJoinRequested,
           handoffCompleted: patch.operatorJoined || patch.takeoverActive,
           handoffTarget: patch.resolvedDepartment || call.handoffTarget || null,
@@ -683,7 +707,7 @@ export function voiceInternalRoutes({ db }) {
           meta: isObj(req.body?.callMeta) ? req.body.callMeta : call.meta,
         });
 
-        await appendVoiceCallEvent(db, {
+        await appendEventSafe(db, {
           callId: call.id,
           tenantId: call.tenantId,
           tenantKey: call.tenantKey,
@@ -698,7 +722,7 @@ export function voiceInternalRoutes({ db }) {
             whisperActive: updatedSession.whisperActive,
             takeoverActive: updatedSession.takeoverActive,
           },
-        }).catch(() => {});
+        });
       }
 
       return res.status(200).json({
@@ -740,7 +764,10 @@ export function voiceInternalRoutes({ db }) {
         });
       }
 
-      const joinMode = s(req.body?.operatorJoinMode || req.body?.joinMode || "live").toLowerCase();
+      const joinMode = s(
+        req.body?.operatorJoinMode || req.body?.joinMode || "live"
+      ).toLowerCase();
+
       const updatedSession = await updateVoiceCallSession(db, session.id, {
         status: joinMode === "whisper" ? "agent_whisper" : "agent_live",
         operatorUserId: s(req.body?.operatorUserId || session.operatorUserId) || null,
@@ -769,7 +796,7 @@ export function voiceInternalRoutes({ db }) {
           agentMode: joinMode === "live" ? "human" : "hybrid",
         });
 
-        await appendVoiceCallEvent(db, {
+        await appendEventSafe(db, {
           callId: call.id,
           tenantId: call.tenantId,
           tenantKey: call.tenantKey,
@@ -781,7 +808,7 @@ export function voiceInternalRoutes({ db }) {
             operatorJoinMode: updatedSession.operatorJoinMode,
             takeoverActive: updatedSession.takeoverActive,
           },
-        }).catch(() => {});
+        });
       }
 
       return res.status(200).json({

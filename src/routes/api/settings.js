@@ -1,7 +1,8 @@
 // src/routes/api/settings.js
-// FINAL v2.7.1 — workspace settings routes + auth debug probes
-// ✅ tenant auth context / internal token support
-// ✅ owner/admin workspace write
+// FINAL v2.8.0 — workspace settings routes + auth debug probes
+// ✅ fixed imports
+// ✅ db guards
+// ✅ owner/admin/internal auth handling
 // ✅ tenant secrets routes
 // ✅ publish_policy.schedule + publish_policy.automation normalization
 // ✅ backward-compatible with older draftSchedule payloads
@@ -10,7 +11,6 @@
 import express from "express";
 import {
   dbGetWorkspaceSettings,
-  dbGetTenantByKey,
   dbUpsertTenantCore,
   dbUpsertTenantProfile,
   dbUpsertTenantAiPolicy,
@@ -18,8 +18,9 @@ import {
   dbUpsertTenantChannel,
   dbListTenantAgents,
   dbUpsertTenantAgent,
-  dbListTenantUsers,
 } from "../../db/helpers/settings.js";
+import { dbGetTenantByKey } from "../../db/helpers/tenants.js";
+import { dbListTenantUsers } from "../../db/helpers/tenantUsers.js";
 import {
   dbListTenantSecretsMasked,
   dbGetTenantProviderSecrets,
@@ -100,6 +101,10 @@ function normalizeJsonDateish(v) {
   return s || null;
 }
 
+function hasDb(db) {
+  return !!db?.query;
+}
+
 function isInternalServiceRequest(req) {
   try {
     return requireInternalToken(req) === true;
@@ -152,6 +157,12 @@ function requireOwnerOrAdmin(req, res) {
     return null;
   }
   return role;
+}
+
+function requireDb(res, db) {
+  if (hasDb(db)) return true;
+  serverErr(res, "Database is not available");
+  return false;
 }
 
 function buildTenantCoreSaveInput(input = {}, role = "member") {
@@ -364,17 +375,20 @@ export function settingsRoutes({ db }) {
   router.get("/settings/__debug-auth", async (req, res) => {
     return res.status(200).json({
       ok: true,
-      marker: "SETTINGS_DEBUG_AUTH_V1",
+      marker: "SETTINGS_DEBUG_AUTH_V2",
       auth: req.auth || null,
       user: req.user || null,
       tenantKeyResolved: resolveTenantKey(req),
       roleResolved: getUserRole(req),
       isInternal: isInternalServiceRequest(req),
+      hasDb: hasDb(db),
     });
   });
 
   router.get("/settings/workspace", async (req, res) => {
     try {
+      if (!requireDb(res, db)) return;
+
       const tenantKey = requireTenant(req, res);
       if (!tenantKey) return;
 
@@ -394,6 +408,8 @@ export function settingsRoutes({ db }) {
 
   router.post("/settings/workspace", async (req, res) => {
     try {
+      if (!requireDb(res, db)) return;
+
       const tenantKey = requireTenant(req, res);
       if (!tenantKey) return;
 
@@ -437,6 +453,8 @@ export function settingsRoutes({ db }) {
 
   router.get("/settings/channels", async (req, res) => {
     try {
+      if (!requireDb(res, db)) return;
+
       const tenantKey = requireTenant(req, res);
       if (!tenantKey) return;
 
@@ -457,6 +475,8 @@ export function settingsRoutes({ db }) {
 
   router.post("/settings/channels/:type", async (req, res) => {
     try {
+      if (!requireDb(res, db)) return;
+
       const tenantKey = requireTenant(req, res);
       if (!tenantKey) return;
 
@@ -497,6 +517,8 @@ export function settingsRoutes({ db }) {
 
   router.get("/settings/agents", async (req, res) => {
     try {
+      if (!requireDb(res, db)) return;
+
       const tenantKey = requireTenant(req, res);
       if (!tenantKey) return;
 
@@ -517,6 +539,8 @@ export function settingsRoutes({ db }) {
 
   router.post("/settings/agents/:key", async (req, res) => {
     try {
+      if (!requireDb(res, db)) return;
+
       const tenantKey = requireTenant(req, res);
       if (!tenantKey) return;
 
@@ -556,6 +580,8 @@ export function settingsRoutes({ db }) {
 
   router.get("/settings/team", async (req, res) => {
     try {
+      if (!requireDb(res, db)) return;
+
       const tenantKey = requireTenant(req, res);
       if (!tenantKey) return;
 
@@ -576,6 +602,8 @@ export function settingsRoutes({ db }) {
 
   router.get("/settings/secrets", async (req, res) => {
     try {
+      if (!requireDb(res, db)) return;
+
       const tenantKey = requireTenant(req, res);
       if (!tenantKey) return;
 
@@ -594,7 +622,9 @@ export function settingsRoutes({ db }) {
       const provider = cleanLower(req.query.provider || "");
 
       if (internal) {
-        const secrets = await dbGetTenantProviderSecrets(db, tenant.id, provider);
+        const secrets = provider
+          ? await dbGetTenantProviderSecrets(db, tenant.id, provider)
+          : {};
         return ok(res, {
           secrets,
           viewerRole: "internal",
@@ -613,6 +643,8 @@ export function settingsRoutes({ db }) {
 
   router.post("/settings/secrets/:provider/:key", async (req, res) => {
     try {
+      if (!requireDb(res, db)) return;
+
       const tenantKey = requireTenant(req, res);
       if (!tenantKey) return;
 
@@ -667,6 +699,8 @@ export function settingsRoutes({ db }) {
 
   router.delete("/settings/secrets/:provider/:key", async (req, res) => {
     try {
+      if (!requireDb(res, db)) return;
+
       const tenantKey = requireTenant(req, res);
       if (!tenantKey) return;
 

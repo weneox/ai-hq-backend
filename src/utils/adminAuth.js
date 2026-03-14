@@ -38,48 +38,47 @@ function safeEqBuffer(a, b) {
   }
 }
 
+function isProd() {
+  return s(cfg.app.env).toLowerCase() === "production";
+}
+
 function cookieDomain() {
-  const isProd = s(cfg.APP_ENV).toLowerCase() === "production";
-  if (!isProd) return undefined;
+  if (!isProd()) return undefined;
 
   const explicit = s(
-    cfg.SESSION_COOKIE_DOMAIN ||
-      cfg.COOKIE_DOMAIN ||
-      cfg.USER_COOKIE_DOMAIN ||
+    cfg.auth.sessionCookieDomain ||
+      cfg.auth.cookieDomain ||
+      cfg.auth.userCookieDomain ||
       ""
   ).replace(/\/+$/, "");
 
-  if (explicit) return explicit;
-  return undefined;
+  return explicit || undefined;
 }
 
 function sessionSameSite() {
-  const raw = s(cfg.SESSION_COOKIE_SAMESITE || cfg.COOKIE_SAMESITE || "");
-  const x = raw.toLowerCase();
-
-  if (x === "none") return "none";
-  if (x === "strict") return "strict";
   return "lax";
 }
 
 export function getAdminCookieName() {
-  return s(cfg.ADMIN_SESSION_COOKIE_NAME, "aihq_admin");
+  return s(cfg.auth.adminSessionCookieName, "aihq_admin");
 }
 
 export function getUserCookieName() {
-  return s(cfg.USER_SESSION_COOKIE_NAME, "aihq_user");
+  return s(cfg.auth.userSessionCookieName, "aihq_user");
 }
 
 export function adminCookieOptions() {
-  const isProd = s(cfg.APP_ENV).toLowerCase() === "production";
   const maxAgeMs =
-    Math.max(1, Number(cfg.ADMIN_SESSION_TTL_HOURS || 12)) * 60 * 60 * 1000;
+    Math.max(1, Number(cfg.auth.adminSessionTtlHours || 12)) *
+    60 *
+    60 *
+    1000;
   const domain = cookieDomain();
   const sameSite = sessionSameSite();
 
   return {
     httpOnly: true,
-    secure: isProd,
+    secure: isProd(),
     sameSite,
     path: "/",
     ...(domain ? { domain } : {}),
@@ -88,15 +87,17 @@ export function adminCookieOptions() {
 }
 
 export function userCookieOptions() {
-  const isProd = s(cfg.APP_ENV).toLowerCase() === "production";
   const maxAgeMs =
-    Math.max(1, Number(cfg.USER_SESSION_TTL_HOURS || 24 * 7)) * 60 * 60 * 1000;
+    Math.max(1, Number(cfg.auth.userSessionTtlHours || 24 * 7)) *
+    60 *
+    60 *
+    1000;
   const domain = cookieDomain();
   const sameSite = sessionSameSite();
 
   return {
     httpOnly: true,
-    secure: isProd,
+    secure: isProd(),
     sameSite,
     path: "/",
     ...(domain ? { domain } : {}),
@@ -105,13 +106,12 @@ export function userCookieOptions() {
 }
 
 function clearCookieWithOptions(res, name, path = "/") {
-  const isProd = s(cfg.APP_ENV).toLowerCase() === "production";
   const domain = cookieDomain();
   const sameSite = sessionSameSite();
 
   res.clearCookie(name, {
     httpOnly: true,
-    secure: isProd,
+    secure: isProd(),
     sameSite,
     path,
     ...(domain ? { domain } : {}),
@@ -142,9 +142,7 @@ export function parseCookies(req) {
     const v = part.slice(i + 1).trim();
     if (!k) return;
 
-    if (Object.prototype.hasOwnProperty.call(out, k)) {
-      return;
-    }
+    if (Object.prototype.hasOwnProperty.call(out, k)) return;
 
     try {
       out[k] = decodeURIComponent(v);
@@ -179,18 +177,18 @@ function getAllCookieValues(req, cookieName) {
 }
 
 function getAdminSessionSecret() {
-  return s(cfg.ADMIN_SESSION_SECRET);
+  return s(cfg.auth.adminSessionSecret);
 }
 
 function getUserSessionSecret() {
-  return s(cfg.USER_SESSION_SECRET || cfg.ADMIN_SESSION_SECRET);
+  return s(cfg.auth.userSessionSecret || cfg.auth.adminSessionSecret);
 }
 
 export function isAdminAuthConfigured() {
   return Boolean(
-    cfg.ADMIN_PANEL_ENABLED &&
-      s(cfg.ADMIN_PANEL_PASSCODE_HASH) &&
-      s(cfg.ADMIN_SESSION_SECRET)
+    cfg.auth.adminPanelEnabled &&
+      s(cfg.auth.adminPasscodeHash) &&
+      s(cfg.auth.adminSessionSecret)
   );
 }
 
@@ -206,7 +204,7 @@ export function createAdminSessionToken(meta = {}) {
 
   const iat = nowSec();
   const exp =
-    iat + Math.max(1, Number(cfg.ADMIN_SESSION_TTL_HOURS || 12)) * 60 * 60;
+    iat + Math.max(1, Number(cfg.auth.adminSessionTtlHours || 12)) * 60 * 60;
 
   const payload = {
     typ: "admin_session",
@@ -286,7 +284,8 @@ export function createUserSessionToken(user = {}, meta = {}) {
 
   const iat = nowSec();
   const exp =
-    iat + Math.max(1, Number(cfg.USER_SESSION_TTL_HOURS || 24 * 7)) * 60 * 60;
+    iat +
+    Math.max(1, Number(cfg.auth.userSessionTtlHours || 24 * 7)) * 60 * 60;
 
   const payload = {
     typ: "tenant_user_session",
@@ -378,7 +377,7 @@ export function verifyUserSessionToken(token) {
 
 export function verifyAdminPasscode(passcode) {
   try {
-    const stored = s(cfg.ADMIN_PANEL_PASSCODE_HASH);
+    const stored = s(cfg.auth.adminPasscodeHash);
     const input = s(passcode);
 
     if (!stored || !input) return false;
@@ -449,8 +448,8 @@ function attemptKey(req, type = "admin") {
 export function checkAdminRateLimit(req) {
   const key = attemptKey(req, "admin");
   const now = Date.now();
-  const windowMs = Number(cfg.ADMIN_RATE_LIMIT_WINDOW_MS || 15 * 60 * 1000);
-  const max = Number(cfg.ADMIN_RATE_LIMIT_MAX_ATTEMPTS || 5);
+  const windowMs = Number(cfg.auth.adminRateLimitWindowMs || 15 * 60 * 1000);
+  const max = Number(cfg.auth.adminRateLimitMaxAttempts || 5);
 
   const rec = memoryAttempts.get(key) || {
     count: 0,
@@ -485,7 +484,7 @@ export function checkAdminRateLimit(req) {
 export function registerAdminFailedAttempt(req) {
   const key = attemptKey(req, "admin");
   const now = Date.now();
-  const windowMs = Number(cfg.ADMIN_RATE_LIMIT_WINDOW_MS || 15 * 60 * 1000);
+  const windowMs = Number(cfg.auth.adminRateLimitWindowMs || 15 * 60 * 1000);
 
   const rec = memoryAttempts.get(key) || {
     count: 0,
@@ -534,7 +533,7 @@ export function readUserSessionFromRequest(req) {
 }
 
 export function requireAdminSession(req, res, next) {
-  if (!cfg.ADMIN_PANEL_ENABLED) {
+  if (!cfg.auth.adminPanelEnabled) {
     return res.status(403).json({
       ok: false,
       error: "Admin panel disabled",
@@ -562,7 +561,7 @@ export function requireUserSession(req, res, next) {
       ok: false,
       error: "Unauthorized",
       reason: session?.error || "invalid session",
-      marker: "REQUIRE_USER_SESSION_DEBUG_V2",
+      marker: "REQUIRE_USER_SESSION_DEBUG_V3",
     });
   }
 

@@ -1,17 +1,3 @@
-// src/services/n8nNotify.js
-// FINAL v2.2 — tenant-ready / provider-ready routing + scheduler/full-auto support
-//
-// ✅ publish routes to N8N_WEBHOOK_PUBLISH_URL or /aihq-publish
-// ✅ approved/assets route to N8N_WEBHOOK_PROPOSAL_APPROVED_URL or /aihq-approved
-// ✅ supports full URL or base URL
-// ✅ keeps original action while sending normalized event
-// ✅ includes stable callback + prompt bundle + media/reel fields
-// ✅ tenant fallback now uses tenancy helper, not client hardcode
-// ✅ uses normalizePromptInput(...) before buildPromptBundle(...)
-// ✅ passes tenant/today/format/extra into prompt system correctly
-// ✅ tenantKey and tenantId are now separated correctly
-// ✅ NEW: scheduled content + automation mode payload support
-
 import { cfg } from "../config.js";
 import { getDefaultTenantKey, resolveTenantKey } from "../tenancy/index.js";
 import { deepFix } from "../utils/textFix.js";
@@ -22,10 +8,6 @@ import { postToN8n } from "../utils/n8n.js";
 
 function clean(x) {
   return String(x || "").trim();
-}
-
-function lower(x) {
-  return clean(x).toLowerCase();
 }
 
 function stripTrailingSlashes(u) {
@@ -148,21 +130,21 @@ function pickWebhookUrl(event, extra = {}) {
   if (override) return stripTrailingSlashes(override);
 
   const perEvent = {
-    "proposal.approved": clean(cfg.N8N_WEBHOOK_PROPOSAL_APPROVED_URL),
-    "content.publish": clean(cfg.N8N_WEBHOOK_PUBLISH_URL),
-    "tenant.draft.schedule.trigger": clean(process.env.N8N_WEBHOOK_SCHEDULE_DRAFT_URL || ""),
+    "proposal.approved": clean(cfg.n8n.webhookProposalApprovedUrl),
+    "content.publish": clean(cfg.n8n.webhookPublishUrl),
+    "tenant.draft.schedule.trigger": clean(cfg.n8n.scheduleDraftUrl),
   };
 
   if (perEvent[event]) {
     return stripTrailingSlashes(perEvent[event]);
   }
 
-  const full = clean(cfg.N8N_WEBHOOK_URL);
+  const full = clean(cfg.n8n.webhookUrl);
   if (full) {
     return stripTrailingSlashes(full);
   }
 
-  const base = stripTrailingSlashes(cfg.N8N_WEBHOOK_BASE);
+  const base = stripTrailingSlashes(cfg.n8n.webhookBase);
   if (!base) return "";
 
   if (looksLikeFullWebhookUrl(base)) {
@@ -629,11 +611,11 @@ export function notifyN8n(event, proposal, extra = {}) {
 
   postToN8n({
     url,
-    token: clean(cfg.N8N_WEBHOOK_TOKEN),
-    timeoutMs: Number(cfg.N8N_TIMEOUT_MS || 10_000),
+    token: clean(cfg.n8n.webhookToken),
+    timeoutMs: Number(cfg.n8n.timeoutMs || 10_000),
     payload,
-    retries: Number(cfg.N8N_RETRIES ?? 2),
-    baseBackoffMs: Number(cfg.N8N_BACKOFF_MS ?? 500),
+    retries: Number(cfg.n8n.retries ?? 2),
+    baseBackoffMs: Number(cfg.n8n.backoffMs ?? 500),
     requestId: extra.requestId,
     executionId: extra.executionId,
   })

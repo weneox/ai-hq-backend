@@ -1,6 +1,3 @@
-// src/db/helpers/tenantUsers.js
-// FINAL — tenant user helpers (auth-ready)
-
 function rowOrNull(r) {
   return r?.rows?.[0] || null;
 }

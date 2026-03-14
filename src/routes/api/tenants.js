@@ -1,5 +1,3 @@
-// src/routes/api/tenants.js
-
 import express from "express";
 import archiver from "archiver";
 
@@ -9,7 +7,6 @@ import {
 } from "../../utils/adminAuth.js";
 
 import {
-  dbGetTenantByKey,
   dbGetWorkspaceSettings,
   dbUpsertTenantCore,
   dbUpsertTenantProfile,
@@ -17,6 +14,10 @@ import {
   dbUpsertTenantChannel,
   dbUpsertTenantAgent,
 } from "../../db/helpers/settings.js";
+
+import {
+  dbGetTenantByKey,
+} from "../../db/helpers/tenants.js";
 
 import {
   dbCreateTenantUser,
@@ -147,6 +148,12 @@ function normalizeUserStatus(status) {
 
 function getActor(_req) {
   return "platform_admin";
+}
+
+function ensureDb(res, db) {
+  if (db?.query) return true;
+  serverErr(res, "Database is not available");
+  return false;
 }
 
 function buildTenantCoreInput(body = {}) {
@@ -453,7 +460,7 @@ async function dbPatchTenantByKey(db, tenantKey, input = {}) {
         status = $11,
         active = $12,
         onboarding_completed_at = $13
-      where lower(tenant_key) = $1
+      where lower(tenant_key) = lower($1)
       returning *
     `,
     [
@@ -547,6 +554,8 @@ export function tenantsRoutes({ db }) {
 
   router.get("/tenants/resolve-channel", async (req, res) => {
     try {
+      if (!ensureDb(res, db)) return;
+
       const channel = cleanLower(req.query.channel || "");
       const recipientId = cleanNullableString(req.query.recipientId);
       const pageId = cleanNullableString(req.query.pageId);
@@ -623,6 +632,8 @@ export function tenantsRoutes({ db }) {
 
   router.get("/tenants", async (req, res) => {
     try {
+      if (!ensureDb(res, db)) return;
+
       const status = cleanLower(req.query.status || "");
       const activeOnly = String(req.query.activeOnly || "").trim() === "1";
 
@@ -635,6 +646,8 @@ export function tenantsRoutes({ db }) {
 
   router.get("/tenants/:key", async (req, res) => {
     try {
+      if (!ensureDb(res, db)) return;
+
       const tenantKey = slugTenantKey(req.params.key);
       if (!tenantKey) return bad(res, "tenant key is required");
 
@@ -651,6 +664,8 @@ export function tenantsRoutes({ db }) {
 
   router.get("/tenants/:key/users", async (req, res) => {
     try {
+      if (!ensureDb(res, db)) return;
+
       const tenantKey = slugTenantKey(req.params.key);
       if (!tenantKey) return bad(res, "tenant key is required");
 
@@ -668,6 +683,8 @@ export function tenantsRoutes({ db }) {
 
   router.get("/tenants/:key/users/:id", async (req, res) => {
     try {
+      if (!ensureDb(res, db)) return;
+
       const tenantKey = slugTenantKey(req.params.key);
       if (!tenantKey) return bad(res, "tenant key is required");
 
@@ -689,6 +706,8 @@ export function tenantsRoutes({ db }) {
 
   router.post("/tenants/:key/users", async (req, res) => {
     try {
+      if (!ensureDb(res, db)) return;
+
       const actor = getActor(req);
       const tenantKey = slugTenantKey(req.params.key);
       if (!tenantKey) return bad(res, "tenant key is required");
@@ -731,6 +750,8 @@ export function tenantsRoutes({ db }) {
 
   router.patch("/tenants/:key/users/:id", async (req, res) => {
     try {
+      if (!ensureDb(res, db)) return;
+
       const actor = getActor(req);
       const tenantKey = slugTenantKey(req.params.key);
       if (!tenantKey) return bad(res, "tenant key is required");
@@ -768,6 +789,8 @@ export function tenantsRoutes({ db }) {
 
   router.post("/tenants/:key/users/:id/status", async (req, res) => {
     try {
+      if (!ensureDb(res, db)) return;
+
       const actor = getActor(req);
       const tenantKey = slugTenantKey(req.params.key);
       if (!tenantKey) return bad(res, "tenant key is required");
@@ -799,6 +822,8 @@ export function tenantsRoutes({ db }) {
 
   router.post("/tenants/:key/users/:id/password", async (req, res) => {
     try {
+      if (!ensureDb(res, db)) return;
+
       const actor = getActor(req);
       const tenantKey = slugTenantKey(req.params.key);
       if (!tenantKey) return bad(res, "tenant key is required");
@@ -841,6 +866,8 @@ export function tenantsRoutes({ db }) {
 
   router.delete("/tenants/:key/users/:id", async (req, res) => {
     try {
+      if (!ensureDb(res, db)) return;
+
       const actor = getActor(req);
       const tenantKey = slugTenantKey(req.params.key);
       if (!tenantKey) return bad(res, "tenant key is required");
@@ -878,6 +905,8 @@ export function tenantsRoutes({ db }) {
 
   router.get("/tenants/:key/export", async (req, res) => {
     try {
+      if (!ensureDb(res, db)) return;
+
       const tenantKey = slugTenantKey(req.params.key);
       if (!tenantKey) return bad(res, "tenant key is required");
 
@@ -901,6 +930,8 @@ export function tenantsRoutes({ db }) {
 
   router.get("/tenants/:key/export/csv", async (req, res) => {
     try {
+      if (!ensureDb(res, db)) return;
+
       const tenantKey = slugTenantKey(req.params.key);
       if (!tenantKey) return bad(res, "tenant key is required");
 
@@ -920,6 +951,8 @@ export function tenantsRoutes({ db }) {
 
   router.get("/tenants/:key/export/zip", async (req, res) => {
     try {
+      if (!ensureDb(res, db)) return;
+
       const tenantKey = slugTenantKey(req.params.key);
       if (!tenantKey) return bad(res, "tenant key is required");
 
@@ -935,7 +968,14 @@ export function tenantsRoutes({ db }) {
       const archive = archiver("zip", { zlib: { level: 9 } });
 
       archive.on("error", (err) => {
-        throw err;
+        if (!res.headersSent) {
+          res.status(500).json({
+            ok: false,
+            error: err?.message || "ZIP archive failed",
+          });
+        } else {
+          res.destroy(err);
+        }
       });
 
       archive.pipe(res);
@@ -958,6 +998,8 @@ export function tenantsRoutes({ db }) {
 
   router.post("/tenants", async (req, res) => {
     try {
+      if (!ensureDb(res, db)) return;
+
       const body = asJsonObj(req.body, {});
       const actor = getActor(req);
 
@@ -1103,6 +1145,8 @@ export function tenantsRoutes({ db }) {
 
   router.patch("/tenants/:key", async (req, res) => {
     try {
+      if (!ensureDb(res, db)) return;
+
       const actor = getActor(req);
 
       const tenantKey = slugTenantKey(req.params.key);

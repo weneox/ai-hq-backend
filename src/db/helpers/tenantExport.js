@@ -1,7 +1,4 @@
-// src/db/helpers/tenantExport.js
-// FINAL v2.0 — tenant export helper (JSON + CSV-ready)
-
-import { dbGetTenantByKey } from "./settings.js";
+import { dbGetTenantByKey } from "./tenants.js";
 
 function rowOrNull(r) {
   return r?.rows?.[0] || null;

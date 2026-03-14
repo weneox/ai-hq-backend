@@ -11,7 +11,9 @@ export function healthRoutes({ db }) {
     return okJson(res, {
       ok: true,
       service: "ai-hq-backend",
-      db: { enabled: isDbReady(db) },
+      db: {
+        enabled: isDbReady(db),
+      },
       debateEngine: DEBATE_ENGINE_VERSION,
       endpoints: [
         "GET /api",
@@ -39,12 +41,12 @@ export function healthRoutes({ db }) {
         "POST /api/content/:id/publish",
         "POST /api/render/slides",
         "POST /api/media/image",
-        "POST /api/debug/openai"
+        "POST /api/debug/openai",
       ],
       defaults: {
-        tenant: cfg.DEFAULT_TENANT_KEY,
-        mode: cfg.DEFAULT_MODE
-      }
+        tenant: cfg.tenant.defaultTenantKey,
+        mode: cfg.app.defaultMode,
+      },
     });
   });
 

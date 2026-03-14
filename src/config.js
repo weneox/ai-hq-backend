@@ -24,155 +24,215 @@ function mode(v, d = "manual") {
 }
 
 export const cfg = {
-  PORT: n(process.env.PORT, 8080),
-  APP_ENV: s(process.env.APP_ENV, process.env.NODE_ENV || "production"),
-  TRUST_PROXY: b(process.env.TRUST_PROXY, false),
-  LOG_LEVEL: s(process.env.LOG_LEVEL, "info"),
+  app: {
+    port: n(process.env.PORT, 8080),
+    env: s(process.env.APP_ENV, process.env.NODE_ENV || "production"),
+    trustProxy: b(process.env.TRUST_PROXY, false),
+    logLevel: s(process.env.LOG_LEVEL, "info"),
+    defaultTimezone: s(process.env.DEFAULT_TIMEZONE, "Asia/Baku"),
+    defaultMode: mode(process.env.DEFAULT_MODE, "manual"),
+  },
 
-  CORS_ORIGIN: s(process.env.CORS_ORIGIN, "*"),
-  PUBLIC_BASE_URL: s(process.env.PUBLIC_BASE_URL, ""),
+  urls: {
+    corsOrigin: s(process.env.CORS_ORIGIN, "*"),
+    publicBaseUrl: s(process.env.PUBLIC_BASE_URL, ""),
+    channelsReturnUrl: s(process.env.CHANNELS_RETURN_URL, ""),
+    aihqSecretsPath: s(process.env.AIHQ_SECRETS_PATH, "/api/settings/secrets"),
+  },
 
-  DATABASE_URL: s(process.env.DATABASE_URL, ""),
-  DB_MIGRATE_TX: b(process.env.DB_MIGRATE_TX, true),
-  WS_AUTH_TOKEN: s(process.env.WS_AUTH_TOKEN, ""),
+  db: {
+    url: s(process.env.DATABASE_URL, ""),
+    migrateTx: b(process.env.DB_MIGRATE_TX, true),
+  },
 
-  DEBUG_API_TOKEN: s(process.env.DEBUG_API_TOKEN, ""),
-  AIHQ_INTERNAL_TOKEN: s(process.env.AIHQ_INTERNAL_TOKEN, ""),
-  CRON_SECRET: s(process.env.CRON_SECRET, ""),
+  ws: {
+    authToken: s(process.env.WS_AUTH_TOKEN, ""),
+  },
 
-  ADMIN_PANEL_ENABLED: b(process.env.ADMIN_PANEL_ENABLED, true),
-  ADMIN_PANEL_PASSCODE_HASH: s(process.env.ADMIN_PANEL_PASSCODE_HASH, ""),
-  ADMIN_SESSION_SECRET: s(process.env.ADMIN_SESSION_SECRET, ""),
-  ADMIN_SESSION_COOKIE_NAME: s(
-    process.env.ADMIN_SESSION_COOKIE_NAME,
-    "aihq_admin"
-  ),
-  ADMIN_SESSION_TTL_HOURS: n(process.env.ADMIN_SESSION_TTL_HOURS, 12),
-  ADMIN_RATE_LIMIT_WINDOW_MS: n(
-    process.env.ADMIN_RATE_LIMIT_WINDOW_MS,
-    15 * 60 * 1000
-  ),
-  ADMIN_RATE_LIMIT_MAX_ATTEMPTS: n(
-    process.env.ADMIN_RATE_LIMIT_MAX_ATTEMPTS,
-    5
-  ),
+  security: {
+    debugApiToken: s(process.env.DEBUG_API_TOKEN, ""),
+    aihqInternalToken: s(process.env.AIHQ_INTERNAL_TOKEN, ""),
+    cronSecret: s(process.env.CRON_SECRET, ""),
+    tenantSecretMasterKey: s(process.env.TENANT_SECRET_MASTER_KEY, ""),
+  },
 
-  USER_SESSION_SECRET: s(
-    process.env.USER_SESSION_SECRET,
-    process.env.ADMIN_SESSION_SECRET || ""
-  ),
-  USER_SESSION_COOKIE_NAME: s(
-    process.env.USER_SESSION_COOKIE_NAME,
-    "aihq_user"
-  ),
-  USER_SESSION_TTL_HOURS: n(process.env.USER_SESSION_TTL_HOURS, 24 * 7),
+  auth: {
+    adminPanelEnabled: b(process.env.ADMIN_PANEL_ENABLED, true),
 
-  SESSION_COOKIE_DOMAIN: s(process.env.SESSION_COOKIE_DOMAIN, ""),
-  COOKIE_DOMAIN: s(process.env.COOKIE_DOMAIN, ""),
-  USER_COOKIE_DOMAIN: s(process.env.USER_COOKIE_DOMAIN, ""),
+    adminPasscodeHash: s(process.env.ADMIN_PANEL_PASSCODE_HASH, ""),
+    adminSessionSecret: s(process.env.ADMIN_SESSION_SECRET, ""),
+    adminSessionCookieName: s(
+      process.env.ADMIN_SESSION_COOKIE_NAME,
+      "aihq_admin"
+    ),
+    adminSessionTtlHours: n(process.env.ADMIN_SESSION_TTL_HOURS, 12),
+    adminRateLimitWindowMs: n(
+      process.env.ADMIN_RATE_LIMIT_WINDOW_MS,
+      15 * 60 * 1000
+    ),
+    adminRateLimitMaxAttempts: n(
+      process.env.ADMIN_RATE_LIMIT_MAX_ATTEMPTS,
+      5
+    ),
 
-  TENANT_SECRET_MASTER_KEY: s(process.env.TENANT_SECRET_MASTER_KEY, ""),
-  AIHQ_SECRETS_PATH: s(process.env.AIHQ_SECRETS_PATH, "/api/settings/secrets"),
+    userSessionSecret: s(
+      process.env.USER_SESSION_SECRET,
+      process.env.ADMIN_SESSION_SECRET || ""
+    ),
+    userSessionCookieName: s(
+      process.env.USER_SESSION_COOKIE_NAME,
+      "aihq_user"
+    ),
+    userSessionTtlHours: n(process.env.USER_SESSION_TTL_HOURS, 24 * 7),
 
-  DEFAULT_TENANT_KEY: s(process.env.DEFAULT_TENANT_KEY, "default"),
-  DEFAULT_TIMEZONE: s(process.env.DEFAULT_TIMEZONE, "Asia/Baku"),
-  DEFAULT_MODE: mode(process.env.DEFAULT_MODE, "manual"),
-  DAILY_PUBLISH_HOUR_LOCAL: n(process.env.DAILY_PUBLISH_HOUR_LOCAL, 10),
-  DAILY_PUBLISH_MINUTE_LOCAL: n(process.env.DAILY_PUBLISH_MINUTE_LOCAL, 0),
+    sessionCookieDomain: s(process.env.SESSION_COOKIE_DOMAIN, ""),
+    cookieDomain: s(process.env.COOKIE_DOMAIN, ""),
+    userCookieDomain: s(process.env.USER_COOKIE_DOMAIN, ""),
+  },
 
-  OPENAI_API_KEY: s(process.env.OPENAI_API_KEY, ""),
-  OPENAI_MODEL: s(process.env.OPENAI_MODEL, "gpt-5"),
-  OPENAI_MAX_OUTPUT_TOKENS: n(process.env.OPENAI_MAX_OUTPUT_TOKENS, 800),
-  OPENAI_TIMEOUT_MS: n(process.env.OPENAI_TIMEOUT_MS, 25_000),
-  OPENAI_DEBATE_CONCURRENCY: n(process.env.OPENAI_DEBATE_CONCURRENCY, 2),
-  OPENAI_DEBATE_AGENT_TOKENS: n(
-    process.env.OPENAI_DEBATE_AGENT_TOKENS,
-    900
-  ),
-  OPENAI_DEBATE_SYNTH_TOKENS: n(
-    process.env.OPENAI_DEBATE_SYNTH_TOKENS,
-    1400
-  ),
+  tenant: {
+    defaultTenantKey: s(process.env.DEFAULT_TENANT_KEY, "default"),
+    dailyPublishHourLocal: n(process.env.DAILY_PUBLISH_HOUR_LOCAL, 10),
+    dailyPublishMinuteLocal: n(process.env.DAILY_PUBLISH_MINUTE_LOCAL, 0),
+  },
 
-  GEMINI_API_KEY: s(process.env.GEMINI_API_KEY, ""),
-  ANTHROPIC_API_KEY: s(process.env.ANTHROPIC_API_KEY, ""),
+  ai: {
+    openaiApiKey: s(process.env.OPENAI_API_KEY, ""),
+    openaiModel: s(process.env.OPENAI_MODEL, "gpt-5"),
+    openaiMaxOutputTokens: n(process.env.OPENAI_MAX_OUTPUT_TOKENS, 800),
+    openaiTimeoutMs: n(process.env.OPENAI_TIMEOUT_MS, 25_000),
 
-  RUNWAY_API_KEY: s(process.env.RUNWAY_API_KEY, ""),
-  RUNWAY_VIDEO_MODEL: s(process.env.RUNWAY_VIDEO_MODEL, "gen4.5"),
+    openaiDebateConcurrency: n(process.env.OPENAI_DEBATE_CONCURRENCY, 2),
+    openaiDebateAgentTokens: n(
+      process.env.OPENAI_DEBATE_AGENT_TOKENS,
+      900
+    ),
+    openaiDebateSynthTokens: n(
+      process.env.OPENAI_DEBATE_SYNTH_TOKENS,
+      1400
+    ),
 
-  PIKA_API_KEY: s(process.env.PIKA_API_KEY, ""),
+    geminiApiKey: s(process.env.GEMINI_API_KEY, ""),
+    anthropicApiKey: s(process.env.ANTHROPIC_API_KEY, ""),
+  },
 
-  ELEVENLABS_API_KEY: s(process.env.ELEVENLABS_API_KEY, ""),
-  ELEVENLABS_VOICE_ID: s(process.env.ELEVENLABS_VOICE_ID, ""),
-  ELEVENLABS_MODEL_ID: s(
-    process.env.ELEVENLABS_MODEL_ID,
-    "eleven_multilingual_v2"
-  ),
+  media: {
+    runwayApiKey: s(process.env.RUNWAY_API_KEY, ""),
+    runwayVideoModel: s(process.env.RUNWAY_VIDEO_MODEL, "gen4.5"),
 
-  CREATOMATE_API_KEY: s(process.env.CREATOMATE_API_KEY, ""),
-  CREATOMATE_API_BASE: s(
-    process.env.CREATOMATE_API_BASE,
-    "https://api.creatomate.com/v1"
-  ),
-  CREATOMATE_TEMPLATE_ID_REEL: s(
-    process.env.CREATOMATE_TEMPLATE_ID_REEL,
-    ""
-  ),
-  CREATOMATE_TEMPLATE_ID_CAROUSEL_VIDEO: s(
-    process.env.CREATOMATE_TEMPLATE_ID_CAROUSEL_VIDEO,
-    ""
-  ),
+    pikaApiKey: s(process.env.PIKA_API_KEY, ""),
 
-  META_PAGE_ACCESS_TOKEN: s(process.env.META_PAGE_ACCESS_TOKEN, ""),
-  META_API_VERSION: s(process.env.META_API_VERSION, "v23.0"),
+    elevenlabsApiKey: s(process.env.ELEVENLABS_API_KEY, ""),
+    elevenlabsVoiceId: s(process.env.ELEVENLABS_VOICE_ID, ""),
+    elevenlabsModelId: s(
+      process.env.ELEVENLABS_MODEL_ID,
+      "eleven_multilingual_v2"
+    ),
 
-  META_APP_ID: s(process.env.META_APP_ID, ""),
-  META_APP_SECRET: s(process.env.META_APP_SECRET, ""),
-  META_REDIRECT_URI: s(process.env.META_REDIRECT_URI, ""),
-  CHANNELS_RETURN_URL: s(process.env.CHANNELS_RETURN_URL, ""),
+    creatomateApiKey: s(process.env.CREATOMATE_API_KEY, ""),
+    creatomateApiBase: s(
+      process.env.CREATOMATE_API_BASE,
+      "https://api.creatomate.com/v1"
+    ),
+    creatomateTemplateIdReel: s(
+      process.env.CREATOMATE_TEMPLATE_ID_REEL,
+      ""
+    ),
+    creatomateTemplateIdCarouselVideo: s(
+      process.env.CREATOMATE_TEMPLATE_ID_CAROUSEL_VIDEO,
+      ""
+    ),
+  },
 
-  N8N_WEBHOOK_BASE: s(process.env.N8N_WEBHOOK_BASE, ""),
-  N8N_WEBHOOK_URL: s(process.env.N8N_WEBHOOK_URL, ""),
-  N8N_WEBHOOK_PROPOSAL_APPROVED_URL: s(
-    process.env.N8N_WEBHOOK_PROPOSAL_APPROVED_URL,
-    ""
-  ),
-  N8N_WEBHOOK_PUBLISH_URL: s(process.env.N8N_WEBHOOK_PUBLISH_URL, ""),
-  N8N_WEBHOOK_TOKEN: s(process.env.N8N_WEBHOOK_TOKEN, ""),
-  N8N_CALLBACK_TOKEN: s(process.env.N8N_CALLBACK_TOKEN, ""),
-  N8N_TIMEOUT_MS: n(process.env.N8N_TIMEOUT_MS, 10_000),
-  N8N_RETRIES: n(process.env.N8N_RETRIES, 2),
-  N8N_BACKOFF_MS: n(process.env.N8N_BACKOFF_MS, 500),
+  meta: {
+    pageAccessToken: s(process.env.META_PAGE_ACCESS_TOKEN, ""),
+    apiVersion: s(process.env.META_API_VERSION, "v23.0"),
 
-  TELEGRAM_ENABLED: b(process.env.TELEGRAM_ENABLED, false),
-  TELEGRAM_BOT_TOKEN: s(process.env.TELEGRAM_BOT_TOKEN, ""),
-  TELEGRAM_CHAT_ID: s(process.env.TELEGRAM_CHAT_ID, ""),
+    appId: s(process.env.META_APP_ID, ""),
+    appSecret: s(process.env.META_APP_SECRET, ""),
+    redirectUri: s(process.env.META_REDIRECT_URI, ""),
+  },
 
-  PUSH_ENABLED: b(process.env.PUSH_ENABLED, true),
-  VAPID_PUBLIC_KEY: s(process.env.VAPID_PUBLIC_KEY, ""),
-  VAPID_PRIVATE_KEY: s(process.env.VAPID_PRIVATE_KEY, ""),
-  VAPID_SUBJECT: s(process.env.VAPID_SUBJECT, "mailto:info@example.com"),
+  n8n: {
+    webhookBase: s(process.env.N8N_WEBHOOK_BASE, ""),
+    webhookUrl: s(process.env.N8N_WEBHOOK_URL, ""),
+    webhookProposalApprovedUrl: s(
+      process.env.N8N_WEBHOOK_PROPOSAL_APPROVED_URL,
+      ""
+    ),
+    webhookPublishUrl: s(process.env.N8N_WEBHOOK_PUBLISH_URL, ""),
+    webhookToken: s(process.env.N8N_WEBHOOK_TOKEN, ""),
+    callbackToken: s(process.env.N8N_CALLBACK_TOKEN, ""),
+    timeoutMs: n(process.env.N8N_TIMEOUT_MS, 10_000),
+    retries: n(process.env.N8N_RETRIES, 2),
+    backoffMs: n(process.env.N8N_BACKOFF_MS, 500),
 
-  META_GATEWAY_BASE_URL: s(process.env.META_GATEWAY_BASE_URL, ""),
-  META_GATEWAY_INTERNAL_TOKEN: s(process.env.META_GATEWAY_INTERNAL_TOKEN, ""),
-  META_GATEWAY_TIMEOUT_MS: n(process.env.META_GATEWAY_TIMEOUT_MS, 20_000),
+    scheduleDraftUrl: s(process.env.N8N_WEBHOOK_SCHEDULE_DRAFT_URL, ""),
+  },
 
-  OUTBOUND_RETRY_ENABLED: b(process.env.OUTBOUND_RETRY_ENABLED, true),
-  OUTBOUND_RETRY_INTERVAL_MS: n(
-    process.env.OUTBOUND_RETRY_INTERVAL_MS,
-    15_000
-  ),
-  OUTBOUND_RETRY_BATCH_SIZE: n(process.env.OUTBOUND_RETRY_BATCH_SIZE, 10),
+  telegram: {
+    enabled: b(process.env.TELEGRAM_ENABLED, false),
+    botToken: s(process.env.TELEGRAM_BOT_TOKEN, ""),
+    chatId: s(process.env.TELEGRAM_CHAT_ID, ""),
+  },
 
-  MEDIA_JOB_WORKER_ENABLED: b(process.env.MEDIA_JOB_WORKER_ENABLED, true),
-  MEDIA_JOB_WORKER_INTERVAL_MS: n(
-    process.env.MEDIA_JOB_WORKER_INTERVAL_MS,
-    15_000
-  ),
-  MEDIA_JOB_WORKER_BATCH_SIZE: n(
-    process.env.MEDIA_JOB_WORKER_BATCH_SIZE,
-    10
-  ),
+  push: {
+    enabled: b(process.env.PUSH_ENABLED, true),
+    vapidPublicKey: s(process.env.VAPID_PUBLIC_KEY, ""),
+    vapidPrivateKey: s(process.env.VAPID_PRIVATE_KEY, ""),
+    vapidSubject: s(
+      process.env.VAPID_SUBJECT,
+      "mailto:info@example.com"
+    ),
+  },
 
-  DEBUG_DEBATE_RAW: b(process.env.DEBUG_DEBATE_RAW, false),
+  gateway: {
+    metaGatewayBaseUrl: s(process.env.META_GATEWAY_BASE_URL, ""),
+    metaGatewayInternalToken: s(
+      process.env.META_GATEWAY_INTERNAL_TOKEN,
+      ""
+    ),
+    metaGatewayTimeoutMs: n(
+      process.env.META_GATEWAY_TIMEOUT_MS,
+      20_000
+    ),
+  },
+
+  workers: {
+    outboundRetryEnabled: b(process.env.OUTBOUND_RETRY_ENABLED, true),
+    outboundRetryIntervalMs: n(
+      process.env.OUTBOUND_RETRY_INTERVAL_MS,
+      15_000
+    ),
+    outboundRetryBatchSize: n(
+      process.env.OUTBOUND_RETRY_BATCH_SIZE,
+      10
+    ),
+
+    draftScheduleWorkerEnabled: b(
+      process.env.DRAFT_SCHEDULE_WORKER_ENABLED,
+      true
+    ),
+    draftScheduleWorkerIntervalMs: n(
+      process.env.DRAFT_SCHEDULE_WORKER_INTERVAL_MS,
+      60_000
+    ),
+
+    mediaJobWorkerEnabled: b(
+      process.env.MEDIA_JOB_WORKER_ENABLED,
+      true
+    ),
+    mediaJobWorkerIntervalMs: n(
+      process.env.MEDIA_JOB_WORKER_INTERVAL_MS,
+      15_000
+    ),
+    mediaJobWorkerBatchSize: n(
+      process.env.MEDIA_JOB_WORKER_BATCH_SIZE,
+      10
+    ),
+  },
+
+  debug: {
+    debateRaw: b(process.env.DEBUG_DEBATE_RAW, false),
+  },
 };

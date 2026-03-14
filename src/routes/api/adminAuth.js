@@ -68,7 +68,7 @@ async function findTenantUserForLogin(db, { email, tenantKey }) {
 
   if (tk) {
     params.push(tk);
-    whereTenant = `and t.tenant_key = $2`;
+    whereTenant = `and lower(t.tenant_key) = lower($2)`;
   }
 
   const sql = `
@@ -129,7 +129,7 @@ export function adminAuthRoutes({ db, wsHub } = {}) {
 
     return res.status(200).json({
       ok: true,
-      enabled: !!cfg.ADMIN_PANEL_ENABLED,
+      enabled: !!cfg.auth.adminPanelEnabled,
       configured: {
         admin: isAdminAuthConfigured(),
         user: isUserAuthConfigured(),
@@ -162,7 +162,7 @@ export function adminAuthRoutes({ db, wsHub } = {}) {
             },
       },
       runtime: {
-        env: cfg.APP_ENV,
+        env: cfg.app.env,
         hasDb: !!db,
         dbOk,
         wsEnabled: !!wsHub,
@@ -184,11 +184,11 @@ export function adminAuthRoutes({ db, wsHub } = {}) {
         reason: userSession?.error || "invalid_session",
         user: null,
         runtime: {
-          env: cfg.APP_ENV,
+          env: cfg.app.env,
           hasDb: !!db,
           dbOk,
         },
-        marker: "AUTH_ME_DEBUG_V2",
+        marker: "AUTH_ME_DEBUG_V3",
       });
     }
 
@@ -206,11 +206,11 @@ export function adminAuthRoutes({ db, wsHub } = {}) {
         iat: userSession.payload?.iat || null,
       },
       runtime: {
-        env: cfg.APP_ENV,
+        env: cfg.app.env,
         hasDb: !!db,
         dbOk,
       },
-      marker: "AUTH_ME_DEBUG_V2",
+      marker: "AUTH_ME_DEBUG_V3",
     });
   });
 
@@ -224,7 +224,7 @@ export function adminAuthRoutes({ db, wsHub } = {}) {
 
     return res.status(200).json({
       ok: true,
-      marker: "AUTH_DEBUG_SESSION_V2",
+      marker: "AUTH_DEBUG_SESSION_V3",
       cookieNames: Object.keys(cookies || {}),
       hasUserCookie: Boolean(rawToken),
       userCookieName: getUserCookieName(),
@@ -241,7 +241,7 @@ export function adminAuthRoutes({ db, wsHub } = {}) {
             payload: null,
           },
       runtime: {
-        env: cfg.APP_ENV,
+        env: cfg.app.env,
         hasDb: !!db,
         dbOk,
       },
@@ -251,7 +251,7 @@ export function adminAuthRoutes({ db, wsHub } = {}) {
   r.post("/admin-auth/login", (req, res) => {
     setNoStore(res);
 
-    if (!cfg.ADMIN_PANEL_ENABLED) {
+    if (!cfg.auth.adminPanelEnabled) {
       return res.status(403).json({
         ok: false,
         error: "Admin panel disabled",
@@ -327,7 +327,14 @@ export function adminAuthRoutes({ db, wsHub } = {}) {
 
     const email = lower(req.body?.email);
     const password = s(req.body?.password);
-    const tenantKey = s(req.body?.tenantKey || req.body?.workspace || "");
+    const tenantKey = s(
+      req.body?.tenantKey ||
+        req.body?.tenant_key ||
+        req.body?.workspace ||
+        req.body?.tenantId ||
+        req.body?.tenant_id ||
+        ""
+    );
 
     if (!email) {
       return res.status(400).json({

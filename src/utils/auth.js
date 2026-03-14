@@ -1,3 +1,4 @@
+import crypto from "crypto";
 import { cfg } from "../config.js";
 
 function cleanString(v, fallback = "") {
@@ -14,19 +15,44 @@ function cleanLower(v, fallback = "") {
   return cleanString(v, fallback).toLowerCase();
 }
 
+function stripBearer(v) {
+  return cleanString(v).replace(/^Bearer\s+/i, "").trim();
+}
+
+function safeEq(a, b) {
+  const aa = Buffer.from(String(a || ""));
+  const bb = Buffer.from(String(b || ""));
+  if (aa.length !== bb.length) return false;
+
+  try {
+    return crypto.timingSafeEqual(aa, bb);
+  } catch {
+    return false;
+  }
+}
+
+function readHeader(req, name) {
+  return cleanString(req?.headers?.[name]);
+}
+
 export function requireDebugToken(req) {
-  const expected = cleanString(cfg.DEBUG_API_TOKEN);
+  const expected = cleanString(cfg?.security?.debugApiToken);
   if (!expected) return true;
 
-  const token = cleanString(
-    req.headers["x-debug-token"] || req.query.token || req.body?.token || ""
+  const got = cleanString(
+    readHeader(req, "x-debug-token") ||
+      req?.query?.token ||
+      req?.body?.token ||
+      ""
   );
 
-  return Boolean(token) && token === expected;
+  return Boolean(got) && safeEq(got, expected);
 }
 
 export function callbackTokenExpected() {
-  return cleanString(cfg.N8N_CALLBACK_TOKEN || cfg.N8N_WEBHOOK_TOKEN || "");
+  return cleanString(
+    cfg?.n8n?.callbackToken || cfg?.n8n?.webhookToken || ""
+  );
 }
 
 export function requireCallbackToken(req) {
@@ -34,31 +60,31 @@ export function requireCallbackToken(req) {
   if (!expected) return true;
 
   const got = cleanString(
-    req.headers["x-webhook-token"] ||
-      req.headers["x-callback-token"] ||
-      req.body?.token ||
+    readHeader(req, "x-webhook-token") ||
+      readHeader(req, "x-callback-token") ||
+      req?.body?.token ||
       ""
   );
 
-  return Boolean(got) && got === expected;
+  return Boolean(got) && safeEq(got, expected);
 }
 
 export function internalTokenExpected() {
-  return cleanString(cfg.AIHQ_INTERNAL_TOKEN || "");
+  return cleanString(cfg?.security?.aihqInternalToken || "");
 }
 
 export function requireInternalToken(req) {
   const expected = internalTokenExpected();
   if (!expected) return true;
 
-  const got = cleanString(
-    req.headers["x-internal-token"] ||
-      req.headers["authorization"] ||
-      req.body?.internalToken ||
+  const got = stripBearer(
+    readHeader(req, "x-internal-token") ||
+      readHeader(req, "authorization") ||
+      req?.body?.internalToken ||
       ""
-  ).replace(/^Bearer\s+/i, "").trim();
+  );
 
-  return Boolean(got) && got === expected;
+  return Boolean(got) && safeEq(got, expected);
 }
 
 export function getAuthTenantKey(req) {
@@ -70,7 +96,7 @@ export function getAuthTenantKey(req) {
       req?.tenant?.tenant_key ||
       req?.tenant?.key ||
       req?.tenantKey ||
-      req?.headers?.["x-tenant-key"] ||
+      readHeader(req, "x-tenant-key") ||
       req?.body?.tenantKey ||
       req?.body?.tenant_key ||
       req?.query?.tenantKey ||
@@ -87,7 +113,7 @@ export function getAuthTenantId(req) {
       req?.user?.tenant_id ||
       req?.tenant?.id ||
       req?.tenantId ||
-      req?.headers?.["x-tenant-id"] ||
+      readHeader(req, "x-tenant-id") ||
       req?.body?.tenantId ||
       req?.body?.tenant_id ||
       req?.query?.tenantId ||
