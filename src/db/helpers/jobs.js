@@ -4,43 +4,31 @@ function clean(v) {
   return String(v || "").trim();
 }
 
-function isUuidLike(x) {
-  const s = clean(x);
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(s);
-}
-
-function uuidOrNull(x) {
-  const s = clean(x);
-  return s && isUuidLike(s) ? s : null;
-}
-
-export async function dbCreateJob(
-  db,
-  {
-    tenantId = null,
-    tenantKey = null,
-    proposalId = null,
-    type = "generic",
-    status = "queued",
-    input = {},
-  }
-) {
+export async function dbCreateJob(db, {
+  tenantId = null,
+  tenantKey = null,
+  proposalId = null,
+  type = "generic",
+  status = "queued",
+  input = {},
+}) {
   const q = await db.query(
     `insert into jobs (tenant_id, tenant_key, proposal_id, type, status, input)
      values ($1::uuid, $2::text, $3::uuid, $4::text, $5::text, $6::jsonb)
      returning id, tenant_id, tenant_key, proposal_id, type, status, input, output, error, created_at, started_at, finished_at`,
     [
-      uuidOrNull(tenantId),
+      tenantId || null,
       clean(tenantKey) || null,
-      uuidOrNull(proposalId),
-      clean(type) || "generic",
-      clean(status) || "queued",
+      proposalId || null,
+      type,
+      status,
       deepFix(input),
     ]
   );
 
   const row = q.rows?.[0] || null;
   if (!row) return null;
+
   row.input = deepFix(row.input);
   row.output = deepFix(row.output);
   row.error = row.error ? fixText(String(row.error)) : row.error;
@@ -75,6 +63,7 @@ export async function dbUpdateJob(db, id, patch) {
 
   const row = q.rows?.[0] || null;
   if (!row) return null;
+
   row.input = deepFix(row.input);
   row.output = deepFix(row.output);
   row.error = row.error ? fixText(String(row.error)) : row.error;

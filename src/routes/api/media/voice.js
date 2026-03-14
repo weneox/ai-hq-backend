@@ -1,6 +1,6 @@
 import express from "express";
 import { elevenlabsGenerateSpeech } from "../../../services/media/elevenlabsVoice.js";
-import { cloudinaryUploadFromUrl } from "../../../services/media/cloudinaryUpload.js";
+import { cloudinaryUploadBuffer } from "../../../services/media/cloudinaryUpload.js";
 
 const router = express.Router();
 
@@ -27,8 +27,13 @@ function getTenantKey(req) {
 
 router.post("/voice/generate", async (req, res) => {
   try {
-    const text = clean(req.body?.text || req.body?.voiceoverText || "");
-    const voiceId = clean(req.body?.voiceId || "");
+    const text = clean(
+      req.body?.text ||
+        req.body?.voiceoverText ||
+        req.body?.voiceover_text ||
+        ""
+    );
+    const voiceId = clean(req.body?.voiceId || req.body?.voice_id || "");
     const tenantKey = getTenantKey(req);
 
     if (!text) {
@@ -43,18 +48,20 @@ router.post("/voice/generate", async (req, res) => {
       voiceId,
     });
 
-    const dataUri = `data:${out.mimeType};base64,${out.buffer.toString("base64")}`;
-
-    const uploaded = await cloudinaryUploadFromUrl({
-      sourceUrl: dataUri,
+    const uploaded = await cloudinaryUploadBuffer({
+      buffer: out.buffer,
+      filename: `voiceover-${Date.now()}.${out.ext || "mp3"}`,
+      mimeType: out.mimeType || "audio/mpeg",
       db: req.app?.locals?.db || null,
       tenantKey,
       folder: [tenantKey || "public", "voiceovers"].join("/"),
+      publicId: "",
       resourceType: "video",
-      tags: ["voiceover", tenantKey || "public"],
+      tags: ["voiceover", "elevenlabs", tenantKey || "public"],
       context: {
         tenantKey: tenantKey || "",
         provider: "elevenlabs",
+        kind: "voiceover",
       },
     });
 

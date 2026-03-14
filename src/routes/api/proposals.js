@@ -59,6 +59,10 @@ function clean(v) {
   return String(v || "").trim();
 }
 
+function lower(v) {
+  return clean(v).toLowerCase();
+}
+
 function normalizeAutomationMode(v, fallback = "manual") {
   const x = clean(v || fallback).toLowerCase();
   if (x === "full_auto") return "full_auto";
@@ -96,6 +100,63 @@ function pickAutomationMeta(req) {
     mode,
     autoPublish,
   };
+}
+
+function buildDraftJobInput(proposal, automation, tenantKey = "", tenantId = null) {
+  const format = safeFormat(proposal);
+  const voiceoverText = safeVoiceoverText(proposal);
+  const videoPrompt = safeVideoPrompt(proposal);
+  const imagePrompt = safeImagePrompt(proposal);
+
+  const wantsReel = lower(format) === "reel";
+  const wantsVoice = !!clean(voiceoverText);
+  const wantsScene = wantsReel || !!clean(videoPrompt);
+
+  return deepFix({
+    proposalId: proposal.id,
+    threadId: proposal.thread_id || null,
+    tenantId: tenantId || null,
+    tenantKey: tenantKey || null,
+
+    title: safeTitle(proposal),
+    topic: safeTopic(proposal),
+
+    format,
+    aspectRatio: safeAspectRatio(proposal),
+    visualPreset: safeVisualPreset(proposal),
+
+    imagePrompt,
+    videoPrompt,
+    voiceoverText,
+
+    neededAssets: safeNeededAssets(proposal),
+    reelMeta: safeReelMeta(proposal),
+
+    payload: deepFix(proposal.payload),
+
+    automationMode: automation.mode,
+    autoPublish: automation.autoPublish,
+
+    contentPack: {
+      title: safeTitle(proposal),
+      topic: safeTopic(proposal),
+      format,
+      aspectRatio: safeAspectRatio(proposal),
+      visualPreset: safeVisualPreset(proposal),
+      imagePrompt,
+      videoPrompt,
+      voiceoverText,
+      reelMeta: safeReelMeta(proposal),
+
+      media: {
+        generateVoiceover: wantsVoice,
+        generateScenes: wantsScene,
+        generateVideo: wantsReel,
+        renderVideo: wantsReel,
+        runQa: true,
+      },
+    },
+  });
 }
 
 export function proposalsRoutes({ db, wsHub }) {
@@ -220,7 +281,11 @@ export function proposalsRoutes({ db, wsHub }) {
     const decision = normalizeDecision(req.body?.decision);
     const by = pickDecisionActor(req, "ceo");
     const reason = fixText(String(req.body?.reason || "").trim());
-    const tenantId = resolveTenantKeyFromReq(req);
+
+    const tenantKey = resolveTenantKeyFromReq(req);
+    const tenantId =
+      clean(req.auth?.tenantId || req.auth?.tenant_id || req.body?.tenantId || "") || null;
+
     const automation = pickAutomationMeta(req);
 
     if (!id) {
@@ -280,6 +345,7 @@ export function proposalsRoutes({ db, wsHub }) {
           try {
             notifyN8n("proposal.rejected", p, {
               tenantId,
+              tenantKey,
               proposalId: String(p.id),
               reason,
               topic: safeTopic(p),
@@ -306,23 +372,7 @@ export function proposalsRoutes({ db, wsHub }) {
           proposalId: p.id,
           type: "draft.generate",
           status: "queued",
-          input: {
-            proposalId: p.id,
-            threadId: p.thread_id,
-            title: safeTitle(p),
-            topic: safeTopic(p),
-            format: safeFormat(p),
-            aspectRatio: safeAspectRatio(p),
-            visualPreset: safeVisualPreset(p),
-            imagePrompt: safeImagePrompt(p),
-            videoPrompt: safeVideoPrompt(p),
-            voiceoverText: safeVoiceoverText(p),
-            neededAssets: safeNeededAssets(p),
-            reelMeta: safeReelMeta(p),
-            payload: deepFix(p.payload),
-            automationMode: automation.mode,
-            autoPublish: automation.autoPublish,
-          },
+          input: buildDraftJobInput(p, automation, tenantKey, tenantId),
         });
 
         const notif = memCreateNotification({
@@ -355,6 +405,7 @@ export function proposalsRoutes({ db, wsHub }) {
             p,
             buildN8nExtra({
               tenantId,
+              tenantKey,
               proposal: p,
               jobId: job.id,
               reason,
@@ -432,6 +483,7 @@ export function proposalsRoutes({ db, wsHub }) {
         try {
           notifyN8n("proposal.rejected", p2, {
             tenantId,
+            tenantKey,
             proposalId: String(p2.id),
             reason,
             topic: safeTopic(p2),
@@ -464,26 +516,12 @@ export function proposalsRoutes({ db, wsHub }) {
       p2.payload = deepFix(p2.payload);
 
       const job = await dbCreateJob(db, {
+        tenantId: tenantId || null,
+        tenantKey: tenantKey || null,
         proposalId: p2.id,
         type: "draft.generate",
         status: "queued",
-        input: {
-          proposalId: p2.id,
-          threadId: p2.thread_id,
-          title: safeTitle(p2),
-          topic: safeTopic(p2),
-          format: safeFormat(p2),
-          aspectRatio: safeAspectRatio(p2),
-          visualPreset: safeVisualPreset(p2),
-          imagePrompt: safeImagePrompt(p2),
-          videoPrompt: safeVideoPrompt(p2),
-          voiceoverText: safeVoiceoverText(p2),
-          neededAssets: safeNeededAssets(p2),
-          reelMeta: safeReelMeta(p2),
-          payload: deepFix(p2.payload),
-          automationMode: automation.mode,
-          autoPublish: automation.autoPublish,
-        },
+        input: buildDraftJobInput(p2, automation, tenantKey, tenantId),
       });
 
       const notif = await dbCreateNotification(db, {
@@ -528,6 +566,7 @@ export function proposalsRoutes({ db, wsHub }) {
           p2,
           buildN8nExtra({
             tenantId,
+            tenantKey,
             proposal: p2,
             jobId: job?.id || null,
             reason,

@@ -1,13 +1,13 @@
 // src/services/media/cloudinaryUpload.js
 //
-// FINAL v1.1 — tenant-aware Cloudinary upload helper
+// FINAL v2.0 — tenant-aware Cloudinary upload helper
 //
 // Goals:
-// ✅ Tenant-specific Cloudinary secrets support
-// ✅ Global env fallback support
-// ✅ Upload by remote URL
+// ✅ Global env fallback
+// ✅ Remote URL upload
+// ✅ Buffer upload
 // ✅ Image / video / raw resource type support
-// ✅ Simple signed upload flow
+// ✅ Signed upload flow
 // ✅ Safe for shared multi-tenant backend
 
 import crypto from "crypto";
@@ -41,31 +41,10 @@ function signCloudinary(paramsToSign, apiSecret) {
   return sha1Hex(`${sorted}${apiSecret}`);
 }
 
-async function fetchTenantCloudinarySecrets(db, tenantKey) {
-  if (!db || !tenantKey) return null;
-
-  const q = await db.query(
-    `
-      select ts.secret_key, ts.secret_value
-      from tenant_secrets ts
-      join tenants t on t.id = ts.tenant_id
-      where lower(t.tenant_key) = $1
-        and lower(ts.provider) = 'cloudinary'
-    `,
-    [lower(tenantKey)]
-  );
-
-  const rows = Array.isArray(q?.rows) ? q.rows : [];
-  if (!rows.length) return null;
-
-  const out = {};
-  for (const row of rows) {
-    const k = lower(row?.secret_key);
-    if (!k) continue;
-    out[k] = clean(row?.secret_value);
-  }
-
-  return out;
+async function fetchTenantCloudinarySecrets(_db, _tenantKey) {
+  // tenant secret decrypt layer sonra ayrıca düzəldiləcək
+  // hazırda intentionally global env fallback istifadə edirik
+  return null;
 }
 
 async function resolveCloudinaryConfig({ db, tenantKey }) {
@@ -110,6 +89,42 @@ function normalizeResourceType(v) {
   const x = lower(v);
   if (x === "image" || x === "video" || x === "raw") return x;
   return "image";
+}
+
+async function parseCloudinaryResponse(r) {
+  const text = await r.text().catch(() => "");
+  let j = {};
+  try {
+    j = text ? JSON.parse(text) : {};
+  } catch {
+    j = { raw: text };
+  }
+
+  if (!r.ok) {
+    throw new Error(j?.error?.message || j?.raw || "cloudinary_upload_failed");
+  }
+
+  return j;
+}
+
+function buildUploadResult(cfg, finalFolder, finalResourceType, j) {
+  return {
+    ok: true,
+    provider: "cloudinary",
+    source: cfg.source,
+    cloudName: cfg.cloudName,
+    folder: finalFolder || null,
+    publicId: j.public_id || null,
+    version: j.version || null,
+    resourceType: j.resource_type || finalResourceType,
+    format: j.format || null,
+    width: j.width || null,
+    height: j.height || null,
+    duration: j.duration || null,
+    bytes: j.bytes || null,
+    url: j.secure_url || j.url || null,
+    raw: j,
+  };
 }
 
 export async function cloudinaryUploadFromUrl({
@@ -165,33 +180,66 @@ export async function cloudinaryUploadFromUrl({
     body: params,
   });
 
-  const text = await r.text().catch(() => "");
-  let j = {};
-  try {
-    j = text ? JSON.parse(text) : {};
-  } catch {
-    j = { raw: text };
+  const j = await parseCloudinaryResponse(r);
+  return buildUploadResult(cfg, finalFolder, finalResourceType, j);
+}
+
+export async function cloudinaryUploadBuffer({
+  buffer,
+  filename = "",
+  mimeType = "",
+  db,
+  tenantKey,
+  folder = "",
+  publicId = "",
+  resourceType = "raw",
+  tags = [],
+  context = {},
+} = {}) {
+  if (!buffer || !Buffer.isBuffer(buffer) || !buffer.length) {
+    throw new Error("buffer required");
   }
 
-  if (!r.ok) {
-    throw new Error(j?.error?.message || j?.raw || "cloudinary_upload_failed");
-  }
+  const cfg = await resolveCloudinaryConfig({ db, tenantKey });
+  const timestamp = Math.floor(Date.now() / 1000);
 
-  return {
-    ok: true,
-    provider: "cloudinary",
-    source: cfg.source,
-    cloudName: cfg.cloudName,
-    folder: finalFolder || null,
-    publicId: j.public_id || null,
-    version: j.version || null,
-    resourceType: j.resource_type || finalResourceType,
-    format: j.format || null,
-    width: j.width || null,
-    height: j.height || null,
-    duration: j.duration || null,
-    bytes: j.bytes || null,
-    url: j.secure_url || j.url || null,
-    raw: j,
+  const finalFolder = clean(folder || cfg.folder);
+  const finalPublicId = clean(publicId);
+  const finalResourceType = normalizeResourceType(resourceType);
+  const finalTags = Array.isArray(tags) ? tags.map(clean).filter(Boolean) : [];
+  const contextString = buildContextString(context);
+
+  const paramsForSignature = {
+    timestamp,
+    folder: finalFolder || undefined,
+    public_id: finalPublicId || undefined,
+    tags: finalTags.length ? finalTags.join(",") : undefined,
+    context: contextString || undefined,
   };
+
+  const signature = signCloudinary(paramsForSignature, cfg.apiSecret);
+  const endpoint = `https://api.cloudinary.com/v1_1/${cfg.cloudName}/${finalResourceType}/upload`;
+
+  const form = new FormData();
+  const blob = new Blob([buffer], {
+    type: clean(mimeType) || "application/octet-stream",
+  });
+
+  form.append("file", blob, clean(filename) || "upload.bin");
+  form.append("api_key", cfg.apiKey);
+  form.append("timestamp", String(timestamp));
+  form.append("signature", signature);
+
+  if (finalFolder) form.append("folder", finalFolder);
+  if (finalPublicId) form.append("public_id", finalPublicId);
+  if (finalTags.length) form.append("tags", finalTags.join(","));
+  if (contextString) form.append("context", contextString);
+
+  const r = await fetch(endpoint, {
+    method: "POST",
+    body: form,
+  });
+
+  const j = await parseCloudinaryResponse(r);
+  return buildUploadResult(cfg, finalFolder, finalResourceType, j);
 }

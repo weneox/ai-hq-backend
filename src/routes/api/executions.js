@@ -23,7 +23,10 @@ import {
 } from "../../utils/memStore.js";
 
 import { dbUpdateJob, dbCreateJob } from "../../db/helpers/jobs.js";
-import { dbGetProposalById, dbSetProposalStatus } from "../../db/helpers/proposals.js";
+import {
+  dbGetProposalById,
+  dbSetProposalStatus,
+} from "../../db/helpers/proposals.js";
 import {
   dbUpsertDraftFromCallback,
   dbGetLatestContentByProposal,
@@ -34,6 +37,7 @@ import { dbAudit } from "../../db/helpers/audit.js";
 
 import { pushBroadcastToCeo } from "../../services/pushBroadcast.js";
 import { notifyN8n } from "../../services/n8nNotify.js";
+import { runMediaJobNow } from "../../services/media/mediaExecutionRunner.js";
 
 import {
   pickJobId,
@@ -168,21 +172,18 @@ function enrichContentPackForJobType(merged, jt, result = {}) {
       null;
 
     pack.voiceover = deepFix({
-      ...(pack.voiceover && typeof pack.voiceover === "object" ? pack.voiceover : {}),
+      ...(pack.voiceover && typeof pack.voiceover === "object"
+        ? pack.voiceover
+        : {}),
       provider:
-        result?.provider ||
-        result?.voiceover?.provider ||
-        "elevenlabs",
+        result?.provider || result?.voiceover?.provider || "elevenlabs",
       url: voiceUrl || pack.voiceover?.url || null,
       durationSec:
         result?.durationSec ??
         result?.duration_sec ??
         pack.voiceover?.durationSec ??
         null,
-      language:
-        result?.language ||
-        pack.voiceover?.language ||
-        null,
+      language: result?.language || pack.voiceover?.language || null,
     });
 
     if (voiceUrl) pack.voiceoverUrl = voiceUrl;
@@ -216,13 +217,11 @@ function enrichContentPackForJobType(merged, jt, result = {}) {
       ...(pack.qa && typeof pack.qa === "object" ? pack.qa : {}),
       provider: result?.provider || "ai_hq",
       status: result?.qaStatus || result?.status || "completed",
-      score:
-        result?.score ??
-        result?.qaScore ??
-        pack.qa?.score ??
-        null,
+      score: result?.score ?? result?.qaScore ?? pack.qa?.score ?? null,
       checks: deepFix(result?.checks || result?.qaChecks || {}),
-      summary: fixText(result?.summary || result?.qaSummary || pack.qa?.summary || ""),
+      summary: fixText(
+        result?.summary || result?.qaSummary || pack.qa?.summary || ""
+      ),
     });
   }
 
@@ -253,7 +252,11 @@ export function executionsRoutes({ db, wsHub }) {
         if (executionId) rows = rows.filter((x) => x.id === executionId);
         if (status) rows = rows.filter((x) => String(x.status) === status);
         rows.sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
-        return okJson(res, { ok: true, executions: rows.slice(0, limit), dbDisabled: true });
+        return okJson(res, {
+          ok: true,
+          executions: rows.slice(0, limit),
+          dbDisabled: true,
+        });
       }
 
       const where = [];
@@ -302,7 +305,13 @@ export function executionsRoutes({ db, wsHub }) {
     try {
       if (!isDbReady(db)) {
         const row = mem.jobs.get(id) || null;
-        if (!row) return okJson(res, { ok: false, error: "not found", dbDisabled: true });
+        if (!row) {
+          return okJson(res, {
+            ok: false,
+            error: "not found",
+            dbDisabled: true,
+          });
+        }
         return okJson(res, { ok: true, execution: row, dbDisabled: true });
       }
 
@@ -333,7 +342,10 @@ export function executionsRoutes({ db, wsHub }) {
 
   r.post("/executions/callback", async (req, res) => {
     if (!requireCallbackToken(req)) {
-      return okJson(res, { ok: false, error: "forbidden (invalid callback token)" });
+      return okJson(res, {
+        ok: false,
+        error: "forbidden (invalid callback token)",
+      });
     }
 
     const jobId = pickJobId(req);
@@ -342,7 +354,8 @@ export function executionsRoutes({ db, wsHub }) {
     const errorText = req.body?.error ? fixText(String(req.body.error)) : null;
 
     if (!jobId) return okJson(res, { ok: false, error: "jobId required" });
-    if (!isUuid(jobId)) return okJson(res, { ok: false, error: "jobId must be uuid" });
+    if (!isUuid(jobId))
+      return okJson(res, { ok: false, error: "jobId must be uuid" });
     if (!status) return okJson(res, { ok: false, error: "status required" });
 
     try {
@@ -356,13 +369,21 @@ export function executionsRoutes({ db, wsHub }) {
 
       if (!isDbReady(db)) {
         const job = mem.jobs.get(jobId);
-        if (!job) return okJson(res, { ok: false, error: "job not found", dbDisabled: true });
+        if (!job) {
+          return okJson(res, {
+            ok: false,
+            error: "job not found",
+            dbDisabled: true,
+          });
+        }
 
         memUpdateJob(jobId, patch);
 
         const jt = jobTypeLc(job.type);
         const proposalId =
-          String(job.proposal_id || result?.proposalId || result?.proposal_id || "").trim() || null;
+          String(
+            job.proposal_id || result?.proposalId || result?.proposal_id || ""
+          ).trim() || null;
         const jobInput = deepFix(job.input || {});
         const contentIdFromInput = pickContentId(result, jobInput);
         const automation = pickAutomationMeta(result, jobInput);
@@ -371,7 +392,7 @@ export function executionsRoutes({ db, wsHub }) {
         const publishInfo = pickPublishInfo(result);
 
         let contentRow = null;
-        let proposalRow = proposalId ? (mem.proposals.get(proposalId) || null) : null;
+        let proposalRow = proposalId ? mem.proposals.get(proposalId) || null : null;
         let nextJob = null;
 
         if (proposalId && incomingPack && isDraftJobType(jt)) {
@@ -387,10 +408,9 @@ export function executionsRoutes({ db, wsHub }) {
         }
 
         if (proposalId && isAssetJobType(jt) && !isPublishJobType(jt)) {
-          const target =
-            contentIdFromInput
-              ? (mem.contentItems.get(contentIdFromInput) || null)
-              : memGetLatestContentByProposal(proposalId);
+          const target = contentIdFromInput
+            ? mem.contentItems.get(contentIdFromInput) || null
+            : memGetLatestContentByProposal(proposalId);
 
           if (target) {
             const merged = enrichContentPackForJobType(
@@ -412,7 +432,10 @@ export function executionsRoutes({ db, wsHub }) {
             }
 
             wsHub?.broadcast?.({ type: "content.updated", content: contentRow });
-            wsHub?.broadcast?.({ type: "proposal.updated", proposal: proposalRow });
+            wsHub?.broadcast?.({
+              type: "proposal.updated",
+              proposal: proposalRow,
+            });
 
             if (proposalRow && contentRow && isCompleted(status)) {
               const nextJobType = pickNextJobTypeAfter(jt, merged, automation);
@@ -467,10 +490,16 @@ export function executionsRoutes({ db, wsHub }) {
                   contentPack: merged,
                   automationMode: automation.mode,
                   autoPublish: automation.autoPublish,
-                  callback: { url: "/api/executions/callback", tokenHeader: "x-webhook-token" },
+                  callback: {
+                    url: "/api/executions/callback",
+                    tokenHeader: "x-webhook-token",
+                  },
                 });
 
-                wsHub?.broadcast?.({ type: "execution.updated", execution: nextJob });
+                wsHub?.broadcast?.({
+                  type: "execution.updated",
+                  execution: nextJob,
+                });
                 wsHub?.broadcast?.({
                   type: "content.updated",
                   content: mem.contentItems.get(contentRow.id),
@@ -522,12 +551,18 @@ export function executionsRoutes({ db, wsHub }) {
                   caption,
                   automationMode: "full_auto",
                   autoPublish: true,
-                  callback: { url: "/api/executions/callback", tokenHeader: "x-webhook-token" },
+                  callback: {
+                    url: "/api/executions/callback",
+                    tokenHeader: "x-webhook-token",
+                  },
                 });
 
                 nextJob = mem.jobs.get(publishJobId);
 
-                wsHub?.broadcast?.({ type: "execution.updated", execution: nextJob });
+                wsHub?.broadcast?.({
+                  type: "execution.updated",
+                  execution: nextJob,
+                });
                 wsHub?.broadcast?.({
                   type: "content.updated",
                   content: mem.contentItems.get(contentRow.id),
@@ -538,13 +573,13 @@ export function executionsRoutes({ db, wsHub }) {
         }
 
         if (proposalId && isPublishJobType(jt)) {
-          const latest =
-            contentIdFromInput
-              ? (mem.contentItems.get(contentIdFromInput) || null)
-              : memGetLatestContentByProposal(proposalId);
+          const latest = contentIdFromInput
+            ? mem.contentItems.get(contentIdFromInput) || null
+            : memGetLatestContentByProposal(proposalId);
 
           if (latest) {
-            const nextStatus = status === "completed" ? "published" : "publish.failed";
+            const nextStatus =
+              status === "completed" ? "published" : "publish.failed";
 
             memPatchContentItem(latest.id, {
               status: nextStatus,
@@ -553,10 +588,15 @@ export function executionsRoutes({ db, wsHub }) {
 
             contentRow = mem.contentItems.get(latest.id) || null;
 
-            if (proposalRow && status === "completed") proposalRow.status = "published";
+            if (proposalRow && status === "completed") {
+              proposalRow.status = "published";
+            }
 
             wsHub?.broadcast?.({ type: "content.updated", content: contentRow });
-            wsHub?.broadcast?.({ type: "proposal.updated", proposal: proposalRow || null });
+            wsHub?.broadcast?.({
+              type: "proposal.updated",
+              proposal: proposalRow || null,
+            });
           }
         }
 
@@ -580,8 +620,14 @@ export function executionsRoutes({ db, wsHub }) {
           },
         });
 
-        wsHub?.broadcast?.({ type: "execution.updated", execution: mem.jobs.get(jobId) });
-        wsHub?.broadcast?.({ type: "notification.created", notification: notif });
+        wsHub?.broadcast?.({
+          type: "execution.updated",
+          execution: mem.jobs.get(jobId),
+        });
+        wsHub?.broadcast?.({
+          type: "notification.created",
+          notification: notif,
+        });
 
         memAudit("n8n", "execution.callback", "job", jobId, {
           status,
@@ -599,10 +645,13 @@ export function executionsRoutes({ db, wsHub }) {
       const jt = jobTypeLc(jobRow.type);
       const tenantId = pickTenantIdFromResult(result);
       const tenantKey =
-        clean(jobRow.tenant_key || result?.tenantKey || result?.tenant_key || "") || null;
+        clean(jobRow.tenant_key || result?.tenantKey || result?.tenant_key || "") ||
+        null;
       const jobInput = deepFix(jobRow.input || {});
       const proposalId =
-        String(jobRow.proposal_id || result?.proposalId || result?.proposal_id || "").trim() || null;
+        String(
+          jobRow.proposal_id || result?.proposalId || result?.proposal_id || ""
+        ).trim() || null;
       const automation = pickAutomationMeta(result, jobInput);
 
       const incomingPack = mergePackAssets(result);
@@ -624,7 +673,11 @@ export function executionsRoutes({ db, wsHub }) {
 
       if (proposalId && isAssetJobType(jt) && !isPublishJobType(jt)) {
         const contentId = pickContentId(result, jobInput);
-        const rowToUpdate = await resolveDbContentRowForUpdate(db, proposalId, contentId);
+        const rowToUpdate = await resolveDbContentRowForUpdate(
+          db,
+          proposalId,
+          contentId
+        );
 
         if (rowToUpdate) {
           const merged = enrichContentPackForJobType(
@@ -708,10 +761,30 @@ export function executionsRoutes({ db, wsHub }) {
                 contentPack: merged,
                 automationMode: automation.mode,
                 autoPublish: automation.autoPublish,
-                callback: { url: "/api/executions/callback", tokenHeader: "x-webhook-token" },
+                callback: {
+                  url: "/api/executions/callback",
+                  tokenHeader: "x-webhook-token",
+                },
               });
 
-              wsHub?.broadcast?.({ type: "execution.updated", execution: nextJob });
+              if (
+                nextJob &&
+                ["voice.generate", "video.generate", "assembly.render", "qa.check"].includes(
+                  String(nextJob.type || "").trim().toLowerCase()
+                )
+              ) {
+                runMediaJobNow({ db, jobId: nextJob.id }).catch((e) => {
+                  console.error(
+                    "[media-runner] start failed:",
+                    String(e?.message || e)
+                  );
+                });
+              }
+
+              wsHub?.broadcast?.({
+                type: "execution.updated",
+                execution: nextJob,
+              });
             } else if (
               proposalRow &&
               contentRow &&
@@ -733,7 +806,8 @@ export function executionsRoutes({ db, wsHub }) {
                   assetUrl,
                   caption,
                   format: merged?.format || result?.format || null,
-                  aspectRatio: merged?.aspectRatio || result?.aspectRatio || null,
+                  aspectRatio:
+                    merged?.aspectRatio || result?.aspectRatio || null,
                   tenantId: tenantId || null,
                   automationMode: "full_auto",
                   autoPublish: true,
@@ -761,10 +835,16 @@ export function executionsRoutes({ db, wsHub }) {
                 caption,
                 automationMode: "full_auto",
                 autoPublish: true,
-                callback: { url: "/api/executions/callback", tokenHeader: "x-webhook-token" },
+                callback: {
+                  url: "/api/executions/callback",
+                  tokenHeader: "x-webhook-token",
+                },
               });
 
-              wsHub?.broadcast?.({ type: "execution.updated", execution: publishJob });
+              wsHub?.broadcast?.({
+                type: "execution.updated",
+                execution: publishJob,
+              });
             }
           }
         }
@@ -773,11 +853,13 @@ export function executionsRoutes({ db, wsHub }) {
       if (proposalId && isPublishJobType(jt)) {
         const contentId = pickContentId(result, jobInput);
         const rowToUpdate =
-          (contentId && isUuid(contentId) ? await dbFindContentItemById(db, contentId) : null) ||
-          (await dbGetLatestContentByProposal(db, proposalId));
+          (contentId && isUuid(contentId)
+            ? await dbFindContentItemById(db, contentId)
+            : null) || (await dbGetLatestContentByProposal(db, proposalId));
 
         if (rowToUpdate) {
-          const nextStatus = status === "completed" ? "published" : "publish.failed";
+          const nextStatus =
+            status === "completed" ? "published" : "publish.failed";
 
           contentRow = await dbUpdateContentItem(db, rowToUpdate.id, {
             status: nextStatus,
@@ -816,8 +898,13 @@ export function executionsRoutes({ db, wsHub }) {
       });
 
       wsHub?.broadcast?.({ type: "execution.updated", execution: jobRow });
-      wsHub?.broadcast?.({ type: "notification.created", notification: notif });
-      if (contentRow) wsHub?.broadcast?.({ type: "content.updated", content: contentRow });
+      wsHub?.broadcast?.({
+        type: "notification.created",
+        notification: notif,
+      });
+      if (contentRow) {
+        wsHub?.broadcast?.({ type: "content.updated", content: contentRow });
+      }
 
       await pushBroadcastToCeo({
         db,
@@ -856,7 +943,7 @@ export function executionsRoutes({ db, wsHub }) {
               : "AI draft yaratdı — baxıb təsdiqlə."
             : status === "running"
             ? "n8n hazırda işləyir…"
-            : (errorText || "n8n error"),
+            : errorText || "n8n error",
         data: {
           type: "execution",
           jobId,
@@ -885,7 +972,11 @@ export function executionsRoutes({ db, wsHub }) {
         nextJobType: nextJob?.type || null,
       });
     } catch (e) {
-      return okJson(res, { ok: false, error: "Error", details: serializeError(e) });
+      return okJson(res, {
+        ok: false,
+        error: "Error",
+        details: serializeError(e),
+      });
     }
   });
 

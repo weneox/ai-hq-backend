@@ -1,0 +1,135 @@
+TASK: Create a targeted fix plan for approved or near-approved content based on analysis results.
+
+Context:
+- The content already exists.
+- This is NOT a full regeneration task by default.
+- Your goal is to preserve what is already strong and improve only what is weak.
+- Think like a senior creative revision director.
+- Produce practical, implementation-ready instructions for downstream revision agents, designers, or media execution systems.
+
+INPUTS MAY INCLUDE:
+- approvedDraft (JSON)
+- contentPack (JSON)
+- analysisResult (JSON)
+- assetUrls
+- caption
+- slides
+- visual plan
+- voiceover text
+- reel scene plan
+- tenant context
+- industry context
+
+PRIMARY GOAL:
+Turn the analysis into a precise revision plan that fixes weaknesses without destroying strong parts.
+
+CORE PRINCIPLES:
+- Preserve what is already strong
+- Do not regenerate from scratch unless absolutely necessary
+- Prefer selective revisions
+- Be explicit and implementation-friendly
+- Keep the content commercially usable
+- Keep the visual system coherent
+- Keep the same general direction unless the analysis clearly shows a broken direction
+
+FIX STRATEGY RULES:
+You must decide:
+- what should be preserved
+- what should be revised
+- whether revisions are light, moderate, or major
+- whether the current direction is salvageable
+- whether any part truly needs regeneration
+
+REVISION SCOPE RULES:
+- If the problems are local, propose local fixes only
+- If the problems are structural, propose structural fixes
+- If the direction is fundamentally broken, regeneration may be allowed
+- Most of the time, regeneration should be avoided
+
+IMAGE-SPECIFIC FIX RULES:
+If the format is image:
+- preserve the hero concept when possible
+- improve hook/caption/CTA support
+- improve visual power, clarity, or premium feel if weak
+- keep the visual simple and commercially strong
+
+CAROUSEL-SPECIFIC FIX RULES:
+If the format is carousel:
+- identify which slides need revision
+- preserve strong slides
+- strengthen weak cover / weak CTA / weak middle-slide logic
+- ensure coherent progression
+- ensure value and CTA clarity
+
+REEL-SPECIFIC FIX RULES:
+If the format is reel:
+- identify weak scenes
+- preserve strong scenes
+- improve opening hook if weak
+- improve pacing if needed
+- improve voiceover alignment if needed
+- improve motion realism and scene continuity if needed
+- suggest scene-level revisions where possible
+
+STRICT OUTPUT:
+Return STRICT JSON only.
+
+JSON SCHEMA:
+{
+  "type": "content_fix_plan",
+  "language": "az|tr|ru|en",
+  "format": "image|carousel|reel",
+  "strategy": "light_revision|targeted_revision|moderate_revision|major_revision|regenerate",
+  "goal": "string",
+  "preserve": [
+    "string"
+  ],
+  "revise": [
+    {
+      "priority": "high|medium|low",
+      "target": "string",
+      "problem": "string",
+      "instruction": "string"
+    }
+  ],
+  "slideFixes": [
+    {
+      "id": "string",
+      "action": "keep|revise|replace",
+      "instruction": "string"
+    }
+  ],
+  "captionFix": {
+    "needed": true,
+    "instruction": "string"
+  },
+  "ctaFix": {
+    "needed": true,
+    "instruction": "string"
+  },
+  "visualDirectionFix": {
+    "needed": true,
+    "instruction": "string"
+  },
+  "voiceoverFix": {
+    "needed": false,
+    "instruction": ""
+  },
+  "regenerateFromScratch": false,
+  "regenerateReason": "",
+  "finalExecutionNote": "string"
+}
+
+STRICT RULES:
+1. Return JSON only.
+2. No markdown.
+3. No explanations outside JSON.
+4. Preserve strong parts whenever possible.
+5. regenerateFromScratch should usually be false.
+6. Use regenerate only if the current direction is fundamentally broken.
+7. revise[] entries must be actionable and concrete.
+8. slideFixes must be practical.
+9. finalExecutionNote must help a revision system apply the fix plan safely.
+10. Avoid vague instructions like “make it better”.
+11. Be implementation-oriented.
+12. Keep commercial realism.

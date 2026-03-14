@@ -164,5 +164,15 @@ export const cfg = {
   ),
   OUTBOUND_RETRY_BATCH_SIZE: n(process.env.OUTBOUND_RETRY_BATCH_SIZE, 10),
 
+  MEDIA_JOB_WORKER_ENABLED: b(process.env.MEDIA_JOB_WORKER_ENABLED, true),
+  MEDIA_JOB_WORKER_INTERVAL_MS: n(
+    process.env.MEDIA_JOB_WORKER_INTERVAL_MS,
+    15_000
+  ),
+  MEDIA_JOB_WORKER_BATCH_SIZE: n(
+    process.env.MEDIA_JOB_WORKER_BATCH_SIZE,
+    10
+  ),
+
   DEBUG_DEBATE_RAW: b(process.env.DEBUG_DEBATE_RAW, false),
 };

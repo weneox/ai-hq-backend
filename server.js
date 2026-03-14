@@ -14,6 +14,7 @@ import { adminAuthRoutes } from "./src/routes/api/adminAuth.js";
 
 import { startOutboundRetryWorker } from "./src/workers/outboundRetryWorker.js";
 import { createDraftScheduleWorker } from "./src/workers/draftScheduleWorker.js";
+import { createMediaJobWorker } from "./src/workers/mediaJobWorker.js";
 
 function s(v, d = "") {
   return String(v ?? d).trim();
@@ -169,7 +170,9 @@ async function main() {
       hasAdminPasscodeHash: Boolean(s(cfg.ADMIN_PANEL_PASSCODE_HASH)),
       hasAdminSessionSecret: Boolean(s(cfg.ADMIN_SESSION_SECRET)),
       hasUserSessionSecret: Boolean(s(cfg.USER_SESSION_SECRET)),
-      hasScheduleWebhook: Boolean(s(process.env.N8N_WEBHOOK_SCHEDULE_DRAFT_URL)),
+      hasScheduleWebhook: Boolean(
+        s(process.env.N8N_WEBHOOK_SCHEDULE_DRAFT_URL)
+      ),
       hasWsAuthToken: Boolean(s(cfg.WS_AUTH_TOKEN)),
       now: new Date().toISOString(),
       corsOrigin: s(cfg.CORS_ORIGIN),
@@ -216,6 +219,7 @@ async function main() {
         outboundRetryEnabled: !!cfg.OUTBOUND_RETRY_ENABLED,
         draftScheduleEnabled:
           s(process.env.DRAFT_SCHEDULE_WORKER_ENABLED, "1") !== "0",
+        mediaJobWorkerEnabled: !!cfg.MEDIA_JOB_WORKER_ENABLED,
       },
     };
 
@@ -311,7 +315,12 @@ async function main() {
     db,
   });
 
+  const mediaJobWorker = createMediaJobWorker({
+    db,
+  });
+
   draftScheduleWorker.start();
+  mediaJobWorker.start();
 
   app.use((req, res) => {
     res.setHeader("Content-Type", "application/json; charset=utf-8");
@@ -364,6 +373,9 @@ async function main() {
     console.log(
       `[ai-hq] Creatomate=${cfg.CREATOMATE_API_KEY ? "ON" : "OFF"} templateReel=${cfg.CREATOMATE_TEMPLATE_ID_REEL ? "SET" : "MISSING"}`
     );
+    console.log(
+      `[ai-hq] mediaJobWorker=${cfg.MEDIA_JOB_WORKER_ENABLED ? "ON" : "OFF"} interval=${Number(cfg.MEDIA_JOB_WORKER_INTERVAL_MS || 15000)}ms batch=${Number(cfg.MEDIA_JOB_WORKER_BATCH_SIZE || 10)}`
+    );
     console.log(`[ai-hq] WS_AUTH_TOKEN=${cfg.WS_AUTH_TOKEN ? "ON" : "OFF"}`);
     console.log(
       `[ai-hq] META_GATEWAY=${cfg.META_GATEWAY_BASE_URL ? "ON" : "OFF"} retryWorker=${
@@ -396,6 +408,10 @@ async function main() {
 
     try {
       draftScheduleWorker?.stop?.();
+    } catch {}
+
+    try {
+      mediaJobWorker?.stop?.();
     } catch {}
 
     try {

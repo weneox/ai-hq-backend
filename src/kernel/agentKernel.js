@@ -1,52 +1,42 @@
 // src/kernel/agentKernel.js
-// FINAL v3.0 — UTF fix + prompt bundle pipeline + tenant/industry/usecase support
 //
-// ✅ keeps AGENTS behavior
-// ✅ keeps mojibake repair
-// ✅ uses normalizePromptInput(...)
-// ✅ uses buildPromptBundle(...)
-// ✅ supports tenant/today/format/extra runtime context
-// ✅ supports plain agent chat + structured usecase prompt flow
-// ✅ debug path updated too
+// FINAL v4.0 — professional structured kernel
+//
+// Goals:
+// ✅ keep tenant / industry / usecase prompt bundle pipeline
+// ✅ keep mojibake repair
+// ✅ support agent registry
+// ✅ support usecase registry
+// ✅ support text + json output modes
+// ✅ standard result envelope
+// ✅ safe JSON parsing with 1 repair attempt
+// ✅ keep debug path
+// ✅ future-ready for content.analyze + content.fix_plan
 
 import OpenAI from "openai";
 import { cfg } from "../config.js";
 import { normalizePromptInput } from "../services/promptInput.js";
 import { buildPromptBundle } from "../services/promptBundle.js";
+import {
+  getAgent,
+  getAgentSystem,
+  getAgentOutputMode,
+  getAgentDefaultModel,
+  getAgentMaxOutputTokens,
+  listAgents,
+} from "./agentRegistry.js";
+import {
+  getUsecase,
+  getUsecaseDefaultAgent,
+  getUsecaseOutputMode,
+  getUsecaseSchemaKey,
+  getUsecaseRetryLimit,
+} from "./usecaseRegistry.js";
 
-const AGENTS = {
-  orion: {
-    name: "Orion",
-    role: "Strategist",
-    system:
-      "You are Orion, a business strategist. Give structured, concise guidance. If asked for a plan, give numbered steps. End with 1 clarifying question.",
-  },
-  nova: {
-    name: "Nova",
-    role: "Content & Instagram",
-    system:
-      "You are Nova, social/content specialist. Provide content ideas, hooks, formats, posting plan. Be concise. End with 1 question.",
-  },
-  atlas: {
-    name: "Atlas",
-    role: "Sales & WhatsApp",
-    system:
-      "You are Atlas, sales & funnel specialist. Provide sales funnel steps, messaging, WhatsApp automation. Be concise. End with 1 question.",
-  },
-  echo: {
-    name: "Echo",
-    role: "Analytics",
-    system:
-      "You are Echo, analytics specialist. Provide KPIs, tracking plan, measurement. Be concise. End with 1 question.",
-  },
-};
+export { listAgents };
 
-export function listAgents() {
-  return Object.keys(AGENTS).map((k) => ({
-    id: k,
-    name: AGENTS[k].name,
-    role: AGENTS[k].role,
-  }));
+function s(v, d = "") {
+  return String(v ?? d).trim();
 }
 
 function pickString(x) {
@@ -62,11 +52,7 @@ function pickStringDeep(x) {
   return "";
 }
 
-function obj(v) {
-  return v && typeof v === "object" && !Array.isArray(v) ? v : {};
-}
-
-// ✅ Mojibake repair (UTF-8 shown as latin1 -> "gÃ¼nlÃ¼k")
+// ✅ Mojibake repair
 function fixMojibake(input) {
   const t = String(input || "");
   if (!t) return t;
@@ -102,6 +88,7 @@ function extractText(resp) {
             if (t) parts.push(t);
             continue;
           }
+
           const t1 = pickStringDeep(block?.text);
           if (t1) parts.push(t1);
 
@@ -135,41 +122,29 @@ function extractText(resp) {
 }
 
 function clampModelName(model) {
-  const m = String(model || "").trim();
-  return m || "gpt-5";
+  const m = s(model);
+  return m || s(cfg.OPENAI_MODEL, "gpt-5");
 }
 
 function normalizeUserMessage(message) {
-  return String(message || "").trim();
+  return s(message);
 }
 
 function ensureOpenAI() {
-  const key = String(cfg.OPENAI_API_KEY || "").trim();
+  const key = s(cfg.OPENAI_API_KEY);
   if (!key) return null;
   return new OpenAI({ apiKey: key });
 }
 
-function makeEmptyHelp(resp, model) {
-  const status = resp?.status || null;
-  const id = resp?.id || null;
-  const usage = resp?.usage || {};
-  const outTok = usage?.output_tokens ?? null;
-  const reasonTok = usage?.output_tokens_details?.reasoning_tokens ?? null;
-
-  const hint =
-    status === "incomplete"
-      ? "Model cavabı yarımçıq bağladı (çox vaxt token limiti). OPENAI_MAX_OUTPUT_TOKENS artır."
-      : "Raw cavabı /api/debug/openai ilə yoxla.";
-
-  return `Cavab boş gəldi (model=${model}, status=${status}, id=${id}, outTok=${outTok}, reasoningTok=${reasonTok}). ${hint}`;
-}
-
-function buildAgentSystem(agentId) {
+function buildAgentSystemBlock(agentId) {
+  const agent = getAgent(agentId);
   return [
-    `AGENT_ID: ${agentId}`,
+    `AGENT_ID: ${agent.id}`,
+    `AGENT_NAME: ${agent.name}`,
+    `AGENT_ROLE: ${agent.role}`,
     "",
     "AGENT SYSTEM:",
-    AGENTS[agentId]?.system || "",
+    getAgentSystem(agentId),
   ]
     .filter(Boolean)
     .join("\n");
@@ -197,122 +172,296 @@ function buildSystem({
     extra: normalized.extra,
   });
 
+  const usecaseDef = getUsecase(usecase || "general.chat");
+
   const parts = [
-    buildAgentSystem(agentId),
+    buildAgentSystemBlock(agentId),
+    "",
+    "USECASE:",
+    s(usecaseDef.key || usecase || "general.chat"),
   ];
 
   if (bundle?.fullPrompt) {
     parts.push("", "PROMPT BUNDLE:", bundle.fullPrompt);
   }
 
-  return parts.filter(Boolean).join("\n");
+  return {
+    systemText: parts.filter(Boolean).join("\n"),
+    normalized,
+    bundle,
+    usecaseDef,
+  };
+}
+
+function buildEmptyResult({
+  ok = false,
+  status = "failed",
+  agent = "orion",
+  usecase = "general.chat",
+  model = "",
+  mode = "text",
+  replyText = "",
+  structured = null,
+  warnings = [],
+  usage = null,
+  raw = null,
+} = {}) {
+  return {
+    ok,
+    status,
+    agent,
+    usecase,
+    model,
+    mode,
+    replyText,
+    structured,
+    warnings: Array.isArray(warnings) ? warnings : [],
+    usage: usage || null,
+    raw: raw ?? null,
+    proposal: null,
+  };
+}
+
+function usageFromResp(resp) {
+  if (!resp || typeof resp !== "object") return null;
+  const usage = resp.usage || {};
+  return {
+    input_tokens: usage?.input_tokens ?? null,
+    output_tokens: usage?.output_tokens ?? null,
+    reasoning_tokens: usage?.output_tokens_details?.reasoning_tokens ?? null,
+    total_tokens:
+      typeof usage?.total_tokens === "number"
+        ? usage.total_tokens
+        : null,
+  };
+}
+
+function makeEmptyHelp(resp, model, mode) {
+  const status = resp?.status || null;
+  const id = resp?.id || null;
+  const usage = resp?.usage || {};
+  const outTok = usage?.output_tokens ?? null;
+  const reasonTok = usage?.output_tokens_details?.reasoning_tokens ?? null;
+
+  const hint =
+    status === "incomplete"
+      ? "Model cavabı yarımçıq bağladı. Token limitini artırmaq lazım ola bilər."
+      : mode === "json"
+      ? "Structured cavab alınmadı. JSON parse / repair lazımdır."
+      : "Raw cavabı debug ilə yoxlamaq lazımdır.";
+
+  return `Cavab boş gəldi (model=${model}, status=${status}, id=${id}, outTok=${outTok}, reasoningTok=${reasonTok}). ${hint}`;
+}
+
+function safeJsonParse(text) {
+  try {
+    return { ok: true, value: JSON.parse(text) };
+  } catch (e) {
+    return { ok: false, error: s(e?.message || e) };
+  }
+}
+
+function extractJsonObjectString(text) {
+  const src = s(text);
+  if (!src) return "";
+
+  const first = src.indexOf("{");
+  const last = src.lastIndexOf("}");
+  if (first >= 0 && last > first) {
+    return src.slice(first, last + 1).trim();
+  }
+
+  const arrFirst = src.indexOf("[");
+  const arrLast = src.lastIndexOf("]");
+  if (arrFirst >= 0 && arrLast > arrFirst) {
+    return src.slice(arrFirst, arrLast + 1).trim();
+  }
+
+  return src;
+}
+
+async function repairJsonOnce(openai, { model, badText }) {
+  const repairPrompt = [
+    "Repair the following into valid strict JSON.",
+    "Return JSON only.",
+    "Do not add markdown.",
+    "Do not explain.",
+    "",
+    badText,
+  ].join("\n");
+
+  const resp = await openai.responses.create({
+    model,
+    text: { format: { type: "text" } },
+    max_output_tokens: 1200,
+    input: [{ role: "user", content: repairPrompt }],
+  });
+
+  return fixMojibake(extractText(resp));
+}
+
+async function parseStructuredOutput(openai, {
+  replyText,
+  model,
+  retryLimit = 1,
+}) {
+  const warnings = [];
+  const direct = s(replyText);
+
+  if (!direct) {
+    return {
+      ok: false,
+      structured: null,
+      warnings: ["empty_structured_response"],
+    };
+  }
+
+  const firstTry = safeJsonParse(direct);
+  if (firstTry.ok) {
+    return {
+      ok: true,
+      structured: firstTry.value,
+      warnings,
+    };
+  }
+
+  const extracted = extractJsonObjectString(direct);
+  if (extracted && extracted !== direct) {
+    const secondTry = safeJsonParse(extracted);
+    if (secondTry.ok) {
+      warnings.push("json_extracted_from_text");
+      return {
+        ok: true,
+        structured: secondTry.value,
+        warnings,
+      };
+    }
+  }
+
+  if (retryLimit > 0) {
+    try {
+      const repaired = await repairJsonOnce(openai, {
+        model,
+        badText: direct,
+      });
+
+      const repairedTry = safeJsonParse(extractJsonObjectString(repaired));
+      if (repairedTry.ok) {
+        warnings.push("json_repaired_once");
+        return {
+          ok: true,
+          structured: repairedTry.value,
+          warnings,
+        };
+      }
+
+      warnings.push("json_repair_failed");
+      return {
+        ok: false,
+        structured: null,
+        warnings,
+      };
+    } catch (e) {
+      warnings.push(`json_repair_error:${s(e?.message || e)}`);
+      return {
+        ok: false,
+        structured: null,
+        warnings,
+      };
+    }
+  }
+
+  warnings.push(`json_parse_failed:${firstTry.error || "unknown"}`);
+  return {
+    ok: false,
+    structured: null,
+    warnings,
+  };
+}
+
+function inferAgent(agentHint, usecase) {
+  const hinted = s(agentHint).toLowerCase();
+  if (hinted) return hinted;
+  return getUsecaseDefaultAgent(usecase || "general.chat");
+}
+
+function inferMode(agentId, usecase) {
+  return (
+    getUsecaseOutputMode(usecase || "general.chat") ||
+    getAgentOutputMode(agentId || "orion") ||
+    "text"
+  );
+}
+
+function inferModel(agentId) {
+  return clampModelName(
+    getAgentDefaultModel(agentId) ||
+      s(cfg.OPENAI_MODEL)
+  );
+}
+
+function inferMaxTokens(agentId) {
+  return (
+    getAgentMaxOutputTokens(agentId) ||
+    Number(cfg.OPENAI_MAX_OUTPUT_TOKENS || 800)
+  );
+}
+
+function getSchemaNote(usecase) {
+  const schemaKey = s(getUsecaseSchemaKey(usecase));
+  if (!schemaKey) return "";
+  return `Expected structured schema: ${schemaKey}`;
 }
 
 export async function kernelHandle({
   message,
   agentHint,
-  usecase,
+  usecase = "general.chat",
   tenant = null,
   today = "",
   format = "",
   extra = {},
 } = {}) {
   const text = normalizeUserMessage(message);
-  const agentId = String(agentHint || "orion").trim().toLowerCase() || "orion";
-  const agent = AGENTS[agentId] ? agentId : "orion";
+  const normalizedUsecase = s(usecase, "general.chat");
+  const agent = inferAgent(agentHint, normalizedUsecase);
+  const mode = inferMode(agent, normalizedUsecase);
 
   const openai = ensureOpenAI();
   if (!openai) {
-    return {
+    return buildEmptyResult({
       ok: false,
+      status: "failed",
       agent,
+      usecase: normalizedUsecase,
+      model: "",
+      mode,
       replyText: "OpenAI aktiv deyil. OPENAI_API_KEY yoxdur.",
-      proposal: null,
-    };
-  }
-
-  const model = clampModelName(cfg.OPENAI_MODEL);
-
-  try {
-    const maxTok = Number(cfg.OPENAI_MAX_OUTPUT_TOKENS || 800);
-
-    const resp = await openai.responses.create({
-      model,
-      text: { format: { type: "text" } },
-      max_output_tokens: maxTok,
-      input: [
-        {
-          role: "system",
-          content: buildSystem({
-            agentId: agent,
-            usecase,
-            tenant,
-            today,
-            format,
-            extra,
-          }),
-        },
-        { role: "user", content: text },
-      ],
+      structured: null,
     });
-
-    const replyText = fixMojibake(extractText(resp));
-
-    if (!String(replyText || "").trim()) {
-      return {
-        ok: true,
-        agent,
-        replyText: makeEmptyHelp(resp, model),
-        proposal: null,
-      };
-    }
-
-    return { ok: true, agent, replyText, proposal: null };
-  } catch (e) {
-    const msg = fixMojibake(String(e?.message || e));
-    return { ok: false, agent, replyText: `OpenAI xətası: ${msg}`, proposal: null };
-  }
-}
-
-export async function debugOpenAI({
-  agent = "orion",
-  message = "ping",
-  usecase,
-  tenant = null,
-  today = "",
-  format = "",
-  extra = {},
-} = {}) {
-  const openai = ensureOpenAI();
-  if (!openai) {
-    return {
-      ok: false,
-      status: null,
-      agent,
-      extractedText: "",
-      raw: "OpenAI disabled",
-    };
   }
 
-  const model = clampModelName(cfg.OPENAI_MODEL);
-  const a = AGENTS[agent] ? agent : "orion";
+  const model = inferModel(agent);
+  const maxTok = inferMaxTokens(agent);
 
   try {
-    const maxTok = Number(cfg.OPENAI_MAX_OUTPUT_TOKENS || 800);
-
-    const normalized = normalizePromptInput(usecase || "", {
+    const built = buildSystem({
+      agentId: agent,
+      usecase: normalizedUsecase,
       tenant,
       today,
       format,
       extra,
     });
 
-    const bundle = buildPromptBundle(usecase || "", {
-      tenant: normalized.tenant,
-      today: normalized.today,
-      format: normalized.format,
-      extra: normalized.extra,
-    });
+    const systemText = [
+      built.systemText,
+      mode === "json" ? "" : "",
+      mode === "json" ? "OUTPUT MODE: STRICT JSON" : "OUTPUT MODE: TEXT",
+      mode === "json" ? getSchemaNote(normalizedUsecase) : "",
+    ]
+      .filter(Boolean)
+      .join("\n");
 
     const resp = await openai.responses.create({
       model,
@@ -321,37 +470,199 @@ export async function debugOpenAI({
       input: [
         {
           role: "system",
-          content: [
-            buildAgentSystem(a),
-            "",
-            "PROMPT BUNDLE:",
-            bundle?.fullPrompt || "",
-          ]
-            .filter(Boolean)
-            .join("\n"),
+          content: systemText,
         },
+        {
+          role: "user",
+          content: text,
+        },
+      ],
+    });
+
+    const replyText = fixMojibake(extractText(resp));
+    const usage = usageFromResp(resp);
+
+    if (!s(replyText)) {
+      return buildEmptyResult({
+        ok: false,
+        status: "empty",
+        agent,
+        usecase: normalizedUsecase,
+        model,
+        mode,
+        replyText: makeEmptyHelp(resp, model, mode),
+        structured: null,
+        usage,
+        raw: null,
+      });
+    }
+
+    if (mode === "json") {
+      const parsed = await parseStructuredOutput(openai, {
+        replyText,
+        model,
+        retryLimit: getUsecaseRetryLimit(normalizedUsecase),
+      });
+
+      if (!parsed.ok) {
+        return buildEmptyResult({
+          ok: false,
+          status: "invalid",
+          agent,
+          usecase: normalizedUsecase,
+          model,
+          mode,
+          replyText,
+          structured: null,
+          warnings: parsed.warnings,
+          usage,
+          raw: s(cfg.DEBUG_DEBATE_RAW) === "true" ? resp : null,
+        });
+      }
+
+      return buildEmptyResult({
+        ok: true,
+        status: "completed",
+        agent,
+        usecase: normalizedUsecase,
+        model,
+        mode,
+        replyText,
+        structured: parsed.structured,
+        warnings: parsed.warnings,
+        usage,
+        raw: null,
+      });
+    }
+
+    return buildEmptyResult({
+      ok: true,
+      status: "completed",
+      agent,
+      usecase: normalizedUsecase,
+      model,
+      mode,
+      replyText,
+      structured: null,
+      warnings: [],
+      usage,
+      raw: null,
+    });
+  } catch (e) {
+    const msg = fixMojibake(s(e?.message || e));
+    return buildEmptyResult({
+      ok: false,
+      status: "failed",
+      agent,
+      usecase: normalizedUsecase,
+      model,
+      mode,
+      replyText: `OpenAI xətası: ${msg}`,
+      structured: null,
+      warnings: [],
+      usage: null,
+      raw: null,
+    });
+  }
+}
+
+export async function debugOpenAI({
+  agent = "",
+  message = "ping",
+  usecase = "general.chat",
+  tenant = null,
+  today = "",
+  format = "",
+  extra = {},
+} = {}) {
+  const openai = ensureOpenAI();
+  const normalizedUsecase = s(usecase, "general.chat");
+  const chosenAgent = inferAgent(agent, normalizedUsecase);
+  const mode = inferMode(chosenAgent, normalizedUsecase);
+  const model = inferModel(chosenAgent);
+
+  if (!openai) {
+    return {
+      ok: false,
+      status: null,
+      agent: chosenAgent,
+      usecase: normalizedUsecase,
+      mode,
+      extractedText: "",
+      structured: null,
+      raw: "OpenAI disabled",
+    };
+  }
+
+  try {
+    const maxTok = inferMaxTokens(chosenAgent);
+
+    const built = buildSystem({
+      agentId: chosenAgent,
+      usecase: normalizedUsecase,
+      tenant,
+      today,
+      format,
+      extra,
+    });
+
+    const systemText = [
+      built.systemText,
+      mode === "json" ? "OUTPUT MODE: STRICT JSON" : "OUTPUT MODE: TEXT",
+      mode === "json" ? getSchemaNote(normalizedUsecase) : "",
+    ]
+      .filter(Boolean)
+      .join("\n");
+
+    const resp = await openai.responses.create({
+      model,
+      text: { format: { type: "text" } },
+      max_output_tokens: maxTok,
+      input: [
+        { role: "system", content: systemText },
         { role: "user", content: normalizeUserMessage(message) },
       ],
     });
 
     const extractedText = fixMojibake(extractText(resp));
+    let structured = null;
+    let parseWarnings = [];
+
+    if (mode === "json" && extractedText) {
+      const parsed = await parseStructuredOutput(openai, {
+        replyText: extractedText,
+        model,
+        retryLimit: getUsecaseRetryLimit(normalizedUsecase),
+      });
+      structured = parsed.structured;
+      parseWarnings = parsed.warnings || [];
+    }
 
     return {
       ok: true,
       status: resp?.status || null,
-      agent: a,
+      agent: chosenAgent,
+      usecase: normalizedUsecase,
+      mode,
+      model,
       extractedText,
-      promptBundle: bundle,
-      normalizedPromptInput: normalized,
+      structured,
+      parseWarnings,
+      promptBundle: built.bundle,
+      normalizedPromptInput: built.normalized,
       raw: JSON.stringify(resp, null, 2),
     };
   } catch (e) {
     return {
       ok: false,
       status: e?.status || null,
-      agent: a,
+      agent: chosenAgent,
+      usecase: normalizedUsecase,
+      mode,
+      model,
       extractedText: "",
-      raw: fixMojibake(String(e?.message || e)),
+      structured: null,
+      raw: fixMojibake(s(e?.message || e)),
     };
   }
 }

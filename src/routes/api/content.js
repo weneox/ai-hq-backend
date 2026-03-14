@@ -20,6 +20,8 @@ import { dbAudit } from "../../db/helpers/audit.js";
 import { pushBroadcastToCeo } from "../../services/pushBroadcast.js";
 import { notifyN8n } from "../../services/n8nNotify.js";
 
+import { kernelHandle } from "../../kernel/agentKernel.js";
+
 import {
   normalizeContentPack,
   pickTenantId,
@@ -123,6 +125,130 @@ function pickAutomationMeta(req) {
     mode,
     autoPublish,
   };
+}
+
+function collectAssetUrls(contentPack = {}, row = null) {
+  const urls = [];
+  const push = (v) => {
+    const x = String(v || "").trim();
+    if (!x) return;
+    if (!urls.includes(x)) urls.push(x);
+  };
+
+  const assets = Array.isArray(contentPack?.assets) ? contentPack.assets : [];
+  for (const a of assets) {
+    if (!a || typeof a !== "object") continue;
+    push(a.url);
+    push(a.secure_url);
+    push(a.assetUrl);
+  }
+
+  push(contentPack?.imageUrl);
+  push(contentPack?.videoUrl);
+  push(contentPack?.renderUrl);
+  push(contentPack?.voiceoverUrl);
+  push(contentPack?.thumbnailUrl);
+  push(contentPack?.coverUrl);
+  push(contentPack?.render?.url);
+  push(contentPack?.video?.videoUrl);
+  push(contentPack?.voiceover?.url);
+
+  if (row) {
+    push(row.asset_url);
+    push(row.thumbnail_url);
+    push(row.image_url);
+    push(row.video_url);
+  }
+
+  return urls;
+}
+
+function canAnalyzeRow(row) {
+  const st = statusLc(row?.status);
+  return (
+    st === "approved" ||
+    st === "published" ||
+    st === "publish.requested" ||
+    isAssetReadyStatus(st)
+  );
+}
+
+function buildAnalyzeTenant({ tenantKey, tenantId, contentPack }) {
+  const language =
+    clean(contentPack?.language) ||
+    clean(contentPack?.outputLanguage) ||
+    "az";
+
+  return {
+    tenantKey: tenantKey || "default",
+    tenantId: tenantId || tenantKey || "default",
+    companyName: tenantKey || "This company",
+    brand: {
+      name: tenantKey || "This company",
+      defaultLanguage: language,
+      outputLanguage: language,
+      industryKey: clean(contentPack?.industryKey) || "generic_business",
+      visualTheme: clean(contentPack?.visualTheme) || "premium_modern",
+      tone: Array.isArray(contentPack?.tone) ? contentPack.tone : [],
+      services: Array.isArray(contentPack?.services) ? contentPack.services : [],
+      audiences: Array.isArray(contentPack?.audiences) ? contentPack.audiences : [],
+      requiredHashtags: Array.isArray(contentPack?.hashtags) ? contentPack.hashtags : [],
+    },
+  };
+}
+
+function buildAnalyzeExtra({ row, proposal, contentPack, assetUrls }) {
+  return {
+    approvedDraft: contentPack,
+    contentPack,
+    assetUrls,
+    proposal: proposal || null,
+    contentId: row?.id || null,
+    proposalId: row?.proposal_id || null,
+    caption:
+      clean(contentPack?.caption) ||
+      clean(contentPack?.copy?.caption) ||
+      "",
+    cta: clean(contentPack?.cta) || "",
+    hook: clean(contentPack?.hook) || "",
+    slides: Array.isArray(contentPack?.slides) ? contentPack.slides : [],
+    visualPlan:
+      contentPack?.visualPlan && typeof contentPack.visualPlan === "object"
+        ? contentPack.visualPlan
+        : {},
+    voiceoverText:
+      clean(contentPack?.voiceoverText) ||
+      clean(contentPack?.assetBrief?.voiceoverText) ||
+      "",
+    format: packType(contentPack),
+  };
+}
+
+function buildAnalyzeBody(analysis = {}) {
+  const score =
+    typeof analysis?.score === "number" ? analysis.score : null;
+  const verdict = clean(analysis?.verdict);
+  const publishReady = analysis?.publishReady === true;
+
+  if (publishReady && score !== null) {
+    return `Analyze tamamlandı. Score: ${score}/10. Verdict: ${verdict || "publish_ready"}.`;
+  }
+
+  if (score !== null) {
+    return `Analyze tamamlandı. Score: ${score}/10. Revision tövsiyə olunur.`;
+  }
+
+  return "Analyze tamamlandı.";
+}
+
+function buildAnalyzeTitle(analysis = {}) {
+  const verdict = clean(analysis?.verdict);
+
+  if (verdict === "publish_ready") return "Analyze: publish ready";
+  if (verdict === "strong_with_minor_improvements") return "Analyze: strong";
+  if (verdict === "needs_targeted_fixes") return "Analyze: fixes needed";
+  if (verdict === "needs_major_revision") return "Analyze: major revision";
+  return "Analyze completed";
 }
 
 export function contentRoutes({ db, wsHub }) {
@@ -601,6 +727,247 @@ export function contentRoutes({ db, wsHub }) {
         content: await dbGetContentById(db, row.id),
         jobId: job?.id || null,
         jobType,
+      });
+    } catch (e) {
+      return okJson(res, {
+        ok: false,
+        error: "Error",
+        details: { message: String(e?.message || e) },
+      });
+    }
+  });
+
+  r.post("/content/:id/analyze", async (req, res) => {
+    const id = String(req.params.id || "").trim();
+    const tenantKey = getAuthTenantKey(req) || cleanLower(pickTenantId(req));
+    const actor = pickActionActor(req, "ceo");
+
+    if (!id) return okJson(res, { ok: false, error: "contentId required" });
+
+    try {
+      if (!isDbReady(db)) {
+        const row = mem.contentItems.get(id) || null;
+        if (!row) {
+          return okJson(res, { ok: false, error: "content not found", dbDisabled: true });
+        }
+
+        if (!canAnalyzeRow(row)) {
+          return okJson(res, {
+            ok: false,
+            error: "content must be approved/asset.ready/published before analyze",
+            status: row.status,
+            dbDisabled: true,
+          });
+        }
+
+        const proposal = mem.proposals.get(row.proposal_id) || null;
+        const contentPack = normalizeContentPack(row.content_pack) || {};
+        const assetUrls = collectAssetUrls(contentPack, row);
+        const tenantId = pickRuntimeTenantId(row, proposal);
+        const tenant = buildAnalyzeTenant({ tenantKey, tenantId, contentPack });
+
+        const analysisRun = await kernelHandle({
+          agentHint: "critic",
+          usecase: "content.analyze",
+          message:
+            "Analyze this approved content for premium quality, business usefulness, and publish readiness. Return strict JSON only.",
+          tenant,
+          today: String(nowIso()).slice(0, 10),
+          format: packType(contentPack),
+          extra: buildAnalyzeExtra({
+            row,
+            proposal,
+            contentPack,
+            assetUrls,
+          }),
+        });
+
+        if (!analysisRun?.ok || !analysisRun?.structured) {
+          return okJson(res, {
+            ok: false,
+            error: "analyze_failed",
+            details: {
+              status: analysisRun?.status || null,
+              warnings: analysisRun?.warnings || [],
+              replyText: analysisRun?.replyText || "",
+            },
+            dbDisabled: true,
+          });
+        }
+
+        const analysis = analysisRun.structured;
+        const updatedPack = {
+          ...contentPack,
+          analysis,
+          qa: analysis,
+          analyzeMeta: {
+            analyzedAt: nowIso(),
+            analyzedBy: actor,
+            agent: analysisRun.agent || "critic",
+            usecase: analysisRun.usecase || "content.analyze",
+            model: analysisRun.model || "",
+            warnings: Array.isArray(analysisRun.warnings) ? analysisRun.warnings : [],
+          },
+        };
+
+        const updated = memPatchContentItem(id, {
+          content_pack: updatedPack,
+        });
+
+        const notif = memCreateNotification({
+          recipient: "ceo",
+          type:
+            analysis?.publishReady === true
+              ? "success"
+              : analysis?.verdict === "needs_major_revision"
+              ? "error"
+              : "info",
+          title: buildAnalyzeTitle(analysis),
+          body: buildAnalyzeBody(analysis),
+          payload: {
+            contentId: id,
+            proposalId: row.proposal_id,
+            analysis,
+          },
+        });
+
+        wsHub?.broadcast?.({ type: "content.updated", content: updated || mem.contentItems.get(id) || row });
+        wsHub?.broadcast?.({ type: "notification.created", notification: notif });
+
+        memAudit(actor, "content.analyze", "content", id, {
+          proposalId: row.proposal_id,
+          score: analysis?.score ?? null,
+          verdict: analysis?.verdict || null,
+          publishReady: analysis?.publishReady === true,
+        });
+
+        return okJson(res, {
+          ok: true,
+          content: updated || mem.contentItems.get(id) || row,
+          analysis,
+          dbDisabled: true,
+        });
+      }
+
+      if (!isUuid(id)) return okJson(res, { ok: false, error: "contentId must be uuid" });
+
+      const row = await dbGetContentById(db, id);
+      if (!row) return okJson(res, { ok: false, error: "content not found" });
+
+      if (!canAnalyzeRow(row)) {
+        return okJson(res, {
+          ok: false,
+          error: "content must be approved/asset.ready/published before analyze",
+          status: row.status,
+        });
+      }
+
+      const proposal = await dbGetProposalById(db, String(row.proposal_id));
+      const contentPack = normalizeContentPack(row.content_pack) || {};
+      const assetUrls = collectAssetUrls(contentPack, row);
+      const tenantId = pickRuntimeTenantId(row, proposal);
+      const tenant = buildAnalyzeTenant({ tenantKey, tenantId, contentPack });
+
+      const analysisRun = await kernelHandle({
+        agentHint: "critic",
+        usecase: "content.analyze",
+        message:
+          "Analyze this approved content for premium quality, business usefulness, and publish readiness. Return strict JSON only.",
+        tenant,
+        today: String(nowIso()).slice(0, 10),
+        format: packType(contentPack),
+        extra: buildAnalyzeExtra({
+          row,
+          proposal,
+          contentPack,
+          assetUrls,
+        }),
+      });
+
+      if (!analysisRun?.ok || !analysisRun?.structured) {
+        return okJson(res, {
+          ok: false,
+          error: "analyze_failed",
+          details: {
+            status: analysisRun?.status || null,
+            warnings: analysisRun?.warnings || [],
+            replyText: analysisRun?.replyText || "",
+          },
+        });
+      }
+
+      const analysis = analysisRun.structured;
+      const updatedPack = {
+        ...contentPack,
+        analysis,
+        qa: analysis,
+        analyzeMeta: {
+          analyzedAt: nowIso(),
+          analyzedBy: actor,
+          agent: analysisRun.agent || "critic",
+          usecase: analysisRun.usecase || "content.analyze",
+          model: analysisRun.model || "",
+          warnings: Array.isArray(analysisRun.warnings) ? analysisRun.warnings : [],
+        },
+      };
+
+      await dbUpdateContentItem(db, row.id, {
+        content_pack: updatedPack,
+      });
+
+      const refreshed = await dbGetContentById(db, row.id);
+
+      const notif = await dbCreateNotification(db, {
+        recipient: "ceo",
+        type:
+          analysis?.publishReady === true
+            ? "success"
+            : analysis?.verdict === "needs_major_revision"
+            ? "error"
+            : "info",
+        title: buildAnalyzeTitle(analysis),
+        body: buildAnalyzeBody(analysis),
+        payload: {
+          contentId: row.id,
+          proposalId: row.proposal_id,
+          analysis,
+        },
+      });
+
+      wsHub?.broadcast?.({
+        type: "content.updated",
+        content: refreshed,
+      });
+      wsHub?.broadcast?.({
+        type: "notification.created",
+        notification: notif,
+      });
+
+      await pushBroadcastToCeo({
+        db,
+        title: buildAnalyzeTitle(analysis),
+        body: buildAnalyzeBody(analysis),
+        data: {
+          type: "content.analyze",
+          contentId: row.id,
+          proposalId: row.proposal_id,
+          score: analysis?.score ?? null,
+          verdict: analysis?.verdict || null,
+          publishReady: analysis?.publishReady === true,
+        },
+      });
+
+      await dbAudit(db, actor, "content.analyze", "content", row.id, {
+        proposalId: row.proposal_id,
+        score: analysis?.score ?? null,
+        verdict: analysis?.verdict || null,
+        publishReady: analysis?.publishReady === true,
+      });
+
+      return okJson(res, {
+        ok: true,
+        content: refreshed,
+        analysis,
       });
     } catch (e) {
       return okJson(res, {

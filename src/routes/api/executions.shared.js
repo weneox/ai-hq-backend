@@ -1,8 +1,9 @@
-import { cfg } from "../../config.js";
 import { deepFix, fixText } from "../../utils/textFix.js";
 
 export function pickJobId(req) {
-  return String(req.body?.jobId || req.body?.job_id || req.body?.id || "").trim();
+  return String(
+    req.body?.jobId || req.body?.job_id || req.body?.id || ""
+  ).trim();
 }
 
 export function normalizeStatus(x) {
@@ -13,11 +14,8 @@ export function normalizeStatus(x) {
 }
 
 export function pickTenantIdFromResult(result) {
-  return (
-    fixText(
-      String(result?.tenantId || result?.tenant_id || cfg.DEFAULT_TENANT_KEY || "default").trim()
-    ) || "default"
-  );
+  const v = String(result?.tenantId || result?.tenant_id || "").trim();
+  return v || null;
 }
 
 export function pickThreadId(result, jobInput) {
@@ -37,7 +35,10 @@ export function pickContentId(result, jobInput) {
     result?.draftId ||
     result?.draft_id ||
     (jobInput && typeof jobInput === "object"
-      ? (jobInput.contentId || jobInput.content_id || jobInput.draftId || jobInput.draft_id)
+      ? jobInput.contentId ||
+        jobInput.content_id ||
+        jobInput.draftId ||
+        jobInput.draft_id
       : null) ||
     null;
 
@@ -69,11 +70,16 @@ export function isVoiceJobType(jt) {
 
 export function isSceneJobType(jt) {
   return (
+    jt === "video.generate" ||
+    jt === "content.video.generate" ||
     jt === "scene.generate" ||
     jt === "scene.video.generate" ||
     jt === "scene.image.generate" ||
     jt === "content.scene.generate" ||
-    jt === "runway.generate"
+    jt === "runway.generate" ||
+    jt === "reel.generate" ||
+    jt === "video.render" ||
+    jt === "reel.render"
   );
 }
 
@@ -95,11 +101,6 @@ export function isAssetJobType(jt) {
     jt === "asset.generate" ||
     jt === "content.assets.generate" ||
     jt === "content.asset.generate" ||
-    jt === "video.generate" ||
-    jt === "content.video.generate" ||
-    jt === "reel.generate" ||
-    jt === "reel.render" ||
-    jt === "video.render" ||
     isVoiceJobType(jt) ||
     isSceneJobType(jt) ||
     isRenderJobType(jt) ||
@@ -130,45 +131,51 @@ export function firstNonEmpty(...vals) {
 export function pickNextJobTypeAfter(jt, contentPack = {}, automation = {}) {
   const cp = asObj(contentPack) || {};
   const media = asObj(cp.media) || {};
+  const format = safeLower(cp.format || "");
+  const hasVoiceText = !!firstNonEmpty(cp.voiceoverText, cp.voiceover_text);
+  const hasVoiceReady = !!firstNonEmpty(cp.voiceoverUrl, cp.voiceover?.url);
+  const hasVideoPrompt = !!firstNonEmpty(cp.videoPrompt, cp.video_prompt);
+  const hasVideoReady = !!firstNonEmpty(cp.videoUrl, cp.video?.videoUrl);
+  const hasRenderReady = !!firstNonEmpty(cp.renderUrl, cp.render?.url);
+
   const wantsVoice =
     media.generateVoiceover === true ||
     cp.voiceoverEnabled === true ||
-    !!cp.voiceoverText;
+    hasVoiceText;
 
   const wantsScene =
     media.generateScenes === true ||
     media.generateVideo === true ||
-    cp.format === "reel" ||
-    !!cp.videoPrompt ||
-    !!cp.visualPlan;
+    format === "reel" ||
+    hasVideoPrompt ||
+    !!cp.visualPlan ||
+    !!cp.visual_plan;
 
   const wantsRender =
     media.renderVideo === true ||
-    cp.format === "reel" ||
-    !!cp.videoUrl ||
-    !!cp.voiceoverUrl ||
-    !!cp.voiceover?.url;
+    format === "reel" ||
+    hasVideoReady ||
+    hasVoiceReady;
 
-  const wantsQa =
-    media.runQa !== false;
+  const wantsQa = media.runQa !== false;
 
   if (isDraftJobType(jt)) {
-    if (wantsVoice) return "voice.generate";
-    if (wantsScene) return "video.generate";
-    if (wantsRender) return "assembly.render";
+    if (wantsVoice && !hasVoiceReady) return "voice.generate";
+    if (wantsScene && !hasVideoReady) return "video.generate";
+    if (wantsRender && !hasRenderReady) return "assembly.render";
     if (wantsQa) return "qa.check";
     return automation?.autoPublish ? "publish" : null;
   }
 
   if (isVoiceJobType(jt)) {
-    if (wantsScene) return "video.generate";
-    if (wantsRender) return "assembly.render";
+    if (wantsScene && !hasVideoReady) return "video.generate";
+    if (wantsRender && !hasRenderReady) return "assembly.render";
     if (wantsQa) return "qa.check";
     return automation?.autoPublish ? "publish" : null;
   }
 
   if (isSceneJobType(jt)) {
-    if (wantsRender) return "assembly.render";
+    if (wantsRender && !hasRenderReady) return "assembly.render";
     if (wantsQa) return "qa.check";
     return automation?.autoPublish ? "publish" : null;
   }
@@ -210,7 +217,12 @@ export function buildNotificationCopy(status, jt, errorText) {
   }
 
   return {
-    type: status === "completed" ? "success" : status === "running" ? "info" : "error",
+    type:
+      status === "completed"
+        ? "success"
+        : status === "running"
+        ? "info"
+        : "error",
     title:
       status === "completed"
         ? completedTitle
@@ -222,7 +234,7 @@ export function buildNotificationCopy(status, jt, errorText) {
         ? completedBody
         : status === "running"
         ? "İcra gedir…"
-        : (errorText || "n8n failed"),
+        : errorText || "n8n failed",
   };
 }
 
@@ -245,17 +257,50 @@ export function buildNextJobInput({
     tenantId: tenantId || null,
     contentId: contentId || null,
     type: nextJobType,
+
     contentPack: cp,
+
     format: cp.format || result.format || null,
-    aspectRatio: cp.aspectRatio || result.aspectRatio || result.aspect_ratio || null,
+    aspectRatio:
+      cp.aspectRatio || result.aspectRatio || result.aspect_ratio || null,
+
     visualPlan: cp.visualPlan || cp.visual_plan || null,
-    videoPrompt: cp.videoPrompt || cp.video_prompt || result.videoPrompt || result.video_prompt || null,
-    voiceoverText: cp.voiceoverText || cp.voiceover_text || result.voiceoverText || result.voiceover_text || null,
+
+    videoPrompt:
+      cp.videoPrompt ||
+      cp.video_prompt ||
+      result.videoPrompt ||
+      result.video_prompt ||
+      null,
+
+    voiceoverText:
+      cp.voiceoverText ||
+      cp.voiceover_text ||
+      result.voiceoverText ||
+      result.voiceover_text ||
+      null,
+
+    voiceoverUrl:
+      cp.voiceoverUrl ||
+      cp.voiceover?.url ||
+      result.voiceoverUrl ||
+      result.voiceover?.url ||
+      null,
+
+    renderUrl:
+      cp.renderUrl ||
+      cp.render?.url ||
+      result.renderUrl ||
+      result.render?.url ||
+      null,
+
     voiceover: cp.voiceover || result.voiceover || null,
     video: cp.video || result.video || null,
+
     imageUrl: cp.imageUrl || result.imageUrl || null,
     videoUrl: cp.videoUrl || result.videoUrl || null,
     thumbnailUrl: cp.thumbnailUrl || result.thumbnailUrl || null,
+
     automationMode: automation?.mode || "manual",
     autoPublish: automation?.autoPublish === true,
   });
