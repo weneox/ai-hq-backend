@@ -1,6 +1,5 @@
 import express from "express";
 import crypto from "crypto";
-import { cfg } from "../../config.js";
 
 import {
   okJson,
@@ -46,7 +45,13 @@ import {
   isDraftJobType,
   isAssetJobType,
   isPublishJobType,
+  isVoiceJobType,
+  isSceneJobType,
+  isRenderJobType,
+  isQaJobType,
   buildNotificationCopy,
+  pickNextJobTypeAfter,
+  buildNextJobInput,
 } from "./executions.shared.js";
 
 import {
@@ -83,6 +88,7 @@ function pickAutomationMeta(result = {}, jobInput = {}, contentRow = null) {
       jobInput?.automationMode ||
       jobInput?.automation_mode ||
       contentRow?.automationMode ||
+      contentRow?.content_pack?.automationMode ||
       "manual",
     "manual"
   );
@@ -92,6 +98,7 @@ function pickAutomationMeta(result = {}, jobInput = {}, contentRow = null) {
     result?.auto_publish === true ||
     jobInput?.autoPublish === true ||
     jobInput?.auto_publish === true ||
+    contentRow?.content_pack?.autoPublish === true ||
     mode === "full_auto";
 
   return {
@@ -129,6 +136,109 @@ function isCompleted(status) {
   return lower(status) === "completed";
 }
 
+function patchStatusForJobType(jt, status) {
+  const completed = status === "completed";
+  if (isDraftJobType(jt)) return completed ? "draft.ready" : "draft.failed";
+  if (isVoiceJobType(jt)) return completed ? "voice.ready" : "voice.failed";
+  if (isSceneJobType(jt)) return completed ? "scene.ready" : "scene.failed";
+  if (isRenderJobType(jt)) return completed ? "render.ready" : "render.failed";
+  if (isQaJobType(jt)) return completed ? "qa.ready" : "qa.failed";
+  if (isPublishJobType(jt)) return completed ? "published" : "publish.failed";
+  return completed ? "asset.ready" : "asset.failed";
+}
+
+function enrichContentPackForJobType(merged, jt, result = {}) {
+  const pack = deepFix(merged || {});
+
+  if (isVoiceJobType(jt)) {
+    const voiceUrl =
+      result?.voiceUrl ||
+      result?.voice_url ||
+      result?.audioUrl ||
+      result?.audio_url ||
+      result?.url ||
+      result?.voiceover?.url ||
+      null;
+
+    const subtitleUrl =
+      result?.subtitleUrl ||
+      result?.subtitle_url ||
+      result?.srtUrl ||
+      result?.srt_url ||
+      null;
+
+    pack.voiceover = deepFix({
+      ...(pack.voiceover && typeof pack.voiceover === "object" ? pack.voiceover : {}),
+      provider:
+        result?.provider ||
+        result?.voiceover?.provider ||
+        "elevenlabs",
+      url: voiceUrl || pack.voiceover?.url || null,
+      durationSec:
+        result?.durationSec ??
+        result?.duration_sec ??
+        pack.voiceover?.durationSec ??
+        null,
+      language:
+        result?.language ||
+        pack.voiceover?.language ||
+        null,
+    });
+
+    if (voiceUrl) pack.voiceoverUrl = voiceUrl;
+    if (subtitleUrl) pack.subtitleUrl = subtitleUrl;
+  }
+
+  if (isSceneJobType(jt)) {
+    pack.mediaType = pack.mediaType || "video";
+    pack.format = pack.format || "reel";
+  }
+
+  if (isRenderJobType(jt)) {
+    const renderUrl =
+      result?.renderUrl ||
+      result?.render_url ||
+      result?.videoUrl ||
+      result?.video_url ||
+      result?.url ||
+      null;
+
+    if (renderUrl) pack.renderUrl = renderUrl;
+    pack.render = deepFix({
+      ...(pack.render && typeof pack.render === "object" ? pack.render : {}),
+      provider: result?.provider || result?.render?.provider || "creatomate",
+      url: renderUrl || pack.render?.url || null,
+    });
+  }
+
+  if (isQaJobType(jt)) {
+    pack.qa = deepFix({
+      ...(pack.qa && typeof pack.qa === "object" ? pack.qa : {}),
+      provider: result?.provider || "ai_hq",
+      status: result?.qaStatus || result?.status || "completed",
+      score:
+        result?.score ??
+        result?.qaScore ??
+        pack.qa?.score ??
+        null,
+      checks: deepFix(result?.checks || result?.qaChecks || {}),
+      summary: fixText(result?.summary || result?.qaSummary || pack.qa?.summary || ""),
+    });
+  }
+
+  return deepFix(pack);
+}
+
+function buildWorkflowEventByJobType(jobType) {
+  const jt = jobTypeLc(jobType);
+  if (jt === "voice.generate") return "content.voice.generate";
+  if (jt === "video.generate") return "content.video.generate";
+  if (jt === "assembly.render") return "content.render";
+  if (jt === "qa.check") return "content.qa.check";
+  if (jt === "publish") return "content.publish";
+  return "proposal.approved";
+}
+
 export function executionsRoutes({ db, wsHub }) {
   const r = express.Router();
 
@@ -160,7 +270,7 @@ export function executionsRoutes({ db, wsHub }) {
 
       const sqlWhere = where.length ? `where ${where.join(" and ")}` : "";
       const q = await db.query(
-        `select id, proposal_id, type, status, input, output, error, created_at, started_at, finished_at
+        `select id, tenant_id, tenant_key, proposal_id, type, status, input, output, error, created_at, started_at, finished_at
          from jobs
          ${sqlWhere}
          order by created_at desc
@@ -197,7 +307,7 @@ export function executionsRoutes({ db, wsHub }) {
       }
 
       const q = await db.query(
-        `select id, proposal_id, type, status, input, output, error, created_at, started_at, finished_at
+        `select id, tenant_id, tenant_key, proposal_id, type, status, input, output, error, created_at, started_at, finished_at
          from jobs
          where id = $1::uuid
          limit 1`,
@@ -261,96 +371,168 @@ export function executionsRoutes({ db, wsHub }) {
         const publishInfo = pickPublishInfo(result);
 
         let contentRow = null;
+        let proposalRow = proposalId ? (mem.proposals.get(proposalId) || null) : null;
+        let nextJob = null;
 
         if (proposalId && incomingPack && isDraftJobType(jt)) {
           contentRow = memUpsertContentItem({
             proposalId,
             threadId: pickThreadId(result, jobInput),
             jobId,
-            status: status === "completed" ? "draft.ready" : "draft.failed",
-            contentPack: incomingPack,
+            status: patchStatusForJobType(jt, status),
+            contentPack: enrichContentPackForJobType(incomingPack, jt, result),
           });
 
           wsHub?.broadcast?.({ type: "content.updated", content: contentRow });
         }
 
-        if (proposalId && isAssetJobType(jt)) {
+        if (proposalId && isAssetJobType(jt) && !isPublishJobType(jt)) {
           const target =
             contentIdFromInput
               ? (mem.contentItems.get(contentIdFromInput) || null)
               : memGetLatestContentByProposal(proposalId);
 
           if (target) {
-            const nextStatus = status === "completed" ? "asset.ready" : "asset.failed";
-            const merged = mergeContentPack(target.content_pack, incomingPack, result, jt);
+            const merged = enrichContentPackForJobType(
+              mergeContentPack(target.content_pack, incomingPack, result, jt),
+              jt,
+              result
+            );
 
             memPatchContentItem(target.id, {
-              status: nextStatus,
+              status: patchStatusForJobType(jt, status),
               content_pack: merged,
               assets: Array.isArray(merged.assets) ? merged.assets : [],
             });
 
             contentRow = mem.contentItems.get(target.id) || null;
 
-            const p = mem.proposals.get(proposalId) || null;
-            if (p && status === "completed") p.status = "approved";
+            if (proposalRow && status === "completed" && !isQaJobType(jt)) {
+              proposalRow.status = "approved";
+            }
 
             wsHub?.broadcast?.({ type: "content.updated", content: contentRow });
-            wsHub?.broadcast?.({ type: "proposal.updated", proposal: p });
+            wsHub?.broadcast?.({ type: "proposal.updated", proposal: proposalRow });
 
-            if (
-              p &&
-              contentRow &&
-              isCompleted(status) &&
-              automation.mode === "full_auto" &&
-              automation.autoPublish
-            ) {
-              const publishJobId = crypto.randomUUID();
-              const assetUrl = pickAssetUrl(result, merged);
-              const caption = pickCaption(merged, result);
+            if (proposalRow && contentRow && isCompleted(status)) {
+              const nextJobType = pickNextJobTypeAfter(jt, merged, automation);
 
-              mem.jobs.set(publishJobId, {
-                id: publishJobId,
-                proposal_id: proposalId,
-                type: "publish",
-                status: "queued",
-                input: {
-                  contentId: contentRow.id,
+              if (nextJobType && !isPublishJobType(jt)) {
+                const nextJobId = crypto.randomUUID();
+
+                mem.jobs.set(nextJobId, {
+                  id: nextJobId,
+                  proposal_id: proposalId,
+                  type: nextJobType,
+                  status: "queued",
+                  input: buildNextJobInput({
+                    proposalId,
+                    threadId: contentRow.thread_id || proposalRow?.thread_id || null,
+                    tenantId: result?.tenantId || null,
+                    contentId: contentRow.id,
+                    contentPack: merged,
+                    currentResult: result,
+                    nextJobType,
+                    automation,
+                  }),
+                  output: {},
+                  error: null,
+                  created_at: nowIso(),
+                  started_at: null,
+                  finished_at: null,
+                });
+
+                nextJob = mem.jobs.get(nextJobId);
+
+                memPatchContentItem(contentRow.id, {
+                  status:
+                    nextJobType === "voice.generate"
+                      ? "voice.queued"
+                      : nextJobType === "video.generate"
+                      ? "scene.queued"
+                      : nextJobType === "assembly.render"
+                      ? "render.queued"
+                      : nextJobType === "qa.check"
+                      ? "qa.queued"
+                      : "publish.requested",
+                  job_id: nextJobId,
+                });
+
+                notifyN8n(buildWorkflowEventByJobType(nextJobType), proposalRow, {
+                  tenantId: result?.tenantId || null,
+                  proposalId: String(proposalId),
+                  threadId: String(proposalRow?.thread_id || ""),
+                  contentId: String(contentRow.id),
+                  jobId: nextJobId,
+                  contentPack: merged,
+                  automationMode: automation.mode,
+                  autoPublish: automation.autoPublish,
+                  callback: { url: "/api/executions/callback", tokenHeader: "x-webhook-token" },
+                });
+
+                wsHub?.broadcast?.({ type: "execution.updated", execution: nextJob });
+                wsHub?.broadcast?.({
+                  type: "content.updated",
+                  content: mem.contentItems.get(contentRow.id),
+                });
+              } else if (
+                proposalRow &&
+                contentRow &&
+                automation.mode === "full_auto" &&
+                automation.autoPublish
+              ) {
+                const publishJobId = crypto.randomUUID();
+                const assetUrl = pickAssetUrl(result, merged);
+                const caption = pickCaption(merged, result);
+
+                mem.jobs.set(publishJobId, {
+                  id: publishJobId,
+                  proposal_id: proposalId,
+                  type: "publish",
+                  status: "queued",
+                  input: {
+                    contentId: contentRow.id,
+                    contentPack: merged,
+                    assetUrl,
+                    caption,
+                    tenantId: result?.tenantId || null,
+                    automationMode: "full_auto",
+                    autoPublish: true,
+                  },
+                  output: {},
+                  error: null,
+                  created_at: nowIso(),
+                  started_at: null,
+                  finished_at: null,
+                });
+
+                memPatchContentItem(contentRow.id, {
+                  status: "publish.requested",
+                  job_id: publishJobId,
+                });
+
+                notifyN8n("content.publish", proposalRow, {
+                  tenantId: result?.tenantId || null,
+                  proposalId: String(proposalId),
+                  threadId: String(proposalRow?.thread_id || ""),
+                  contentId: String(contentRow.id),
+                  jobId: publishJobId,
                   contentPack: merged,
                   assetUrl,
                   caption,
-                  tenantId: result?.tenantId || null,
                   automationMode: "full_auto",
                   autoPublish: true,
-                },
-                output: {},
-                error: null,
-                created_at: nowIso(),
-                started_at: null,
-                finished_at: null,
-              });
+                  callback: { url: "/api/executions/callback", tokenHeader: "x-webhook-token" },
+                });
 
-              memPatchContentItem(contentRow.id, {
-                status: "publish.requested",
-                job_id: publishJobId,
-              });
+                nextJob = mem.jobs.get(publishJobId);
 
-              notifyN8n("content.publish", p, {
-                tenantId: result?.tenantId || null,
-                proposalId: String(proposalId),
-                threadId: String(p.thread_id || ""),
-                contentId: String(contentRow.id),
-                jobId: publishJobId,
-                contentPack: merged,
-                assetUrl,
-                caption,
-                automationMode: "full_auto",
-                autoPublish: true,
-                callback: { url: "/api/executions/callback", tokenHeader: "x-webhook-token" },
-              });
-
-              wsHub?.broadcast?.({ type: "execution.updated", execution: mem.jobs.get(publishJobId) });
-              wsHub?.broadcast?.({ type: "content.updated", content: mem.contentItems.get(contentRow.id) });
+                wsHub?.broadcast?.({ type: "execution.updated", execution: nextJob });
+                wsHub?.broadcast?.({
+                  type: "content.updated",
+                  content: mem.contentItems.get(contentRow.id),
+                });
+              }
             }
           }
         }
@@ -371,11 +553,10 @@ export function executionsRoutes({ db, wsHub }) {
 
             contentRow = mem.contentItems.get(latest.id) || null;
 
-            const p = mem.proposals.get(proposalId);
-            if (p && status === "completed") p.status = "published";
+            if (proposalRow && status === "completed") proposalRow.status = "published";
 
             wsHub?.broadcast?.({ type: "content.updated", content: contentRow });
-            wsHub?.broadcast?.({ type: "proposal.updated", proposal: p || null });
+            wsHub?.broadcast?.({ type: "proposal.updated", proposal: proposalRow || null });
           }
         }
 
@@ -394,6 +575,8 @@ export function executionsRoutes({ db, wsHub }) {
             video: pickVideoInfo(result),
             image: pickImageInfo(result),
             automationMode: automation.mode,
+            nextJobId: nextJob?.id || null,
+            nextJobType: nextJob?.type || null,
           },
         });
 
@@ -404,6 +587,7 @@ export function executionsRoutes({ db, wsHub }) {
           status,
           jobType: jt,
           automationMode: automation.mode,
+          nextJobType: nextJob?.type || null,
         });
 
         return okJson(res, { ok: true, jobId, status, dbDisabled: true });
@@ -414,6 +598,8 @@ export function executionsRoutes({ db, wsHub }) {
 
       const jt = jobTypeLc(jobRow.type);
       const tenantId = pickTenantIdFromResult(result);
+      const tenantKey =
+        clean(jobRow.tenant_key || result?.tenantKey || result?.tenant_key || "") || null;
       const jobInput = deepFix(jobRow.input || {});
       const proposalId =
         String(jobRow.proposal_id || result?.proposalId || result?.proposal_id || "").trim() || null;
@@ -424,31 +610,35 @@ export function executionsRoutes({ db, wsHub }) {
 
       let contentRow = null;
       let proposalRow = null;
+      let nextJob = null;
 
       if (proposalId && incomingPack && isDraftJobType(jt)) {
         contentRow = await dbUpsertDraftFromCallback(db, {
           proposalId,
           threadId: pickThreadId(result, jobInput),
           jobId,
-          status: status === "completed" ? "draft.ready" : "draft.failed",
-          contentPack: incomingPack,
+          status: patchStatusForJobType(jt, status),
+          contentPack: enrichContentPackForJobType(incomingPack, jt, result),
         });
       }
 
-      if (proposalId && isAssetJobType(jt)) {
+      if (proposalId && isAssetJobType(jt) && !isPublishJobType(jt)) {
         const contentId = pickContentId(result, jobInput);
         const rowToUpdate = await resolveDbContentRowForUpdate(db, proposalId, contentId);
 
         if (rowToUpdate) {
-          const nextStatus = status === "completed" ? "asset.ready" : "asset.failed";
-          const merged = mergeContentPack(rowToUpdate.content_pack, incomingPack, result, jt);
+          const merged = enrichContentPackForJobType(
+            mergeContentPack(rowToUpdate.content_pack, incomingPack, result, jt),
+            jt,
+            result
+          );
 
           contentRow = await dbUpdateContentItem(db, rowToUpdate.id, {
-            status: nextStatus,
+            status: patchStatusForJobType(jt, status),
             content_pack: merged,
           });
 
-          if (status === "completed") {
+          if (status === "completed" && !isQaJobType(jt)) {
             await dbSetProposalStatus(
               db,
               String(proposalId),
@@ -460,61 +650,122 @@ export function executionsRoutes({ db, wsHub }) {
                 videoUrl: merged.videoUrl || null,
                 thumbnailUrl: merged.thumbnailUrl || null,
                 coverUrl: merged.coverUrl || null,
+                voiceover: merged.voiceover || null,
+                voiceoverUrl: merged.voiceoverUrl || null,
+                renderUrl: merged.renderUrl || null,
+                qa: merged.qa || null,
               })
             );
           }
 
           proposalRow = await dbGetProposalById(db, String(proposalId));
 
-          if (
-            proposalRow &&
-            contentRow &&
-            isCompleted(status) &&
-            automation.mode === "full_auto" &&
-            automation.autoPublish
-          ) {
-            const assetUrl = pickAssetUrl(result, merged);
-            const caption = pickCaption(merged, result);
+          if (proposalRow && contentRow && isCompleted(status)) {
+            const nextJobType = pickNextJobTypeAfter(jt, merged, automation);
 
-            const publishJob = await dbCreateJob(db, {
-              proposalId: proposalRow.id,
-              type: "publish",
-              status: "queued",
-              input: {
-                contentId: contentRow.id,
+            if (nextJobType && !isPublishJobType(jt)) {
+              nextJob = await dbCreateJob(db, {
+                tenantId: tenantId || null,
+                tenantKey: tenantKey || null,
+                proposalId: proposalRow.id,
+                type: nextJobType,
+                status: "queued",
+                input: buildNextJobInput({
+                  proposalId,
+                  threadId: contentRow.thread_id || proposalRow.thread_id || null,
+                  tenantId: tenantId || null,
+                  contentId: contentRow.id,
+                  contentPack: merged,
+                  currentResult: result,
+                  nextJobType,
+                  automation,
+                }),
+              });
+
+              await dbUpdateContentItem(db, contentRow.id, {
+                status:
+                  nextJobType === "voice.generate"
+                    ? "voice.queued"
+                    : nextJobType === "video.generate"
+                    ? "scene.queued"
+                    : nextJobType === "assembly.render"
+                    ? "render.queued"
+                    : nextJobType === "qa.check"
+                    ? "qa.queued"
+                    : "publish.requested",
+                job_id: nextJob?.id || contentRow.job_id,
+              });
+
+              contentRow = await dbFindContentItemById(db, contentRow.id);
+
+              notifyN8n(buildWorkflowEventByJobType(nextJobType), proposalRow, {
+                tenantId: tenantId || null,
+                tenantKey: tenantKey || null,
+                proposalId: String(proposalId),
+                threadId: String(proposalRow.thread_id || ""),
+                contentId: String(contentRow?.id || rowToUpdate.id),
+                jobId: nextJob?.id || null,
+                contentPack: merged,
+                automationMode: automation.mode,
+                autoPublish: automation.autoPublish,
+                callback: { url: "/api/executions/callback", tokenHeader: "x-webhook-token" },
+              });
+
+              wsHub?.broadcast?.({ type: "execution.updated", execution: nextJob });
+            } else if (
+              proposalRow &&
+              contentRow &&
+              automation.mode === "full_auto" &&
+              automation.autoPublish
+            ) {
+              const assetUrl = pickAssetUrl(result, merged);
+              const caption = pickCaption(merged, result);
+
+              const publishJob = await dbCreateJob(db, {
+                tenantId: tenantId || null,
+                tenantKey: tenantKey || null,
+                proposalId: proposalRow.id,
+                type: "publish",
+                status: "queued",
+                input: {
+                  contentId: contentRow.id,
+                  contentPack: merged,
+                  assetUrl,
+                  caption,
+                  format: merged?.format || result?.format || null,
+                  aspectRatio: merged?.aspectRatio || result?.aspectRatio || null,
+                  tenantId: tenantId || null,
+                  automationMode: "full_auto",
+                  autoPublish: true,
+                },
+              });
+
+              nextJob = publishJob;
+
+              await dbUpdateContentItem(db, contentRow.id, {
+                status: "publish.requested",
+                job_id: publishJob?.id || contentRow.job_id,
+              });
+
+              contentRow = await dbFindContentItemById(db, contentRow.id);
+
+              notifyN8n("content.publish", proposalRow, {
+                tenantId: tenantId || null,
+                tenantKey: tenantKey || null,
+                proposalId: String(proposalId),
+                threadId: String(proposalRow.thread_id || ""),
+                contentId: String(contentRow?.id || rowToUpdate.id),
+                jobId: publishJob?.id || null,
                 contentPack: merged,
                 assetUrl,
                 caption,
-                format: merged?.format || result?.format || null,
-                aspectRatio: merged?.aspectRatio || result?.aspectRatio || null,
-                tenantId: tenantId || null,
                 automationMode: "full_auto",
                 autoPublish: true,
-              },
-            });
+                callback: { url: "/api/executions/callback", tokenHeader: "x-webhook-token" },
+              });
 
-            await dbUpdateContentItem(db, contentRow.id, {
-              status: "publish.requested",
-              job_id: publishJob?.id || contentRow.job_id,
-            });
-
-            contentRow = await dbFindContentItemById(db, contentRow.id);
-
-            notifyN8n("content.publish", proposalRow, {
-              tenantId: tenantId || null,
-              proposalId: String(proposalId),
-              threadId: String(proposalRow.thread_id || ""),
-              contentId: String(contentRow?.id || rowToUpdate.id),
-              jobId: publishJob?.id || null,
-              contentPack: merged,
-              assetUrl,
-              caption,
-              automationMode: "full_auto",
-              autoPublish: true,
-              callback: { url: "/api/executions/callback", tokenHeader: "x-webhook-token" },
-            });
-
-            wsHub?.broadcast?.({ type: "execution.updated", execution: publishJob });
+              wsHub?.broadcast?.({ type: "execution.updated", execution: publishJob });
+            }
           }
         }
       }
@@ -559,6 +810,8 @@ export function executionsRoutes({ db, wsHub }) {
           video: pickVideoInfo(result),
           image: pickImageInfo(result),
           automationMode: automation.mode,
+          nextJobId: nextJob?.id || null,
+          nextJobType: nextJob?.type || null,
         }),
       });
 
@@ -572,6 +825,14 @@ export function executionsRoutes({ db, wsHub }) {
           status === "completed"
             ? isPublishJobType(jt)
               ? "Published"
+              : isRenderJobType(jt)
+              ? "Render hazırdır"
+              : isSceneJobType(jt)
+              ? "Scene hazırdır"
+              : isVoiceJobType(jt)
+              ? "Voice hazırdır"
+              : isQaJobType(jt)
+              ? "QA tamamlandı"
               : isAssetJobType(jt)
               ? "Assets hazırdır"
               : "Draft hazırdır"
@@ -582,19 +843,35 @@ export function executionsRoutes({ db, wsHub }) {
           status === "completed"
             ? isPublishJobType(jt)
               ? "Post paylaşıldı."
+              : isRenderJobType(jt)
+              ? "Final render hazır oldu."
+              : isSceneJobType(jt)
+              ? "Scene/video asset hazır oldu."
+              : isVoiceJobType(jt)
+              ? "Voiceover hazır oldu."
+              : isQaJobType(jt)
+              ? "Media QA tamamlandı."
               : isAssetJobType(jt)
               ? "Vizual/video hazır oldu."
               : "AI draft yaratdı — baxıb təsdiqlə."
             : status === "running"
             ? "n8n hazırda işləyir…"
             : (errorText || "n8n error"),
-        data: { type: "execution", jobId, proposalId, jobType: jt },
+        data: {
+          type: "execution",
+          jobId,
+          proposalId,
+          jobType: jt,
+          nextJobId: nextJob?.id || null,
+          nextJobType: nextJob?.type || null,
+        },
       });
 
       await dbAudit(db, "n8n", "execution.callback", "job", jobId, {
         status,
         jobType: jt,
         automationMode: automation.mode,
+        nextJobType: nextJob?.type || null,
       });
 
       return okJson(res, {
@@ -604,6 +881,8 @@ export function executionsRoutes({ db, wsHub }) {
         jobType: jt,
         proposalId,
         contentId: contentRow?.id || null,
+        nextJobId: nextJob?.id || null,
+        nextJobType: nextJob?.type || null,
       });
     } catch (e) {
       return okJson(res, { ok: false, error: "Error", details: serializeError(e) });

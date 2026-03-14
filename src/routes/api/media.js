@@ -1,12 +1,14 @@
 // src/routes/api/media.js
 //
-// FINAL v3.0 — media gateway
+// FINAL v4.0 — media gateway
 //
 // Goals:
 // ✅ Keep /api/media/image working
 // ✅ Keep /api/media/video/runway + status working
 // ✅ Add /api/media/upload
 // ✅ Add /api/media/carousel/render
+// ✅ Add /api/media/voice/generate
+// ✅ Add /api/media/render/generate + status
 // ✅ Tenant-aware image credentials
 // ✅ Tenant-aware Cloudinary upload fallback
 // ✅ Single media router entrypoint
@@ -19,6 +21,8 @@ import { togetherGenerateImage } from "../../services/togetherImage.js";
 import { cloudinaryUploadFromUrl } from "../../services/media/cloudinaryUpload.js";
 import { renderSlidesToPng } from "../../render/renderSlides.js";
 import videoRouter from "./media/video.js";
+import voiceRouter from "./media/voice.js";
+import renderRouter from "./media/render.js";
 
 function clean(x) {
   return String(x || "").trim();
@@ -139,10 +143,6 @@ function normalizeSlidesInput(slides = [], fallback = {}) {
 export function mediaRoutes({ db } = {}) {
   const r = express.Router();
 
-  // =========================
-  // IMAGE
-  // POST /api/media/image
-  // =========================
   r.post("/media/image", async (req, res) => {
     const prompt = fixText(clean(req.body?.prompt));
     const topic = fixText(clean(req.body?.topic));
@@ -202,20 +202,6 @@ export function mediaRoutes({ db } = {}) {
     }
   });
 
-  // =========================
-  // UPLOAD
-  // POST /api/media/upload
-  // body:
-  // {
-  //   sourceUrl,
-  //   folder?,
-  //   publicId?,
-  //   resourceType?, // image | video | raw
-  //   tags?,
-  //   context?,
-  //   tenantKey?
-  // }
-  // =========================
   r.post("/media/upload", async (req, res) => {
     try {
       const tenantKey = getAuthTenantKey(req);
@@ -268,28 +254,6 @@ export function mediaRoutes({ db } = {}) {
     }
   });
 
-  // =========================
-  // CAROUSEL RENDER
-  // POST /api/media/carousel/render
-  //
-  // body:
-  // {
-  //   slides: [...],
-  //   aspectRatio?: "1:1" | "4:5" | "9:16",
-  //   brandName?: "...",
-  //   badge?: "...",
-  //   cta?: "...",
-  //   language?: "az",
-  //   folder?: "...",          // optional cloudinary folder
-  //   upload?: true|false      // default true
-  // }
-  //
-  // returns:
-  // {
-  //   assetsLocal: [...]
-  //   uploaded: [...]
-  // }
-  // =========================
   r.post("/media/carousel/render", async (req, res) => {
     try {
       const tenantKey = getAuthTenantKey(req);
@@ -392,11 +356,9 @@ export function mediaRoutes({ db } = {}) {
     }
   });
 
-  // =========================
-  // VIDEO
-  // /api/media/video/runway
-  // =========================
   r.use("/media", videoRouter);
+  r.use("/media", voiceRouter);
+  r.use("/media", renderRouter);
 
   return r;
 }

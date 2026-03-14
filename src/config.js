@@ -67,7 +67,6 @@ export const cfg = {
   ),
   USER_SESSION_TTL_HOURS: n(process.env.USER_SESSION_TTL_HOURS, 24 * 7),
 
-  // cookie domain config
   SESSION_COOKIE_DOMAIN: s(process.env.SESSION_COOKIE_DOMAIN, ""),
   COOKIE_DOMAIN: s(process.env.COOKIE_DOMAIN, ""),
   USER_COOKIE_DOMAIN: s(process.env.USER_COOKIE_DOMAIN, ""),
@@ -102,7 +101,27 @@ export const cfg = {
   RUNWAY_VIDEO_MODEL: s(process.env.RUNWAY_VIDEO_MODEL, "gen4.5"),
 
   PIKA_API_KEY: s(process.env.PIKA_API_KEY, ""),
+
+  ELEVENLABS_API_KEY: s(process.env.ELEVENLABS_API_KEY, ""),
+  ELEVENLABS_VOICE_ID: s(process.env.ELEVENLABS_VOICE_ID, ""),
+  ELEVENLABS_MODEL_ID: s(
+    process.env.ELEVENLABS_MODEL_ID,
+    "eleven_multilingual_v2"
+  ),
+
   CREATOMATE_API_KEY: s(process.env.CREATOMATE_API_KEY, ""),
+  CREATOMATE_API_BASE: s(
+    process.env.CREATOMATE_API_BASE,
+    "https://api.creatomate.com/v1"
+  ),
+  CREATOMATE_TEMPLATE_ID_REEL: s(
+    process.env.CREATOMATE_TEMPLATE_ID_REEL,
+    ""
+  ),
+  CREATOMATE_TEMPLATE_ID_CAROUSEL_VIDEO: s(
+    process.env.CREATOMATE_TEMPLATE_ID_CAROUSEL_VIDEO,
+    ""
+  ),
 
   META_PAGE_ACCESS_TOKEN: s(process.env.META_PAGE_ACCESS_TOKEN, ""),
   META_API_VERSION: s(process.env.META_API_VERSION, "v23.0"),

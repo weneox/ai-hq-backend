@@ -115,6 +115,7 @@ async function main() {
       "x-webhook-token",
       "x-callback-token",
       "x-debug-token",
+      "x-tenant-key",
       "Accept",
     ],
     optionsSuccessStatus: 204,
@@ -123,7 +124,7 @@ async function main() {
   app.use(cors(corsOptions));
   app.options(/.*/, cors(corsOptions));
 
-  app.use(express.json({ limit: "1mb" }));
+  app.use(express.json({ limit: "8mb" }));
   app.use(express.urlencoded({ extended: false }));
 
   const UPLOADS_DIR = path.resolve(process.cwd(), "uploads");
@@ -135,7 +136,7 @@ async function main() {
       ok: true,
       service: "ai-hq-backend",
       env: cfg.APP_ENV,
-      marker: "ROOT_BUILD_V1",
+      marker: "ROOT_BUILD_V2_MEDIA",
       endpoints: [
         "GET /health",
         "GET /__whoami",
@@ -161,6 +162,9 @@ async function main() {
       port: cfg.PORT,
       hasDatabaseUrl: Boolean(s(cfg.DATABASE_URL)),
       hasOpenAI: Boolean(s(cfg.OPENAI_API_KEY)),
+      hasRunway: Boolean(s(cfg.RUNWAY_API_KEY)),
+      hasElevenLabs: Boolean(s(cfg.ELEVENLABS_API_KEY)),
+      hasCreatomate: Boolean(s(cfg.CREATOMATE_API_KEY)),
       adminPanelEnabled: !!cfg.ADMIN_PANEL_ENABLED,
       hasAdminPasscodeHash: Boolean(s(cfg.ADMIN_PANEL_PASSCODE_HASH)),
       hasAdminSessionSecret: Boolean(s(cfg.ADMIN_SESSION_SECRET)),
@@ -170,7 +174,7 @@ async function main() {
       now: new Date().toISOString(),
       corsOrigin: s(cfg.CORS_ORIGIN),
       allowedOrigins,
-      marker: "WHOAMI_BUILD_V1",
+      marker: "WHOAMI_BUILD_V2_MEDIA",
     });
   });
 
@@ -179,7 +183,7 @@ async function main() {
     return res.status(200).json({
       ok: true,
       service: "ai-hq-backend",
-      marker: "BUILD_CHECK_V1",
+      marker: "BUILD_CHECK_V2_MEDIA",
       env: cfg.APP_ENV,
       port: cfg.PORT,
       time: new Date().toISOString(),
@@ -197,10 +201,16 @@ async function main() {
       ok: true,
       service: "ai-hq-backend",
       env: cfg.APP_ENV,
-      marker: "HEALTH_BUILD_V1",
+      marker: "HEALTH_BUILD_V2_MEDIA",
       db: {
         enabled: hasDbUrl,
         ok: false,
+      },
+      providers: {
+        openai: !!cfg.OPENAI_API_KEY,
+        runway: !!cfg.RUNWAY_API_KEY,
+        elevenlabs: !!cfg.ELEVENLABS_API_KEY,
+        creatomate: !!cfg.CREATOMATE_API_KEY,
       },
       workers: {
         outboundRetryEnabled: !!cfg.OUTBOUND_RETRY_ENABLED,
@@ -240,6 +250,8 @@ async function main() {
   const dbDisabled = !db;
   const audit = createAuditLogger(db);
 
+  app.locals.db = db;
+
   const server = http.createServer(app);
   const wsHub = createWsHub({
     server,
@@ -256,7 +268,7 @@ async function main() {
     return res.status(200).json({
       ok: true,
       route: "__voice-test",
-      marker: "VOICE_TEST_BUILD_V1",
+      marker: "VOICE_TEST_BUILD_V2_MEDIA",
       body: req.body || null,
       hasInternalToken: !!req.headers["x-internal-token"],
       hasWebhookToken: !!req.headers["x-webhook-token"],
@@ -268,7 +280,7 @@ async function main() {
     return res.status(200).json({
       ok: true,
       service: "ai-hq-backend",
-      marker: "API_BUILD_CHECK_V1",
+      marker: "API_BUILD_CHECK_V2_MEDIA",
       env: cfg.APP_ENV,
       port: cfg.PORT,
       time: new Date().toISOString(),
@@ -327,6 +339,7 @@ async function main() {
     return res.status(500).json({
       ok: false,
       error: "Server error",
+      details: s(process.env.NODE_ENV) !== "production" ? msg : undefined,
     });
   });
 
@@ -341,6 +354,15 @@ async function main() {
     console.log(`[ai-hq] DB=${hasDb ? "ON" : "OFF"}`);
     console.log(
       `[ai-hq] OpenAI=${cfg.OPENAI_API_KEY ? "ON" : "OFF"} model=${cfg.OPENAI_MODEL}`
+    );
+    console.log(
+      `[ai-hq] Runway=${cfg.RUNWAY_API_KEY ? "ON" : "OFF"} model=${cfg.RUNWAY_VIDEO_MODEL}`
+    );
+    console.log(
+      `[ai-hq] ElevenLabs=${cfg.ELEVENLABS_API_KEY ? "ON" : "OFF"} voice=${cfg.ELEVENLABS_VOICE_ID ? "SET" : "MISSING"}`
+    );
+    console.log(
+      `[ai-hq] Creatomate=${cfg.CREATOMATE_API_KEY ? "ON" : "OFF"} templateReel=${cfg.CREATOMATE_TEMPLATE_ID_REEL ? "SET" : "MISSING"}`
     );
     console.log(`[ai-hq] WS_AUTH_TOKEN=${cfg.WS_AUTH_TOKEN ? "ON" : "OFF"}`);
     console.log(
@@ -361,7 +383,7 @@ async function main() {
       } sessionSecret=${cfg.ADMIN_SESSION_SECRET ? "ON" : "OFF"}`
     );
     console.log(
-      `[ai-hq] build markers: ROOT_BUILD_V1 / WHOAMI_BUILD_V1 / BUILD_CHECK_V1 / API_BUILD_CHECK_V1`
+      `[ai-hq] build markers: ROOT_BUILD_V2_MEDIA / WHOAMI_BUILD_V2_MEDIA / BUILD_CHECK_V2_MEDIA / API_BUILD_CHECK_V2_MEDIA`
     );
   });
 

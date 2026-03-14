@@ -8,10 +8,7 @@ export function pickJobId(req) {
 export function normalizeStatus(x) {
   const s = String(x || "").trim().toLowerCase();
   if (!s) return "";
-  if (s === "complete") return "completed";
-  if (s === "done") return "completed";
-  if (s === "ok") return "completed";
-  if (s === "success") return "completed";
+  if (["complete", "done", "ok", "success"].includes(s)) return "completed";
   return s;
 }
 
@@ -56,8 +53,41 @@ export function isDraftJobType(jt) {
     jt.startsWith("draft") ||
     jt === "content.draft" ||
     jt === "draft.generate" ||
-    jt === "draft.regen"
+    jt === "draft.regen" ||
+    jt === "content.revise"
   );
+}
+
+export function isVoiceJobType(jt) {
+  return (
+    jt === "voice.generate" ||
+    jt === "content.voice.generate" ||
+    jt === "voiceover.generate" ||
+    jt === "tts.generate"
+  );
+}
+
+export function isSceneJobType(jt) {
+  return (
+    jt === "scene.generate" ||
+    jt === "scene.video.generate" ||
+    jt === "scene.image.generate" ||
+    jt === "content.scene.generate" ||
+    jt === "runway.generate"
+  );
+}
+
+export function isRenderJobType(jt) {
+  return (
+    jt === "assembly.render" ||
+    jt === "content.render" ||
+    jt === "render.generate" ||
+    jt === "creatomate.render"
+  );
+}
+
+export function isQaJobType(jt) {
+  return jt === "qa.check" || jt === "content.qa.check";
 }
 
 export function isAssetJobType(jt) {
@@ -69,7 +99,11 @@ export function isAssetJobType(jt) {
     jt === "content.video.generate" ||
     jt === "reel.generate" ||
     jt === "reel.render" ||
-    jt === "video.render"
+    jt === "video.render" ||
+    isVoiceJobType(jt) ||
+    isSceneJobType(jt) ||
+    isRenderJobType(jt) ||
+    isQaJobType(jt)
   );
 }
 
@@ -93,20 +127,87 @@ export function firstNonEmpty(...vals) {
   return null;
 }
 
-export function buildNotificationCopy(status, jt, errorText) {
-  const completedTitle =
-    isPublishJobType(jt)
-      ? "Published"
-      : isAssetJobType(jt)
-      ? "Assets ready"
-      : "Draft ready";
+export function pickNextJobTypeAfter(jt, contentPack = {}, automation = {}) {
+  const cp = asObj(contentPack) || {};
+  const media = asObj(cp.media) || {};
+  const wantsVoice =
+    media.generateVoiceover === true ||
+    cp.voiceoverEnabled === true ||
+    !!cp.voiceoverText;
 
-  const completedBody =
-    isPublishJobType(jt)
-      ? "Instagram paylaşımı edildi."
-      : isAssetJobType(jt)
-      ? "Assets hazır oldu."
-      : "Draft hazır oldu.";
+  const wantsScene =
+    media.generateScenes === true ||
+    media.generateVideo === true ||
+    cp.format === "reel" ||
+    !!cp.videoPrompt ||
+    !!cp.visualPlan;
+
+  const wantsRender =
+    media.renderVideo === true ||
+    cp.format === "reel" ||
+    !!cp.videoUrl ||
+    !!cp.voiceoverUrl ||
+    !!cp.voiceover?.url;
+
+  const wantsQa =
+    media.runQa !== false;
+
+  if (isDraftJobType(jt)) {
+    if (wantsVoice) return "voice.generate";
+    if (wantsScene) return "video.generate";
+    if (wantsRender) return "assembly.render";
+    if (wantsQa) return "qa.check";
+    return automation?.autoPublish ? "publish" : null;
+  }
+
+  if (isVoiceJobType(jt)) {
+    if (wantsScene) return "video.generate";
+    if (wantsRender) return "assembly.render";
+    if (wantsQa) return "qa.check";
+    return automation?.autoPublish ? "publish" : null;
+  }
+
+  if (isSceneJobType(jt)) {
+    if (wantsRender) return "assembly.render";
+    if (wantsQa) return "qa.check";
+    return automation?.autoPublish ? "publish" : null;
+  }
+
+  if (isRenderJobType(jt)) {
+    if (wantsQa) return "qa.check";
+    return automation?.autoPublish ? "publish" : null;
+  }
+
+  if (isQaJobType(jt)) {
+    return automation?.autoPublish ? "publish" : null;
+  }
+
+  return null;
+}
+
+export function buildNotificationCopy(status, jt, errorText) {
+  let completedTitle = "Draft ready";
+  let completedBody = "Draft hazır oldu.";
+
+  if (isVoiceJobType(jt)) {
+    completedTitle = "Voice ready";
+    completedBody = "Voiceover hazır oldu.";
+  } else if (isSceneJobType(jt)) {
+    completedTitle = "Scenes ready";
+    completedBody = "Scene/video asset hazır oldu.";
+  } else if (isRenderJobType(jt)) {
+    completedTitle = "Render ready";
+    completedBody = "Final render hazır oldu.";
+  } else if (isQaJobType(jt)) {
+    completedTitle = "QA checked";
+    completedBody = "Media QA tamamlandı.";
+  } else if (isPublishJobType(jt)) {
+    completedTitle = "Published";
+    completedBody = "Instagram paylaşımı edildi.";
+  } else if (isAssetJobType(jt)) {
+    completedTitle = "Assets ready";
+    completedBody = "Assets hazır oldu.";
+  }
 
   return {
     type: status === "completed" ? "success" : status === "running" ? "info" : "error",
@@ -123,4 +224,39 @@ export function buildNotificationCopy(status, jt, errorText) {
         ? "İcra gedir…"
         : (errorText || "n8n failed"),
   };
+}
+
+export function buildNextJobInput({
+  proposalId,
+  threadId,
+  tenantId,
+  contentId,
+  contentPack,
+  currentResult,
+  nextJobType,
+  automation,
+}) {
+  const cp = deepFix(contentPack || {});
+  const result = deepFix(currentResult || {});
+
+  return deepFix({
+    proposalId: proposalId || null,
+    threadId: threadId || null,
+    tenantId: tenantId || null,
+    contentId: contentId || null,
+    type: nextJobType,
+    contentPack: cp,
+    format: cp.format || result.format || null,
+    aspectRatio: cp.aspectRatio || result.aspectRatio || result.aspect_ratio || null,
+    visualPlan: cp.visualPlan || cp.visual_plan || null,
+    videoPrompt: cp.videoPrompt || cp.video_prompt || result.videoPrompt || result.video_prompt || null,
+    voiceoverText: cp.voiceoverText || cp.voiceover_text || result.voiceoverText || result.voiceover_text || null,
+    voiceover: cp.voiceover || result.voiceover || null,
+    video: cp.video || result.video || null,
+    imageUrl: cp.imageUrl || result.imageUrl || null,
+    videoUrl: cp.videoUrl || result.videoUrl || null,
+    thumbnailUrl: cp.thumbnailUrl || result.thumbnailUrl || null,
+    automationMode: automation?.mode || "manual",
+    autoPublish: automation?.autoPublish === true,
+  });
 }
