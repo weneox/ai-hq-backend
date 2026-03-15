@@ -1,5 +1,4 @@
 // src/db/index.js
-// (FINAL v1.5 — smart SSL + safe migrate + clearer errors)
 import pg from "pg";
 import fs from "fs";
 import path from "path";
@@ -21,11 +20,15 @@ function shouldUseSsl(url) {
   try {
     const u = new URL(url);
 
-    // Explicit sslmode=require (or similar)
     const sslmode = (u.searchParams.get("sslmode") || "").toLowerCase();
-    if (sslmode === "require" || sslmode === "verify-full" || sslmode === "verify-ca") return true;
+    if (
+      sslmode === "require" ||
+      sslmode === "verify-full" ||
+      sslmode === "verify-ca"
+    ) {
+      return true;
+    }
 
-    // Common hosted db hints
     const host = (u.hostname || "").toLowerCase();
     if (host.includes("railway")) return true;
     if (host.includes("render")) return true;
@@ -34,7 +37,7 @@ function shouldUseSsl(url) {
 
     return false;
   } catch {
-    return true; // safest default if URL parsing fails
+    return true;
   }
 }
 
@@ -45,10 +48,16 @@ export function getDb() {
 }
 
 export async function initDb() {
-  const url = String(cfg.DATABASE_URL || "").trim();
+  const url = String(
+    cfg.DATABASE_URL ||
+      cfg.databaseUrl ||
+      cfg.db?.url ||
+      process.env.DATABASE_URL ||
+      ""
+  ).trim();
 
-  // No DATABASE_URL => DB OFF
   if (!url) {
+    console.error("[ai-hq] DATABASE_URL is missing");
     _db = null;
     return null;
   }
@@ -70,7 +79,7 @@ export async function initDb() {
     return pool;
   } catch (e) {
     console.error("[ai-hq] DB connect failed:", redact(url));
-    console.error("[ai-hq] ", e?.code || "", String(e?.message || e));
+    console.error("[ai-hq]", e?.code || "", String(e?.message || e));
     try {
       await pool.end();
     } catch {}
@@ -90,9 +99,6 @@ export async function migrate() {
     }
 
     const sql = fs.readFileSync(schemaPath, "utf8");
-
-    // Default: run inside transaction for consistency
-    // Set DB_MIGRATE_TX=0 if you ever hit "cannot run inside a transaction block"
     const useTx = String(cfg.DB_MIGRATE_TX ?? "1") !== "0";
 
     if (useTx) await db.query("begin");
