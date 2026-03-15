@@ -15,9 +15,7 @@ import {
   dbUpsertTenantAgent,
 } from "../../db/helpers/settings.js";
 
-import {
-  dbGetTenantByKey,
-} from "../../db/helpers/tenants.js";
+import { dbGetTenantByKey } from "../../db/helpers/tenants.js";
 
 import {
   dbCreateTenantUser,
@@ -34,6 +32,27 @@ import {
   dbExportTenantBundle,
   dbExportTenantCsvBundle,
 } from "../../db/helpers/tenantExport.js";
+
+const RESERVED_TENANT_KEYS = new Set([
+  "www",
+  "api",
+  "hq",
+  "mail",
+  "docs",
+  "status",
+  "admin",
+  "app",
+  "cdn",
+  "assets",
+  "blog",
+  "help",
+  "support",
+  "auth",
+  "m",
+  "dev",
+  "staging",
+  "demo",
+]);
 
 function ok(res, data = {}) {
   return res.status(200).json({ ok: true, ...data });
@@ -97,15 +116,20 @@ function asJsonArr(v, fallback = []) {
 function slugTenantKey(v) {
   const raw = cleanLower(v);
   if (!raw) return "";
+
   return raw
-    .replace(/[^a-z0-9]+/g, "_")
-    .replace(/^_+|_+$/g, "")
-    .replace(/_+/g, "_")
-    .slice(0, 64);
+    .replace(/[^a-z0-9-]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 63);
 }
 
 function validTenantKey(v) {
-  return /^[a-z0-9][a-z0-9_]{1,63}$/.test(String(v || ""));
+  return /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/.test(String(v || ""));
+}
+
+function isReservedTenantKey(v) {
+  return RESERVED_TENANT_KEYS.has(cleanLower(v));
 }
 
 function safeEmail(v) {
@@ -1010,7 +1034,14 @@ export function tenantsRoutes({ db }) {
       }
 
       if (!validTenantKey(tenantCoreInput.tenant_key)) {
-        return bad(res, "tenant_key must match /^[a-z0-9][a-z0-9_]{1,63}$/");
+        return bad(
+          res,
+          "tenant_key must use only lowercase letters, numbers, and hyphens, and cannot start or end with a hyphen"
+        );
+      }
+
+      if (isReservedTenantKey(tenantCoreInput.tenant_key)) {
+        return bad(res, "tenant_key is reserved");
       }
 
       if (!tenantCoreInput.company_name) {

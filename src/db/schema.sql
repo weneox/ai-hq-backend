@@ -148,6 +148,121 @@ begin
 exception when others then null;
 end$$;
 
+-- ============================================================
+-- tenant_key hard rules for subdomain-based tenancy
+-- - lowercase only
+-- - letters, numbers, hyphen only
+-- - cannot start/end with hyphen
+-- - reserved subdomains blocked
+-- ============================================================
+
+create table if not exists reserved_tenant_keys (
+  key text primary key,
+  created_at timestamptz not null default now()
+);
+
+insert into reserved_tenant_keys (key) values
+  ('www'),
+  ('api'),
+  ('hq'),
+  ('mail'),
+  ('docs'),
+  ('status'),
+  ('admin'),
+  ('app'),
+  ('cdn'),
+  ('assets'),
+  ('blog'),
+  ('help'),
+  ('support'),
+  ('auth'),
+  ('m'),
+  ('dev'),
+  ('staging'),
+  ('demo')
+on conflict (key) do nothing;
+
+do $$
+begin
+  begin
+    execute 'alter table tenants drop constraint if exists tenants_tenant_key_format_check';
+  exception when others then null;
+  end;
+
+  begin
+    alter table tenants
+      add constraint tenants_tenant_key_format_check
+      check (
+        tenant_key ~ '^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$'
+      );
+  exception when others then null;
+  end;
+end$$;
+
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_proc
+    where proname = 'enforce_tenant_key_rules'
+  ) then
+    execute $fn$
+      create or replace function enforce_tenant_key_rules()
+      returns trigger
+      as $f$
+      declare
+        v_key text;
+      begin
+        v_key := lower(trim(coalesce(new.tenant_key, '')));
+
+        if v_key = '' then
+          raise exception 'tenant_key is required';
+        end if;
+
+        if v_key !~ '^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$' then
+          raise exception 'tenant_key must match subdomain format';
+        end if;
+
+        if exists (
+          select 1
+          from reserved_tenant_keys
+          where key = v_key
+        ) then
+          raise exception 'tenant_key is reserved';
+        end if;
+
+        new.tenant_key := v_key;
+        return new;
+      end;
+      $f$ language plpgsql;
+    $fn$;
+  end if;
+exception when others then null;
+end$$;
+
+do $$
+begin
+  if exists (
+    select 1
+    from pg_trigger
+    where tgname = 'trg_tenants_enforce_tenant_key_rules'
+  ) then
+    begin
+      execute 'drop trigger trg_tenants_enforce_tenant_key_rules on tenants';
+    exception when others then null;
+    end;
+  end if;
+
+  begin
+    execute '
+      create trigger trg_tenants_enforce_tenant_key_rules
+      before insert or update of tenant_key on tenants
+      for each row execute function enforce_tenant_key_rules()
+    ';
+  exception when others then null;
+  end;
+end$$;
+
 -- ------------------------------------------------------------
 -- tenant_profiles (brand / business identity)
 -- ------------------------------------------------------------
