@@ -1,5 +1,5 @@
 // src/services/commentBrain.js
-// FINAL v3.0 — tenant-aware public comment classifier with DM redirect strategy
+// FINAL v3.1 — tenant-aware public comment classifier with professional DM redirect strategy
 
 import OpenAI from "openai";
 import { cfg } from "../config.js";
@@ -188,11 +188,11 @@ function ensureOpenAI() {
 
 function makeDmReply(brandName, kind) {
   if (kind === "sales") {
-    return `Təşəkkürlər. Sizə daha dəqiq kömək etmək üçün zəhmət olmasa bizə DM yazın. ${brandName} komandası sizə ətraflı məlumat göndərəcək.`;
+    return `Təşəkkür edirik. Daha dəqiq məlumat üçün zəhmət olmasa bizə DM yazın. Sizə uyğun şəkildə məlumat paylaşa bilərik.`;
   }
 
   if (kind === "support") {
-    return `Yazdığınız üçün təşəkkürlər. Məsələni daha rahat yoxlaya bilməyimiz üçün zəhmət olmasa bizə DM yazın. ${brandName} komandası dəstək olacaq.`;
+    return `Yazdığınız üçün təşəkkür edirik. Məsələni daha rahat yoxlamaq üçün zəhmət olmasa bizə DM yazın. Sizə dəstək göstərilə bilər.`;
   }
 
   return "";
@@ -434,7 +434,7 @@ function normalizeOutput(parsed, { tenantKey, tenant } = {}) {
   }
 
   if (category === "sales") {
-    shouldCreateLead = shouldCreateLead || true;
+    shouldCreateLead = true;
   }
 
   if (category === "spam" || category === "toxic") {
@@ -472,12 +472,12 @@ export async function classifyComment({
   customerName,
   text,
 }) {
-  const cleanText = fixMojibake(s(text || ""));
+  const commentText = fixMojibake(s(text || ""));
   const resolvedTenantKey = getResolvedTenantKey(tenantKey);
   const brandName = getTenantBrandName(tenant, resolvedTenantKey);
   const businessContext = getTenantBusinessContext(tenant);
 
-  if (!cleanText) {
+  if (!commentText) {
     return {
       category: "unknown",
       priority: "low",
@@ -497,7 +497,7 @@ export async function classifyComment({
 
   const openai = ensureOpenAI();
   if (!openai) {
-    return fallbackClassification(cleanText, {
+    return fallbackClassification(commentText, {
       tenantKey: resolvedTenantKey,
       tenant,
     });
@@ -518,12 +518,15 @@ You are a strict JSON classifier for PUBLIC social media comments for a tenant b
 
 Important:
 - This is PUBLIC COMMENT classification, not DM classification.
-- Be tenant-aware and avoid assuming a specific company or industry.
+- Be tenant-aware and avoid assuming a specific company or industry unless clearly supported by context.
 - Use the provided business context if available.
 - Be conservative with lead creation.
-- For clear sales or support intent in public comments, prefer a polite public reply that redirects the person to DM.
+- For clear sales or support intent in public comments, prefer a short, polite, professional public reply that redirects the person to DM.
 - Never suggest public discussion of sensitive details.
-- Do not over-classify praise or generic reactions as leads.
+- Do not over-classify praise, emojis, or generic reactions as leads.
+- Do not use employee names, operator names, manager names, or internal team identities.
+- Do not repeatedly mention the brand name unless contextually useful.
+- Keep replySuggestion professional, concise, and brand-safe.
 
 Return ONLY valid JSON with this exact shape:
 {
@@ -571,7 +574,7 @@ externalUsername=${JSON.stringify(s(externalUsername || ""))}
 customerName=${JSON.stringify(s(customerName || ""))}
 
 Comment:
-${JSON.stringify(cleanText)}
+${JSON.stringify(commentText)}
   `.trim();
 
   try {
@@ -596,7 +599,7 @@ ${JSON.stringify(cleanText)}
     const parsed = parseJsonLoose(raw);
 
     if (!parsed || typeof parsed !== "object") {
-      return fallbackClassification(cleanText, {
+      return fallbackClassification(commentText, {
         tenantKey: resolvedTenantKey,
         tenant,
       });
@@ -607,7 +610,7 @@ ${JSON.stringify(cleanText)}
       tenant,
     });
   } catch {
-    return fallbackClassification(cleanText, {
+    return fallbackClassification(commentText, {
       tenantKey: resolvedTenantKey,
       tenant,
     });

@@ -30,7 +30,6 @@ import {
   markOutboundAttemptDead,
   refreshThread,
   scheduleOutboundRetry,
-  
 } from "./inbox.db.js";
 
 import {
@@ -74,6 +73,14 @@ function buildOutboundAttemptPayload({
   };
 }
 
+function normalizeObj(v) {
+  return v && typeof v === "object" && !Array.isArray(v) ? v : {};
+}
+
+function safeJson(v) {
+  return JSON.stringify(normalizeObj(v));
+}
+
 export function inboxRoutes({ db, wsHub }) {
   const r = express.Router();
 
@@ -86,24 +93,105 @@ export function inboxRoutes({ db, wsHub }) {
     const channel = s(req.body?.channel || "instagram").toLowerCase() || "instagram";
 
     const externalThreadId =
-      fixText(s(req.body?.externalThreadId || req.body?.userId)) || null;
+      fixText(
+        s(
+          req.body?.externalThreadId ||
+            req.body?.threadExternalId ||
+            req.body?.threadId ||
+            req.body?.userId
+        )
+      ) || null;
 
     const externalUserId =
-      fixText(s(req.body?.externalUserId || req.body?.userId)) || null;
+      fixText(
+        s(
+          req.body?.externalUserId ||
+            req.body?.userId ||
+            req.body?.from?.userId ||
+            req.body?.from?.id
+        )
+      ) || null;
 
-    const externalUsername = fixText(s(req.body?.externalUsername)) || null;
-    const customerName = fixText(s(req.body?.customerName)) || null;
-    const externalMessageId = fixText(s(req.body?.externalMessageId)) || null;
+    const externalUsername =
+      fixText(
+        s(
+          req.body?.externalUsername ||
+            req.body?.from?.username ||
+            req.body?.username
+        )
+      ) || null;
 
-    const text = fixText(s(req.body?.text));
-    const timestamp = req.body?.timestamp || null;
+    const customerName =
+      fixText(
+        s(
+          req.body?.customerName ||
+            req.body?.from?.fullName ||
+            req.body?.from?.name
+        )
+      ) || null;
 
-    const raw = req.body?.raw && typeof req.body.raw === "object" ? req.body.raw : {};
+    const externalMessageId =
+      fixText(
+        s(
+          req.body?.externalMessageId ||
+            req.body?.messageExternalId ||
+            req.body?.message?.id
+        )
+      ) || null;
+
+    const text = fixText(
+      s(
+        req.body?.text ||
+          req.body?.message?.text
+      )
+    );
+
+    const timestamp =
+      req.body?.timestamp ||
+      req.body?.message?.timestamp ||
+      req.body?.receivedAt ||
+      Date.now();
+
+    const raw =
+      req.body?.raw && typeof req.body.raw === "object"
+        ? req.body.raw
+        : {};
+
+    const customerContext =
+      req.body?.customerContext && typeof req.body.customerContext === "object"
+        ? req.body.customerContext
+        : {};
+
+    const formData =
+      req.body?.formData && typeof req.body.formData === "object"
+        ? req.body.formData
+        : {};
+
+    const leadContext =
+      req.body?.leadContext && typeof req.body.leadContext === "object"
+        ? req.body.leadContext
+        : {};
+
+    const conversationContext =
+      req.body?.conversationContext && typeof req.body.conversationContext === "object"
+        ? req.body.conversationContext
+        : {};
+
+    const tenantContext =
+      req.body?.tenantContext && typeof req.body.tenantContext === "object"
+        ? req.body.tenantContext
+        : {};
+
     const meta = {
       source: fixText(s(req.body?.source || "meta")) || "meta",
       platform: fixText(s(req.body?.platform || "instagram")) || "instagram",
       timestamp,
       raw,
+      customerContext,
+      formData,
+      leadContext,
+      conversationContext,
+      tenantContext,
     };
 
     if (!text) {
@@ -232,7 +320,7 @@ export function inboxRoutes({ db, wsHub }) {
               externalUserId,
               externalUsername,
               customerName,
-              JSON.stringify(meta),
+              safeJson(meta),
             ]
           );
 
@@ -305,6 +393,7 @@ export function inboxRoutes({ db, wsHub }) {
             last_message_at = now(),
             last_inbound_at = now(),
             unread_count = coalesce(unread_count, 0) + 1,
+            meta = coalesce(meta, '{}'::jsonb) || $5::jsonb,
             updated_at = now()
           where id = $1::uuid
           returning
@@ -331,7 +420,7 @@ export function inboxRoutes({ db, wsHub }) {
             created_at,
             updated_at
           `,
-          [thread.id, externalUserId, externalUsername, customerName]
+          [thread.id, externalUserId, externalUsername, customerName, safeJson(meta)]
         );
 
         thread = updated.rows?.[0] || thread;
@@ -423,7 +512,7 @@ export function inboxRoutes({ db, wsHub }) {
           tenantKey,
           externalMessageId,
           text,
-          JSON.stringify(meta),
+          safeJson(meta),
           Number(timestamp || Date.now()),
         ]
       );
@@ -482,6 +571,10 @@ export function inboxRoutes({ db, wsHub }) {
         message,
         tenant,
         recentMessages,
+        customerContext,
+        formData,
+        leadContext,
+        conversationContext,
       });
 
       const actions = Array.isArray(brain?.actions) ? brain.actions : [];
@@ -1943,7 +2036,7 @@ export function inboxRoutes({ db, wsHub }) {
     }
   });
 
-    r.get("/inbox/outbound/summary", async (req, res) => {
+  r.get("/inbox/outbound/summary", async (req, res) => {
     const tenantKey = resolveTenantKeyFromReq(req);
 
     try {

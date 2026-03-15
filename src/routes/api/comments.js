@@ -6,13 +6,14 @@ import { deepFix, fixText } from "../../utils/textFix.js";
 import { writeAudit } from "../../utils/auditLog.js";
 import { classifyComment } from "../../services/commentBrain.js";
 import { resolveTenantKeyFromReq } from "../../tenancy/index.js";
+import { getTenantByKey } from "./inbox.db.js";
 
 function s(v) {
   return String(v ?? "").trim();
 }
 
 function safeJson(v, fallback = {}) {
-  if (!v || typeof v !== "object") return fallback;
+  if (!v || typeof v !== "object" || Array.isArray(v)) return fallback;
   return v;
 }
 
@@ -170,6 +171,8 @@ function normalizeLead(row) {
     tenant_key: fixText(row.tenant_key || ""),
     source: fixText(row.source || ""),
     source_ref: fixText(row.source_ref || ""),
+    inbox_thread_id: fixText(row.inbox_thread_id || ""),
+    proposal_id: fixText(row.proposal_id || ""),
     full_name: fixText(row.full_name || ""),
     username: fixText(row.username || ""),
     company: fixText(row.company || ""),
@@ -210,6 +213,29 @@ function buildLeadPayloadFromComment(comment, classification) {
       classification: deepFix(classification || {}),
     },
   };
+}
+
+function buildCommentActions({ tenantKey, comment, classification }) {
+  const actions = [];
+  const replyText = s(classification?.replySuggestion || "");
+
+  if (classification?.shouldReply && replyText && s(comment?.external_comment_id || "")) {
+    actions.push({
+      type: "reply_comment",
+      channel: s(comment?.channel || "instagram").toLowerCase() || "instagram",
+      commentId: s(comment?.external_comment_id || ""),
+      text: replyText,
+      meta: {
+        tenantKey: s(tenantKey || ""),
+        commentId: s(comment?.id || ""),
+        externalCommentId: s(comment?.external_comment_id || ""),
+        externalPostId: s(comment?.external_post_id || ""),
+        classification: deepFix(classification || {}),
+      },
+    });
+  }
+
+  return actions;
 }
 
 function mergeClassificationForReview(classification, { status, actor, note, reason }) {
@@ -526,6 +552,8 @@ export function commentsRoutes({ db, wsHub }) {
         });
       }
 
+      const tenant = await getTenantByKey(db, tenantKey);
+
       const existingQ = await db.query(
         `
         select
@@ -568,18 +596,33 @@ export function commentsRoutes({ db, wsHub }) {
           });
         } catch {}
 
+        const actions = buildCommentActions({
+          tenantKey,
+          comment: existing,
+          classification: existing.classification || {},
+        });
+
         return okJson(res, {
           ok: true,
           duplicate: true,
           deduped: true,
           comment: existing,
           classification: deepFix(existing.classification || {}),
+          actions,
           lead,
+          tenant: tenant
+            ? {
+                tenant_key: tenant.tenant_key,
+                name: tenant.name,
+                timezone: tenant.timezone,
+              }
+            : null,
         });
       }
 
       const classification = await classifyComment({
         tenantKey,
+        tenant,
         channel,
         externalUserId,
         externalUsername,
@@ -696,13 +739,27 @@ export function commentsRoutes({ db, wsHub }) {
         });
       } catch {}
 
+      const actions = buildCommentActions({
+        tenantKey,
+        comment,
+        classification,
+      });
+
       return okJson(res, {
         ok: true,
         duplicate: false,
         deduped: false,
         comment,
         classification: deepFix(classification || {}),
+        actions,
         lead,
+        tenant: tenant
+          ? {
+              tenant_key: tenant.tenant_key,
+              name: tenant.name,
+              timezone: tenant.timezone,
+            }
+          : null,
       });
     } catch (e) {
       return okJson(res, {

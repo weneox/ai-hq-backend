@@ -1,10 +1,11 @@
 // src/services/inboxBrain.js
-// FINAL v6.1 — fully multi-tenant + schema-aware + niche-aware + product-grade inbox decisioning
+// FINAL v6.2 — fully multi-tenant + schema-aware + niche-aware + prompt-bundle-based inbox decisioning
 
 import OpenAI from "openai";
 import { cfg } from "../config.js";
 import { getDefaultTenantKey, resolveTenantKey } from "../tenancy/index.js";
 import { getInboxPolicy, isPolicyQuietHours } from "./inboxPolicy.js";
+import { buildPromptBundle } from "./promptBundle.js";
 
 function s(v) {
   return String(v ?? "").trim();
@@ -408,10 +409,6 @@ function getReliabilityFlags({ text, thread, recentMessages = [], quietHoursAppl
   };
 }
 
-/* ============================================================
- * tenant business profile
- * ============================================================ */
-
 function normalizeIndustry(v) {
   const x = lower(v);
   if (!x) return "generic_business";
@@ -485,21 +482,6 @@ function normalizeIndustry(v) {
   };
 
   return aliases[x] || x || "generic_business";
-}
-
-function getTenantBrandName(tenant, tenantKey) {
-  const profile = safeObj(tenant?.profile);
-  const brand = safeObj(tenant?.brand);
-
-  return (
-    s(profile?.brand_name) ||
-    s(profile?.brandName) ||
-    s(brand?.displayName) ||
-    s(brand?.name) ||
-    s(tenant?.company_name) ||
-    s(tenant?.name) ||
-    getResolvedTenantKey(tenantKey)
-  );
 }
 
 function getTenantBusinessProfile(tenant, tenantKey) {
@@ -802,6 +784,20 @@ function classifyTenantAwareIntent(text, profile, policy) {
   return { intent: "general", score: 28 };
 }
 
+function sanitizeReplyText(text) {
+  let out = fixMojibake(s(text));
+
+  if (!out) return "";
+
+  out = out
+    .replace(/\b(account manager|sales manager|manager|operator|agent)\b/gi, "")
+    .replace(/\s{2,}/g, " ")
+    .replace(/\s+([,.;:!?])/g, "$1")
+    .trim();
+
+  return out;
+}
+
 async function aiDecideInbox({
   text,
   channel,
@@ -814,6 +810,10 @@ async function aiDecideInbox({
   quietHoursApplied,
   recentMessages = [],
   reliability = {},
+  customerContext = {},
+  formData = {},
+  leadContext = {},
+  conversationContext = {},
 }) {
   const openai = ensureOpenAI();
   if (!openai) return null;
@@ -826,79 +826,45 @@ async function aiDecideInbox({
   const servicesLine = buildServiceLine(profile);
   const resolvedTenantKey = getResolvedTenantKey(tenantKey);
 
-  const prompt = `
-You are an AI inbox copilot for a business.
+  const promptBundle = buildPromptBundle("inbox.reply", {
+    tenant: {
+      ...safeObj(tenant),
+      tenantKey: resolvedTenantKey,
+      tenantId: resolvedTenantKey,
+      companyName: profile.displayName,
+      brandName: profile.displayName,
+      industryKey: profile.industry,
+      outputLanguage: profile.languages?.[0] || "az",
+      toneText: profile.tone,
+      services: profile.services,
+      servicesText: servicesLine || "general business services",
+      businessContext: profile.businessSummary || "",
+    },
+    extra: {
+      channel: JSON.stringify(s(channel || "instagram")),
+      externalUserId: JSON.stringify(s(externalUserId || "")),
+      threadId: JSON.stringify(s(thread?.id || "")),
+      messageId: JSON.stringify(s(message?.id || "")),
+      threadStatus: JSON.stringify(s(thread?.status || "open")),
+      quietHoursApplied: quietHoursApplied ? "true" : "false",
+      policyAutoReplyEnabled: Boolean(policy?.autoReplyEnabled),
+      policyCreateLeadEnabled: Boolean(policy?.createLeadEnabled),
+      policyHandoffEnabled: Boolean(policy?.handoffEnabled),
+      recentOutboundCooldownActive: Boolean(reliability?.recentOutboundCooldownActive),
+      operatorRecentlyReplied: Boolean(reliability?.operatorRecentlyReplied),
+      duplicateOfLastAiReply: Boolean(reliability?.duplicateOfLastAiReply),
+      servicesLine: JSON.stringify(servicesLine),
+      historySnippet: historySnippet || "(empty)",
+      incomingMessage: JSON.stringify(String(text || "")),
+      maxSentences: profile.maxSentences,
+      customerContext: JSON.stringify(customerContext || {}),
+      formData: JSON.stringify(formData || {}),
+      leadContext: JSON.stringify(leadContext || {}),
+      conversationContext: JSON.stringify(conversationContext || {}),
+    },
+  });
 
-Return ONLY valid JSON.
-
-Business profile:
-- brandName: ${JSON.stringify(profile.displayName)}
-- tenantKey: ${JSON.stringify(resolvedTenantKey)}
-- industry: ${JSON.stringify(profile.industry)}
-- businessSummary: ${JSON.stringify(profile.businessSummary || "")}
-- services: ${JSON.stringify(profile.services)}
-- languages: ${JSON.stringify(profile.languages)}
-- tone: ${JSON.stringify(profile.tone)}
-- maxSentences: ${profile.maxSentences}
-- leadPrompts: ${JSON.stringify(profile.leadPrompts)}
-- forbiddenClaims: ${JSON.stringify(profile.forbiddenClaims)}
-
-Operational rules:
-- Match the customer's language when possible.
-- Be concise, natural, and human-like.
-- Never invent prices, availability, timelines, medical/legal/financial guarantees, or unsupported claims.
-- If user asks pricing, ask for the needed service/product details briefly.
-- If user explicitly wants a human/operator, set handoff=true.
-- If user clearly shows business intent, createLead should usually be true.
-- If message is only acknowledgment like "ok", "thanks", "👍", then noReply=true.
-- If operator recently replied, prefer noReply=true unless customer is clearly asking something new and urgent.
-- Avoid repeating the same reply again.
-- If quiet hours are active, noReply may be true.
-- replyText must stay short, max ${profile.maxSentences} sentences.
-- Return only JSON.
-
-Allowed intents:
-["general","greeting","pricing","service_interest","handoff_request","support","ack","urgent_interest","other"]
-
-Return JSON exactly:
-{
-  "intent": "general",
-  "replyText": "",
-  "leadScore": 0,
-  "createLead": false,
-  "handoff": false,
-  "handoffReason": "",
-  "handoffPriority": "normal",
-  "noReply": false
-}
-
-Rules:
-- leadScore must be integer 0-100
-- handoffPriority must be one of: "low", "normal", "high", "urgent"
-- if noReply=true then replyText should be ""
-- if handoff=true then handoffReason must be filled
-
-Context:
-channel=${JSON.stringify(s(channel || "instagram"))}
-externalUserId=${JSON.stringify(s(externalUserId || ""))}
-threadId=${JSON.stringify(s(thread?.id || ""))}
-messageId=${JSON.stringify(s(message?.id || ""))}
-threadStatus=${JSON.stringify(s(thread?.status || "open"))}
-quietHoursApplied=${quietHoursApplied ? "true" : "false"}
-policy.autoReplyEnabled=${Boolean(policy?.autoReplyEnabled)}
-policy.createLeadEnabled=${Boolean(policy?.createLeadEnabled)}
-policy.handoffEnabled=${Boolean(policy?.handoffEnabled)}
-recentOutboundCooldownActive=${Boolean(reliability?.recentOutboundCooldownActive)}
-operatorRecentlyReplied=${Boolean(reliability?.operatorRecentlyReplied)}
-duplicateOfLastAiReply=${Boolean(reliability?.duplicateOfLastAiReply)}
-servicesLine=${JSON.stringify(servicesLine)}
-
-Recent thread history:
-${historySnippet || "(empty)"}
-
-Incoming message:
-${JSON.stringify(String(text || ""))}
-  `.trim();
+  const prompt = promptBundle.fullPrompt;
 
   try {
     const resp = await openai.responses.create({
@@ -923,7 +889,7 @@ ${JSON.stringify(String(text || ""))}
     if (!parsed || typeof parsed !== "object") return null;
 
     const intent = s(parsed.intent || "general") || "general";
-    const replyText = fixMojibake(s(parsed.replyText || ""));
+    const replyText = sanitizeReplyText(parsed.replyText || "");
     const leadScore = Math.max(0, Math.min(100, Math.round(Number(parsed.leadScore || 0))));
     const createLead = Boolean(parsed.createLead);
     const handoff = Boolean(parsed.handoff);
@@ -950,16 +916,15 @@ ${JSON.stringify(String(text || ""))}
 }
 
 function buildFallbackReply({ intent, profile }) {
-  const brandName = s(profile?.displayName || "Brand");
   const leadPrompt = pickLeadPrompt(profile);
   const serviceLine = buildServiceLine(profile);
   const industryHints = getIndustryHints(profile?.industry);
 
   if (intent === "greeting") {
     if (serviceLine) {
-      return `${brandName}-a xoş gəlmisiniz. ${serviceLine} üzrə kömək edə bilərik. ${leadPrompt}`;
+      return `Salam. ${serviceLine} üzrə kömək edə bilərik. ${leadPrompt}`;
     }
-    return `${brandName}-a xoş gəlmisiniz. Sizə məmnuniyyətlə kömək edəcəyik. ${leadPrompt}`;
+    return `Salam. Sizə məmnuniyyətlə kömək edə bilərik. ${leadPrompt}`;
   }
 
   if (intent === "pricing") {
@@ -968,9 +933,9 @@ function buildFallbackReply({ intent, profile }) {
 
   if (intent === "service_interest") {
     if (serviceLine) {
-      return `${brandName} bu istiqamətdə kömək edə bilər. ${leadPrompt}`;
+      return `Bu istiqamətdə kömək edə bilərik. ${leadPrompt}`;
     }
-    return `${brandName} bu mövzuda kömək edə bilər. ${leadPrompt}`;
+    return `Bu mövzuda kömək edə bilərik. ${leadPrompt}`;
   }
 
   if (intent === "support") {
@@ -978,14 +943,14 @@ function buildFallbackReply({ intent, profile }) {
   }
 
   if (intent === "handoff_request") {
-    return "Qeyd etdik. Komandamızın daha uyğun yönləndirməsi üçün ehtiyacınızı qısa yazın.";
+    return "Qeyd etdik. Daha uyğun yönləndirmə üçün ehtiyacınızı qısa şəkildə yazın.";
   }
 
   if (intent === "urgent_interest") {
-    return "Qeyd etdik. Müraciətinizi daha düzgün yönləndirmək üçün ehtiyacınızı qısa yazın.";
+    return "Qeyd etdik. Müraciətinizi düzgün yönləndirmək üçün ehtiyacınızı qısa şəkildə yazın.";
   }
 
-  return `${brandName} sizə kömək etməyə hazırdır. ${leadPrompt}`;
+  return `Sizə kömək etməyə hazırıq. ${leadPrompt}`;
 }
 
 function buildInboxActionsFallback({
@@ -1007,7 +972,7 @@ function buildInboxActionsFallback({
 
   let intent = classified.intent;
   let leadScore = classified.score;
-  let replyText = buildFallbackReply({ intent, profile });
+  let replyText = sanitizeReplyText(buildFallbackReply({ intent, profile }));
 
   let shouldCreateLead = ["pricing", "service_interest", "handoff_request", "urgent_interest"].includes(intent);
   let shouldHandoff = intent === "handoff_request" || intent === "urgent_interest";
@@ -1159,6 +1124,10 @@ export async function buildInboxActions({
   message,
   tenant = null,
   recentMessages = [],
+  customerContext = {},
+  formData = {},
+  leadContext = {},
+  conversationContext = {},
 }) {
   const resolvedTenantKey = getResolvedTenantKey(tenantKey);
 
@@ -1383,13 +1352,17 @@ export async function buildInboxActions({
     quietHoursApplied,
     recentMessages,
     reliability,
+    customerContext,
+    formData,
+    leadContext,
+    conversationContext,
   });
 
   if (ai) {
     const aiProfile = ai.profile || profile;
 
     let intent = s(ai.intent || "general") || "general";
-    let replyText = s(ai.replyText || "");
+    let replyText = sanitizeReplyText(ai.replyText || "");
     let leadScore = Math.max(0, Math.min(100, Number(ai.leadScore || 0)));
     let shouldCreateLead = Boolean(ai.createLead);
     let shouldHandoff = Boolean(ai.handoff);

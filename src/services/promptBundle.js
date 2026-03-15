@@ -1,5 +1,5 @@
 // src/services/promptBundle.js
-// FINAL v4.0 — universal multi-industry + multi-tenant prompt bundle builder
+// FINAL v4.1 — universal multi-industry + multi-tenant prompt bundle builder
 //
 // ✅ tenant-aware
 // ✅ industry-aware
@@ -10,6 +10,7 @@
 // ✅ stable language / format normalization
 // ✅ safer multi-tenant merging
 // ✅ future-proof for any business type
+// ✅ inbox.reply usecase support
 
 import { deepFix, fixText } from "../utils/textFix.js";
 import {
@@ -165,6 +166,15 @@ function usecaseForEvent(event) {
     e === "fix_plan" ||
     e === "content_fix_plan"
   ) return "content.fix_plan";
+
+  if (
+    e === "inbox.reply" ||
+    e === "inbox_reply" ||
+    e === "dm.reply" ||
+    e === "dm_reply" ||
+    e === "message.reply" ||
+    e === "message_reply"
+  ) return "inbox.reply";
 
   return "";
 }
@@ -548,7 +558,7 @@ function buildPromptVars({
 
   mergedTenant = finalizeTenantDerivedFields(mergedTenant);
 
-  const normalizedEvent = s(x.event || x.mode || "");
+  const normalizedEvent = s(eventFromExtra(x)).toLowerCase();
   const normalizedUsecase = usecaseForEvent(normalizedEvent);
 
   const normalizedFormat =
@@ -565,6 +575,10 @@ function buildPromptVars({
     outputLanguage: mergedTenant.outputLanguage,
     extra: x,
   };
+}
+
+function eventFromExtra(x = {}) {
+  return s(x.event || x.mode || "");
 }
 
 export function buildPromptBundle(
@@ -588,7 +602,10 @@ export function buildPromptBundle(
     tenant,
     today,
     format,
-    extra,
+    extra: {
+      ...obj(extra),
+      event: normalizedEvent,
+    },
   });
 
   try {
