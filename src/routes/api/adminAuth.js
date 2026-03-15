@@ -38,7 +38,7 @@ function getIp(req) {
 function setNoStore(res) {
   res.setHeader(
     "Cache-Control",
-    "no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0"
+    "no-store, no-cache, must-revalidate, proxy-revalidate, private, max-age=0"
   );
   res.setHeader("Pragma", "no-cache");
   res.setHeader("Expires", "0");
@@ -177,10 +177,12 @@ export function adminAuthRoutes({ db, wsHub } = {}) {
     const dbOk = await checkDb(db);
 
     if (!userSession?.ok) {
-      return res.status(401).json({
-        ok: false,
+      clearUserCookie(res);
+
+      return res.status(200).json({
+        ok: true,
         authenticated: false,
-        error: "Unauthorized",
+        error: null,
         reason: userSession?.error || "invalid_session",
         user: null,
         runtime: {
@@ -188,7 +190,7 @@ export function adminAuthRoutes({ db, wsHub } = {}) {
           hasDb: !!db,
           dbOk,
         },
-        marker: "AUTH_ME_DEBUG_V3",
+        marker: "AUTH_ME_DEBUG_V4",
       });
     }
 
@@ -210,7 +212,7 @@ export function adminAuthRoutes({ db, wsHub } = {}) {
         hasDb: !!db,
         dbOk,
       },
-      marker: "AUTH_ME_DEBUG_V3",
+      marker: "AUTH_ME_DEBUG_V4",
     });
   });
 
@@ -224,7 +226,7 @@ export function adminAuthRoutes({ db, wsHub } = {}) {
 
     return res.status(200).json({
       ok: true,
-      marker: "AUTH_DEBUG_SESSION_V3",
+      marker: "AUTH_DEBUG_SESSION_V4",
       cookieNames: Object.keys(cookies || {}),
       hasUserCookie: Boolean(rawToken),
       userCookieName: getUserCookieName(),
@@ -440,6 +442,7 @@ export function adminAuthRoutes({ db, wsHub } = {}) {
     return res.status(200).json({
       ok: true,
       loggedOut: true,
+      authenticated: false,
     });
   });
 
@@ -450,6 +453,7 @@ export function adminAuthRoutes({ db, wsHub } = {}) {
     return res.status(200).json({
       ok: true,
       loggedOut: true,
+      authenticated: false,
     });
   });
 

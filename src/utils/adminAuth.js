@@ -31,6 +31,7 @@ function safeEqBuffer(a, b) {
   const aa = Buffer.isBuffer(a) ? a : Buffer.from(a || "");
   const bb = Buffer.isBuffer(b) ? b : Buffer.from(b || "");
   if (aa.length !== bb.length) return false;
+
   try {
     return crypto.timingSafeEqual(aa, bb);
   } catch {
@@ -56,7 +57,13 @@ function cookieDomain() {
 }
 
 function sessionSameSite() {
-  return "lax";
+  const raw = s(cfg.auth.sessionSameSite || "").toLowerCase();
+
+  if (raw === "none" || raw === "lax" || raw === "strict") {
+    return raw;
+  }
+
+  return isProd() ? "lax" : "lax";
 }
 
 export function getAdminCookieName() {
@@ -73,6 +80,7 @@ export function adminCookieOptions() {
     60 *
     60 *
     1000;
+
   const domain = cookieDomain();
   const sameSite = sessionSameSite();
 
@@ -92,6 +100,7 @@ export function userCookieOptions() {
     60 *
     60 *
     1000;
+
   const domain = cookieDomain();
   const sameSite = sessionSameSite();
 
@@ -105,29 +114,59 @@ export function userCookieOptions() {
   };
 }
 
-function clearCookieWithOptions(res, name, path = "/") {
-  const domain = cookieDomain();
-  const sameSite = sessionSameSite();
+function clearCookieExact(res, name, options = {}) {
+  try {
+    res.clearCookie(name, {
+      httpOnly: true,
+      expires: new Date(0),
+      maxAge: 0,
+      ...options,
+    });
+  } catch {}
+}
 
-  res.clearCookie(name, {
-    httpOnly: true,
-    secure: isProd(),
-    sameSite,
-    path,
-    ...(domain ? { domain } : {}),
-  });
+function clearCookieEverywhere(res, name, paths = ["/"]) {
+  const domain = cookieDomain();
+  const sameSites = ["lax", "strict", "none"];
+  const pathList = Array.from(new Set(paths.filter(Boolean)));
+
+  for (const path of pathList) {
+    for (const sameSite of sameSites) {
+      clearCookieExact(res, name, {
+        path,
+        sameSite,
+        secure: true,
+        ...(domain ? { domain } : {}),
+      });
+
+      clearCookieExact(res, name, {
+        path,
+        sameSite,
+        secure: false,
+        ...(domain ? { domain } : {}),
+      });
+
+      clearCookieExact(res, name, {
+        path,
+        sameSite,
+        secure: true,
+      });
+
+      clearCookieExact(res, name, {
+        path,
+        sameSite,
+        secure: false,
+      });
+    }
+  }
 }
 
 export function clearAdminCookie(res) {
-  clearCookieWithOptions(res, getAdminCookieName(), "/");
-  clearCookieWithOptions(res, getAdminCookieName(), "/api");
-  clearCookieWithOptions(res, getAdminCookieName(), "/admin");
+  clearCookieEverywhere(res, getAdminCookieName(), ["/", "/api", "/admin"]);
 }
 
 export function clearUserCookie(res) {
-  clearCookieWithOptions(res, getUserCookieName(), "/");
-  clearCookieWithOptions(res, getUserCookieName(), "/api");
-  clearCookieWithOptions(res, getUserCookieName(), "/auth");
+  clearCookieEverywhere(res, getUserCookieName(), ["/", "/api", "/auth"]);
 }
 
 export function parseCookies(req) {
@@ -141,8 +180,6 @@ export function parseCookies(req) {
     const k = part.slice(0, i).trim();
     const v = part.slice(i + 1).trim();
     if (!k) return;
-
-    if (Object.prototype.hasOwnProperty.call(out, k)) return;
 
     try {
       out[k] = decodeURIComponent(v);
