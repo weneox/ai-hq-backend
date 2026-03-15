@@ -1,5 +1,5 @@
 // src/services/commentBrain.js
-// FINAL v3.1 — tenant-aware public comment classifier with professional DM redirect strategy
+// FINAL v4.0 — tenant-aware public comment classifier + public reply + private reply + handoff strategy
 
 import OpenAI from "openai";
 import { cfg } from "../config.js";
@@ -121,8 +121,8 @@ function cleanReason(v) {
   return raw || "ai_classified";
 }
 
-function cleanReplySuggestion(v) {
-  return fixMojibake(s(v || "")).slice(0, 500);
+function cleanText(v, max = 500) {
+  return fixMojibake(s(v || "")).slice(0, max);
 }
 
 function normalizeCategory(v) {
@@ -144,6 +144,10 @@ function normalizeSentiment(v) {
     : "neutral";
 }
 
+function arr(v) {
+  return Array.isArray(v) ? v : [];
+}
+
 function getResolvedTenantKey(tenantKey) {
   return resolveTenantKey(tenantKey, getDefaultTenantKey());
 }
@@ -154,6 +158,7 @@ function getTenantBrandName(tenant, tenantKey) {
     tenant?.brand?.name ||
     tenant?.profile?.displayName ||
     tenant?.profile?.companyName ||
+    tenant?.company_name ||
     tenant?.name ||
     getResolvedTenantKey(tenantKey);
 
@@ -164,9 +169,60 @@ function getTenantBusinessContext(tenant) {
   return s(
     tenant?.ai_policy?.businessContext ||
       tenant?.profile?.businessContext ||
+      tenant?.meta?.businessSummary ||
+      tenant?.profile?.brand_summary ||
+      tenant?.profile?.value_proposition ||
       tenant?.businessContext ||
       ""
-  ).slice(0, 1200);
+  ).slice(0, 1400);
+}
+
+function getTenantTone(tenant) {
+  return s(
+    tenant?.profile?.tone_of_voice ||
+      tenant?.brand?.tone ||
+      tenant?.meta?.tone ||
+      "professional"
+  );
+}
+
+function getTenantPreferredCta(tenant) {
+  return s(
+    tenant?.profile?.preferred_cta ||
+      tenant?.meta?.preferredCta ||
+      ""
+  );
+}
+
+function getTenantBannedPhrases(tenant) {
+  return arr(
+    tenant?.profile?.banned_phrases ||
+      tenant?.meta?.bannedPhrases ||
+      []
+  )
+    .map((x) => lower(x))
+    .filter(Boolean);
+}
+
+function getCommentPolicy(tenant) {
+  return tenant?.comment_policy || tenant?.ai_policy?.comment_policy || {};
+}
+
+function applyBannedPhraseGuard(text, tenant) {
+  const banned = getTenantBannedPhrases(tenant);
+  let out = cleanText(text, 500);
+  if (!out) return "";
+
+  for (const phrase of banned) {
+    if (!phrase) continue;
+    const re = new RegExp(
+      phrase.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
+      "ig"
+    );
+    out = out.replace(re, "").replace(/\s{2,}/g, " ").trim();
+  }
+
+  return out.slice(0, 500);
 }
 
 let openaiSingleton = null;
@@ -186,13 +242,60 @@ function ensureOpenAI() {
   return openaiSingleton;
 }
 
-function makeDmReply(brandName, kind) {
+function makePublicReply({ kind, tenant }) {
+  const preferredCta = getTenantPreferredCta(tenant);
+  const tone = lower(getTenantTone(tenant));
+
   if (kind === "sales") {
-    return `Təşəkkür edirik. Daha dəqiq məlumat üçün zəhmət olmasa bizə DM yazın. Sizə uyğun şəkildə məlumat paylaşa bilərik.`;
+    if (tone.includes("premium") || tone.includes("modern") || tone.includes("confident")) {
+      return applyBannedPhraseGuard(
+        `Təşəkkür edirik. İstəsəniz detalları sizə DM-də qısa şəkildə paylaşaq.`,
+        tenant
+      );
+    }
+
+    return applyBannedPhraseGuard(
+      preferredCta
+        ? `Təşəkkür edirik. ${preferredCta} üçün sizə DM-də yazaq.`
+        : `Təşəkkür edirik. Detalları sizə DM-də paylaşaq.`,
+      tenant
+    );
   }
 
   if (kind === "support") {
-    return `Yazdığınız üçün təşəkkür edirik. Məsələni daha rahat yoxlamaq üçün zəhmət olmasa bizə DM yazın. Sizə dəstək göstərilə bilər.`;
+    return applyBannedPhraseGuard(
+      `Yazdığınız üçün təşəkkür edirik. Məsələni daha rahat yoxlamaq üçün sizə DM-də yazaq.`,
+      tenant
+    );
+  }
+
+  if (kind === "positive") {
+    return applyBannedPhraseGuard(
+      `Təşəkkür edirik. Bəyənməyiniz bizi sevindirdi.`,
+      tenant
+    );
+  }
+
+  return "";
+}
+
+function makePrivateReply({ kind, tenant }) {
+  const preferredCta = getTenantPreferredCta(tenant);
+
+  if (kind === "sales") {
+    return applyBannedPhraseGuard(
+      preferredCta
+        ? `Salam. Şərhinizə görə yazırıq. ${preferredCta} ilə bağlı sizə uyğun variantı paylaşa bilərik. Hansı xidmətlə maraqlanırsınız?`
+        : `Salam. Şərhinizə görə yazırıq. Sizə uyğun variantı qısa şəkildə paylaşa bilərik. Hansı xidmətlə maraqlanırsınız?`,
+      tenant
+    );
+  }
+
+  if (kind === "support") {
+    return applyBannedPhraseGuard(
+      `Salam. Şərhinizə görə yazırıq. Problemi yoxlamaq üçün qısa şəkildə detalları bizimlə paylaşa bilərsiniz.`,
+      tenant
+    );
   }
 
   return "";
@@ -202,6 +305,17 @@ function fallbackClassification(text, { tenantKey, tenant } = {}) {
   const incoming = lower(text);
   const resolvedTenantKey = getResolvedTenantKey(tenantKey);
   const brandName = getTenantBrandName(tenant, resolvedTenantKey);
+  const commentPolicy = getCommentPolicy(tenant);
+  const autoReplyEnabled =
+    typeof tenant?.ai_policy?.auto_reply_enabled === "boolean"
+      ? tenant.ai_policy.auto_reply_enabled
+      : true;
+  const createLeadEnabled =
+    typeof tenant?.ai_policy?.create_lead_enabled === "boolean"
+      ? tenant.ai_policy.create_lead_enabled
+      : true;
+  const escalateToxic =
+    commentPolicy?.escalateToxic !== false;
 
   let category = "normal";
   let priority = "low";
@@ -210,6 +324,9 @@ function fallbackClassification(text, { tenantKey, tenant } = {}) {
   let shouldCreateLead = false;
   let shouldReply = false;
   let replySuggestion = "";
+  let shouldPrivateReply = false;
+  let privateReplySuggestion = "";
+  let shouldHandoff = false;
   let reason = "generic_comment";
 
   const salesPatterns = [
@@ -262,6 +379,9 @@ function fallbackClassification(text, { tenantKey, tenant } = {}) {
     "info",
     "melumat",
     "məlumat",
+    "demo",
+    "meeting",
+    "consultation",
   ];
 
   const supportPatterns = [
@@ -283,9 +403,9 @@ function fallbackClassification(text, { tenantKey, tenant } = {}) {
     "acilmir",
     "girilmir",
     "login olmur",
-    "işləmir?",
     "niyə işləmir",
     "niye islemir",
+    "işləmir?",
   ];
 
   const spamPatterns = [
@@ -361,14 +481,20 @@ function fallbackClassification(text, { tenantKey, tenant } = {}) {
     priority = "medium";
     sentiment = "negative";
     requiresHuman = true;
+    shouldHandoff = Boolean(escalateToxic);
     reason = "toxic_language";
   } else if (hasAny(supportPatterns)) {
     category = "support";
     priority = "medium";
     sentiment = "negative";
     requiresHuman = true;
-    shouldReply = true;
-    replySuggestion = makeDmReply(brandName, "support");
+    shouldHandoff = true;
+    shouldReply = autoReplyEnabled;
+    shouldPrivateReply = autoReplyEnabled;
+    replySuggestion = shouldReply ? makePublicReply({ kind: "support", tenant }) : "";
+    privateReplySuggestion = shouldPrivateReply
+      ? makePrivateReply({ kind: "support", tenant })
+      : "";
     reason = "support_request";
   } else if (hasAny(salesPatterns)) {
     category = "sales";
@@ -382,16 +508,25 @@ function fallbackClassification(text, { tenantKey, tenant } = {}) {
       incoming.includes("elaqe")
         ? "high"
         : "medium";
-    shouldCreateLead = true;
-    shouldReply = true;
-    replySuggestion = makeDmReply(brandName, "sales");
+    shouldCreateLead = Boolean(createLeadEnabled);
+    shouldReply = autoReplyEnabled;
+    shouldPrivateReply = autoReplyEnabled;
+    replySuggestion = shouldReply ? makePublicReply({ kind: "sales", tenant }) : "";
+    privateReplySuggestion = shouldPrivateReply
+      ? makePrivateReply({ kind: "sales", tenant })
+      : "";
     reason =
       priority === "high" ? "pricing_or_contact_interest" : "service_interest";
+  } else if (hasAny(positivePatterns)) {
+    category = "normal";
+    priority = "low";
+    sentiment = "positive";
+    shouldReply = false;
+    shouldPrivateReply = false;
+    reason = "positive_reaction";
   }
 
-  if (hasAny(positivePatterns) && sentiment === "neutral") {
-    sentiment = "positive";
-  } else if (hasAny(negativePatterns) && sentiment === "neutral") {
+  if (hasAny(negativePatterns) && sentiment === "neutral") {
     sentiment = "negative";
   }
 
@@ -402,7 +537,10 @@ function fallbackClassification(text, { tenantKey, tenant } = {}) {
     requiresHuman,
     shouldCreateLead,
     shouldReply,
-    replySuggestion,
+    replySuggestion: cleanText(replySuggestion, 500),
+    shouldPrivateReply,
+    privateReplySuggestion: cleanText(privateReplySuggestion, 500),
+    shouldHandoff,
     reason,
     engine: "fallback",
     meta: {
@@ -422,29 +560,77 @@ function normalizeOutput(parsed, { tenantKey, tenant } = {}) {
   let requiresHuman = Boolean(parsed?.requiresHuman);
   let shouldCreateLead = Boolean(parsed?.shouldCreateLead);
   let shouldReply = Boolean(parsed?.shouldReply);
-  let replySuggestion = cleanReplySuggestion(parsed?.replySuggestion || "");
+  let replySuggestion = cleanText(parsed?.replySuggestion || "", 500);
+  let shouldPrivateReply = Boolean(parsed?.shouldPrivateReply);
+  let privateReplySuggestion = cleanText(parsed?.privateReplySuggestion || "", 500);
+  let shouldHandoff = Boolean(parsed?.shouldHandoff);
   let reason = cleanReason(parsed?.reason || "ai_classified");
 
-  if ((category === "sales" || category === "support") && !shouldReply) {
+  const autoReplyEnabled =
+    typeof tenant?.ai_policy?.auto_reply_enabled === "boolean"
+      ? tenant.ai_policy.auto_reply_enabled
+      : true;
+  const createLeadEnabled =
+    typeof tenant?.ai_policy?.create_lead_enabled === "boolean"
+      ? tenant.ai_policy.create_lead_enabled
+      : true;
+  const commentPolicy = getCommentPolicy(tenant);
+  const escalateToxic =
+    commentPolicy?.escalateToxic !== false;
+
+  if ((category === "sales" || category === "support") && autoReplyEnabled && !shouldReply) {
     shouldReply = true;
   }
 
-  if ((category === "sales" || category === "support") && !replySuggestion) {
-    replySuggestion = makeDmReply(brandName, category);
+  if ((category === "sales" || category === "support") && autoReplyEnabled && !shouldPrivateReply) {
+    shouldPrivateReply = true;
   }
 
-  if (category === "sales") {
+  if (category === "sales" && createLeadEnabled) {
     shouldCreateLead = true;
   }
 
-  if (category === "spam" || category === "toxic") {
-    shouldReply = false;
-    replySuggestion = "";
+  if (category === "sales" && !replySuggestion) {
+    replySuggestion = makePublicReply({ kind: "sales", tenant });
   }
 
-  if (category === "toxic" && !requiresHuman) {
-    requiresHuman = true;
+  if (category === "sales" && !privateReplySuggestion) {
+    privateReplySuggestion = makePrivateReply({ kind: "sales", tenant });
   }
+
+  if (category === "support" && !replySuggestion) {
+    replySuggestion = makePublicReply({ kind: "support", tenant });
+  }
+
+  if (category === "support" && !privateReplySuggestion) {
+    privateReplySuggestion = makePrivateReply({ kind: "support", tenant });
+  }
+
+  if (category === "support") {
+    requiresHuman = true;
+    shouldHandoff = true;
+  }
+
+  if (category === "toxic") {
+    requiresHuman = true;
+    shouldReply = false;
+    shouldPrivateReply = false;
+    replySuggestion = "";
+    privateReplySuggestion = "";
+    shouldHandoff = Boolean(escalateToxic);
+  }
+
+  if (category === "spam") {
+    shouldReply = false;
+    shouldPrivateReply = false;
+    replySuggestion = "";
+    privateReplySuggestion = "";
+    shouldCreateLead = false;
+    shouldHandoff = false;
+  }
+
+  replySuggestion = applyBannedPhraseGuard(replySuggestion, tenant);
+  privateReplySuggestion = applyBannedPhraseGuard(privateReplySuggestion, tenant);
 
   return {
     category,
@@ -452,8 +638,11 @@ function normalizeOutput(parsed, { tenantKey, tenant } = {}) {
     sentiment,
     requiresHuman,
     shouldCreateLead,
-    shouldReply,
-    replySuggestion,
+    shouldReply: autoReplyEnabled ? shouldReply : false,
+    replySuggestion: autoReplyEnabled ? replySuggestion : "",
+    shouldPrivateReply: autoReplyEnabled ? shouldPrivateReply : false,
+    privateReplySuggestion: autoReplyEnabled ? privateReplySuggestion : "",
+    shouldHandoff,
     reason,
     engine: "ai",
     meta: {
@@ -476,6 +665,10 @@ export async function classifyComment({
   const resolvedTenantKey = getResolvedTenantKey(tenantKey);
   const brandName = getTenantBrandName(tenant, resolvedTenantKey);
   const businessContext = getTenantBusinessContext(tenant);
+  const tone = getTenantTone(tenant);
+  const preferredCta = getTenantPreferredCta(tenant);
+  const bannedPhrases = getTenantBannedPhrases(tenant);
+  const commentPolicy = getCommentPolicy(tenant);
 
   if (!commentText) {
     return {
@@ -486,6 +679,9 @@ export async function classifyComment({
       shouldCreateLead: false,
       shouldReply: false,
       replySuggestion: "",
+      shouldPrivateReply: false,
+      privateReplySuggestion: "",
+      shouldHandoff: false,
       reason: "empty_text",
       engine: "rule",
       meta: {
@@ -511,22 +707,25 @@ export async function classifyComment({
   const max_output_tokens =
     Number(cfg?.openai?.maxOutputTokens) ||
     Number(cfg?.OPENAI_MAX_OUTPUT_TOKENS) ||
-    500;
+    700;
 
   const prompt = `
 You are a strict JSON classifier for PUBLIC social media comments for a tenant brand.
 
 Important:
-- This is PUBLIC COMMENT classification, not DM classification.
+- This is PUBLIC COMMENT classification, not ongoing DM conversation classification.
 - Be tenant-aware and avoid assuming a specific company or industry unless clearly supported by context.
-- Use the provided business context if available.
+- Use the provided business context, tone, CTA preference, and banned phrases if available.
 - Be conservative with lead creation.
-- For clear sales or support intent in public comments, prefer a short, polite, professional public reply that redirects the person to DM.
-- Never suggest public discussion of sensitive details.
+- For clear sales or support intent in public comments, prefer:
+  1) a short professional PUBLIC reply
+  2) a short professional PRIVATE reply for DM handoff
+- Never expose sensitive details publicly.
+- Never use staff names, operator names, internal teams, or fake urgency.
 - Do not over-classify praise, emojis, or generic reactions as leads.
-- Do not use employee names, operator names, manager names, or internal team identities.
-- Do not repeatedly mention the brand name unless contextually useful.
-- Keep replySuggestion professional, concise, and brand-safe.
+- Public reply must be short.
+- Private reply must be natural and useful.
+- Spam/toxic should not get public or private replies.
 
 Return ONLY valid JSON with this exact shape:
 {
@@ -537,6 +736,9 @@ Return ONLY valid JSON with this exact shape:
   "shouldCreateLead": false,
   "shouldReply": false,
   "replySuggestion": "",
+  "shouldPrivateReply": false,
+  "privateReplySuggestion": "",
+  "shouldHandoff": false,
   "reason": ""
 }
 
@@ -550,24 +752,37 @@ Allowed sentiment:
 ["positive","neutral","negative","mixed"]
 
 Classification rules:
-- sales => clear commercial intent, asks about service, pricing, package, demo, contact, order, availability, quote, proposal
-- support => issue/problem/help request needing follow-up or operational support
+- sales => clear commercial intent, asks about service, pricing, package, demo, contact, availability, quote, proposal
+- support => issue/problem/help request needing follow-up or human support
 - spam => irrelevant promotion, scam, garbage, obvious bot-like promotion
 - toxic => abusive, insulting, profane, hostile
 - normal => praise, reaction, generic engagement, non-actionable comment
 - unknown => not enough signal
 
 Action rules:
-- shouldCreateLead=true only when there is reasonably clear sales/commercial intent
-- shouldReply=true mainly for sales/support comments when a polite public DM redirect is appropriate
-- for sales/support public comments, replySuggestion should usually be a short polite DM redirect
-- for spam/toxic, shouldReply=false and replySuggestion=""
+- shouldCreateLead=true only when there is reasonably clear commercial intent
+- shouldReply=true mainly for sales/support when a short public reply is appropriate
+- shouldPrivateReply=true mainly for sales/support when DM handoff is appropriate
+- shouldHandoff=true for support needing human review, or toxic/risky situations
+- for spam/toxic => shouldReply=false, shouldPrivateReply=false
 - reason must be short snake_case
+
+Style rules:
+- public reply max about 140 chars
+- private reply max about 280 chars
+- avoid banned phrases
+- keep tone aligned with tenant
+- do not repeat the brand name unless it adds value
+- avoid robotic language
 
 Tenant context:
 brandName=${JSON.stringify(brandName)}
 tenantKey=${JSON.stringify(resolvedTenantKey)}
 businessContext=${JSON.stringify(businessContext)}
+tone=${JSON.stringify(tone)}
+preferredCta=${JSON.stringify(preferredCta)}
+bannedPhrases=${JSON.stringify(bannedPhrases)}
+commentPolicy=${JSON.stringify(commentPolicy)}
 channel=${JSON.stringify(s(channel || "instagram"))}
 externalUserId=${JSON.stringify(s(externalUserId || ""))}
 externalUsername=${JSON.stringify(s(externalUsername || ""))}

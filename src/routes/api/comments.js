@@ -62,8 +62,7 @@ async function forwardCommentReplyToMetaGateway({
   tenantKey,
   channel,
   comment,
-  replyText,
-  actor,
+  actions = [],
 }) {
   const base = trimSlash(
     cfg.META_GATEWAY_BASE_URL ||
@@ -90,26 +89,15 @@ async function forwardCommentReplyToMetaGateway({
 
   const payload = {
     tenantKey: s(tenantKey || ""),
-    actions: [
-      {
-        type: "reply_comment",
-        channel: s(channel || comment?.channel || "instagram").toLowerCase() || "instagram",
-        commentId: s(comment?.external_comment_id || ""),
-        text: s(replyText || ""),
-        meta: {
-          tenantKey: s(tenantKey || ""),
-          commentId: s(comment?.id || ""),
-          externalCommentId: s(comment?.external_comment_id || ""),
-          externalPostId: s(comment?.external_post_id || ""),
-          actor: s(actor || "operator"),
-        },
-      },
-    ],
+    actions: Array.isArray(actions) ? actions : [],
     context: {
       tenantKey: s(tenantKey || ""),
       channel: s(channel || comment?.channel || "instagram").toLowerCase() || "instagram",
       commentId: s(comment?.external_comment_id || ""),
       externalCommentId: s(comment?.external_comment_id || ""),
+      externalPostId: s(comment?.external_post_id || ""),
+      recipientId: s(comment?.external_user_id || ""),
+      userId: s(comment?.external_user_id || ""),
     },
   };
 
@@ -215,23 +203,106 @@ function buildLeadPayloadFromComment(comment, classification) {
   };
 }
 
-function buildCommentActions({ tenantKey, comment, classification }) {
+function buildCommentActions({ tenantKey, comment, classification, lead = null }) {
   const actions = [];
+  const channel = s(comment?.channel || "instagram").toLowerCase() || "instagram";
+  const externalCommentId = s(comment?.external_comment_id || "");
+  const externalUserId = s(comment?.external_user_id || "");
   const replyText = s(classification?.replySuggestion || "");
+  const privateReplyText = s(classification?.privateReplySuggestion || "");
+  const reason = s(classification?.reason || "");
+  const category = s(classification?.category || "");
+  const priority = s(classification?.priority || "normal");
 
-  if (classification?.shouldReply && replyText && s(comment?.external_comment_id || "")) {
+  const baseMeta = {
+    tenantKey: s(tenantKey || ""),
+    commentId: s(comment?.id || ""),
+    externalCommentId,
+    externalPostId: s(comment?.external_post_id || ""),
+    externalUserId,
+    externalUsername: s(comment?.external_username || ""),
+    customerName: s(comment?.customer_name || ""),
+    classification: deepFix(classification || {}),
+  };
+
+  if (classification?.category === "spam" || classification?.category === "toxic") {
+    actions.push({
+      type: "no_reply",
+      channel,
+      reason: reason || (category === "spam" ? "spam_suppressed" : "toxic_suppressed"),
+      meta: baseMeta,
+    });
+
+    if (classification?.shouldHandoff) {
+      actions.push({
+        type: "handoff",
+        channel,
+        reason: category === "toxic" ? "toxic_comment_manual_review" : "manual_review",
+        priority: category === "toxic" ? "high" : priority,
+        meta: baseMeta,
+      });
+    }
+
+    return actions;
+  }
+
+  if (classification?.shouldReply && replyText && externalCommentId) {
     actions.push({
       type: "reply_comment",
-      channel: s(comment?.channel || "instagram").toLowerCase() || "instagram",
-      commentId: s(comment?.external_comment_id || ""),
+      channel,
+      commentId: externalCommentId,
       text: replyText,
+      meta: baseMeta,
+    });
+  }
+
+  if (classification?.shouldPrivateReply && privateReplyText && externalCommentId) {
+    actions.push({
+      type: "private_reply_comment",
+      channel,
+      commentId: externalCommentId,
+      text: privateReplyText,
       meta: {
-        tenantKey: s(tenantKey || ""),
-        commentId: s(comment?.id || ""),
-        externalCommentId: s(comment?.external_comment_id || ""),
-        externalPostId: s(comment?.external_post_id || ""),
-        classification: deepFix(classification || {}),
+        ...baseMeta,
+        skipOutboundAck: true,
       },
+    });
+  }
+
+  if (classification?.shouldCreateLead) {
+    actions.push({
+      type: "create_lead",
+      channel,
+      lead: lead ? deepFix(lead) : null,
+      reason: reason || "comment_sales_intent",
+      meta: baseMeta,
+    });
+  }
+
+  if (classification?.shouldHandoff) {
+    actions.push({
+      type: "handoff",
+      channel,
+      reason:
+        classification?.category === "support"
+          ? "support_comment_manual_followup"
+          : reason || "manual_review",
+      priority:
+        classification?.priority === "urgent"
+          ? "urgent"
+          : classification?.priority === "high"
+            ? "high"
+            : "normal",
+      meta: baseMeta,
+    });
+  }
+
+  if (!actions.length) {
+    actions.push({
+      type: "no_reply",
+      channel,
+      reason: reason || "no_action_needed",
+      meta: baseMeta,
     });
   }
 
@@ -600,6 +671,7 @@ export function commentsRoutes({ db, wsHub }) {
           tenantKey,
           comment: existing,
           classification: existing.classification || {},
+          lead,
         });
 
         return okJson(res, {
@@ -613,7 +685,7 @@ export function commentsRoutes({ db, wsHub }) {
           tenant: tenant
             ? {
                 tenant_key: tenant.tenant_key,
-                name: tenant.name,
+                company_name: tenant.company_name || "",
                 timezone: tenant.timezone,
               }
             : null,
@@ -743,6 +815,7 @@ export function commentsRoutes({ db, wsHub }) {
         tenantKey,
         comment,
         classification,
+        lead,
       });
 
       return okJson(res, {
@@ -756,7 +829,7 @@ export function commentsRoutes({ db, wsHub }) {
         tenant: tenant
           ? {
               tenant_key: tenant.tenant_key,
-              name: tenant.name,
+              company_name: tenant.company_name || "",
               timezone: tenant.timezone,
             }
           : null,
@@ -1006,8 +1079,21 @@ export function commentsRoutes({ db, wsHub }) {
           tenantKey: existing.tenant_key,
           channel: existing.channel,
           comment: existing,
-          replyText,
-          actor,
+          actions: [
+            {
+              type: "reply_comment",
+              channel: s(existing.channel || "instagram").toLowerCase() || "instagram",
+              commentId: s(existing.external_comment_id || ""),
+              text: replyText,
+              meta: {
+                tenantKey: s(existing.tenant_key || ""),
+                commentId: s(existing.id || ""),
+                externalCommentId: s(existing.external_comment_id || ""),
+                externalPostId: s(existing.external_post_id || ""),
+                actor: s(actor || "operator"),
+              },
+            },
+          ],
         });
 
         sent = Boolean(sendResult?.ok);
